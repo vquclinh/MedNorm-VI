@@ -1,0 +1,133 @@
+# MedNorm-VI parameter-budget manifest
+# ------------------------------------------------------------------------------
+# Enforces the competition constraint: the TOTAL number of parameters across all
+# BASE models must not exceed 9B. Adapter/LoRA/head parameters are EXCLUDED from
+# that budget (organizer confirmation); the physical total may sit slightly above
+# 9B (~9.1B) purely because of adapters, and that is accepted.
+#
+# Planned vs installed
+# --------------------
+# `in_profile` marks a model as part of the ACTIVE PLANNED profile — this is what
+# the budget sums. `installed` records whether the weights are actually present
+# locally. At the repository-bootstrap stage NOTHING is installed or production-
+# enabled: every model has `installed: false`. Planning the stack is separate
+# from downloading it.
+#
+# Validated by src/mednorm_vi/validator/budget.py. Counts here are approximate
+# and MUST be reconfirmed by an automated parameter-count script before any
+# submission. Do NOT download any of these models during bootstrap.
+version: 2
+
+budget:
+  max_total_base_params: 9_000_000_000   # HARD cap on the SUM of base_params
+  adapters_excluded: true                # adapter/LoRA/head params never count
+  count_status: in_profile               # which per-model flag the budget sums
+  active_profile: Safe-8.85B             # the planned profile described below
+  # Advisory soft target for a metadata safety margin (spec section 17). Set to
+  # 8.9B so the planned ~8.852B stack sits comfortably under it (no spurious
+  # warning). Exceeding this is a WARNING, never a failure.
+  soft_target_base_params: 8_900_000_000
+
+# Registry of base models for the active planned profile. `in_profile: true`
+# rows are summed for the budget check; `base_params` counts toward the 9B cap,
+# `adapter_params` never does. These mirror the spec's "Safe-8.85B" Safe
+# Submission Stack (section 17) — a DEFAULT, configurable PLAN, not an install.
+# No weights are committed or downloaded (`installed: false` throughout).
+models:
+  - name: Qwen3-4B
+    role: hard-case adjudicator (L7 Confidence Cascade)
+    base_params: 4_000_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Constrained multiple-choice / disambiguation only; may not invent IDs or offsets."
+
+  - name: Qwen3-1.7B
+    role: fast critic / proposer (L3 Mention Factory, L7 Confidence Cascade)
+    base_params: 1_700_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Proposal-only for hard spans; cheaper critic before the 4B adjudicator."
+
+  - name: Qwen3-Embedding-0.6B
+    role: multilingual dense retrieval (L5 ICD/RxNorm linkers)
+    base_params: 600_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Cross-lingual / complex-phrase candidate recall."
+
+  - name: Qwen3-Reranker-0.6B
+    role: cross-encoder / listwise reranking (L5 linkers)
+    base_params: 600_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Reranks retrieved ICD/RxNorm candidates."
+
+  - name: BGE-M3
+    role: dense+sparse+multi-vector retrieval (L5 linkers)
+    base_params: 568_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Hybrid retrieval backbone."
+
+  - name: XLM-R-large
+    role: MRC / type / code-switch backbone (L3 Mention Factory)
+    base_params: 560_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Shared backbone; may host multiple adapters/heads (adapters excluded)."
+
+  - name: GLiNER-medium-v2.1
+    role: open-type mention proposals (L3 Mention Factory)
+    base_params: 209_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Safe-8.85B variant. Alt-8.99B swaps in GLiNER-large 459M and drops SapBERT."
+
+  - name: PhoBERT-large
+    role: Vietnamese W2NER / boundary model (L3 Mention Factory, L4 Resolver)
+    base_params: 370_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Approximate count; verify with parameter-count script."
+
+  - name: ViHealthBERT
+    role: Vietnamese clinical span/assertion backbone (L3, L5 Assertion)
+    base_params: 135_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "Approximate count; hosts span/cue/scope adapters (adapters excluded)."
+
+  - name: SapBERT
+    role: ontology-synonym embedding (L5 linkers)
+    base_params: 110_000_000
+    adapter_params: 0
+    in_profile: true
+    installed: false
+    notes: "BioSyn/SapBERT-style fine-grained synonym space. Dropped in Alt-8.99B."
+
+# Named alternative PLANNED profiles from spec section 17.1. Documentation of the
+# trade-offs; the validator checks whichever models have `in_profile: true`
+# above. To activate a variant, re-mark `in_profile` flags accordingly (do not
+# edit counts). None of these implies any model is installed.
+variants:
+  Safe-8.85B:
+    description: "Default plan. GLiNER medium 209M. ~8.85B base."
+    approx_total: 8_852_000_000
+  Alt-8.99B:
+    description: "GLiNER large 459M; remove separate SapBERT. Higher open-type recall. ~8.99B base."
+    approx_total: 8_990_000_000
+  Lean-6.5B:
+    description: "Remove Qwen3-1.7B, GLiNER, and separate SapBERT. Debugging/ablation. ~6.4-6.6B base."
+    approx_total: 6_500_000_000
+  No-LLM-baseline:
+    description: "Remove both generative Qwen models. Measures LLM contribution. ~3.4B base."
+    approx_total: 3_400_000_000

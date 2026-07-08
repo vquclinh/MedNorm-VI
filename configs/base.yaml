@@ -1,0 +1,103 @@
+# MedNorm-VI base configuration
+# ------------------------------------------------------------------------------
+# Global, layer-agnostic settings. Layer-specific configuration should live in
+# its own file and reference these values. Nothing here selects or downloads a
+# model; model selection is governed by configs/parameter_budget.yaml.
+#
+# The English PDF (MedNorm-VI_Architecture.pdf) is the authoritative spec.
+version: 1
+system_name: MedNorm-VI
+
+# --- Task contract (from the architecture spec, section 1) --------------------
+task:
+  # Entity hypothesis: H = (start, end, text, type, assertions, candidates)
+  # Output JSON per document contains: text, type, assertions, candidates, position
+  n_documents: 100                 # qualification round: 100 input docs -> 100 JSON files
+  # CONFIRMED: Python-style end-exclusive character offsets over Unicode code
+  # points; original_text[start:end] == text (organizer-published example).
+  position_convention: half_open   # [start, end)  (end-exclusive)
+  # CONFIRMED submission layout: output.zip -> output/1.json .. output/100.json.
+  submission:
+    archive_name: output.zip
+    inner_dir: output
+    file_pattern: "{i}.json"       # i = 1..100
+    json_encoding: utf-8
+    ensure_ascii: false            # preserve Vietnamese characters, do not \u-escape
+    root_value: list               # each file's root JSON value is a list of entities
+  # Metric weights (section 1): candidates 40%, text 30%, assertions 30%.
+  # A wrong type is double-penalized (false positive + false negative).
+  metric_weights:
+    candidates: 0.40               # Jaccard over candidate codes
+    text: 0.30                     # 1 - Word Error Rate
+    assertions: 0.30               # multi-label Jaccard
+  wrong_type_double_penalized: true
+
+# --- Allowed label sets (see src/mednorm_vi/schemas/constants.py) -------------
+# INTERNAL English enums (left) map to the CONFIRMED organizer-facing Vietnamese
+# labels (right). Serialized submission JSON must use the Vietnamese labels;
+# English values are rejected by the organizer-facing validator.
+entity_types:
+  MEDICATION: THUỐC
+  DIAGNOSIS: CHẨN_ĐOÁN
+  SYMPTOM: TRIỆU_CHỨNG
+  TEST_NAME: TÊN_XÉT_NGHIỆM
+  TEST_RESULT: KẾT_QUẢ_XÉT_NGHIỆM
+assertion_labels:
+  - isNegated
+  - isHistorical
+  - isFamily
+# Which ontology each type links against (candidates). Cross-links are forbidden
+# by the spec (no ICD on MEDICATION, no RxNorm on DIAGNOSIS).
+candidate_ontology_by_type:
+  DIAGNOSIS: ICD10       # ICD-10 codes as opaque strings
+  MEDICATION: RXNORM     # numeric RxCUI strings
+  SYMPTOM: null
+  TEST_NAME: null
+  TEST_RESULT: null
+# CONFIRMED per-entity-type organizer output fields (serializer emits ONLY these,
+# in this order). See src/mednorm_vi/schemas/constants.py::ORGANIZER_FIELDS_BY_TYPE.
+organizer_fields_by_type:
+  THUỐC:              [text, type, candidates, assertions, position]
+  CHẨN_ĐOÁN:          [text, type, candidates, assertions, position]
+  TRIỆU_CHỨNG:        [text, type, assertions, position]
+  TÊN_XÉT_NGHIỆM:     [text, type, position]
+  KẾT_QUẢ_XÉT_NGHIỆM: [text, type, position]
+
+# --- Offset / text handling (section 4) ---------------------------------------
+text:
+  encoding: utf-8
+  # original_text is the ONLY source used to emit text and position; it must
+  # never be trimmed, re-cased, or rewritten before storing a span.
+  original_is_immutable: true
+  # Unicode normalization runs on a COPY (normalized_view) with a preserved
+  # alignment back to original code points. Applications must not emit spans
+  # from normalized coordinates.
+  unicode_normalization_form: NFC
+  enforce_substring_invariant: true   # assert original_text[start:end] == text
+
+# --- Determinism / reproducibility (sections 15.2, 20) ------------------------
+runtime:
+  seed: 20260708
+  # No external inference APIs are permitted; all models are self-hosted.
+  allow_external_apis: false
+  fail_fast: true                  # never silently repair invalid output
+
+# --- Standard project paths (relative to repo root) ---------------------------
+paths:
+  data: data
+  models: models
+  indices: indices
+  outputs: outputs
+  audits: audits
+
+# --- Frozen knowledge-base snapshots (populate when organizer data arrives) ---
+# These are placeholders; the exact ICD-10 version and RxNorm release are
+# organizer-provided and currently UNKNOWN (see docs/decisions).
+knowledge_bases:
+  icd10:
+    version: null                  # TODO: set to organizer-provided version + hash
+    snapshot_path: null
+  rxnorm:
+    release: null                  # TODO: set to organizer-provided release + hash
+    snapshot_path: null
+    active_only: null              # TODO: confirm whether suppressed concepts are accepted

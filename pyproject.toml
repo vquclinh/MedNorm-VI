@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mednorm-vi"
+version = "0.0.1"
+description = "MedNorm-VI: multi-expert clinical information extraction and ICD-10/RxNorm normalization for Vietnamese clinical text (Viettel AI Race 2026)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary - competition use" }
+authors = [{ name = "MedNorm-VI Team" }]
+keywords = ["clinical-nlp", "ner", "entity-linking", "icd-10", "rxnorm", "vietnamese"]
+
+# NOTE: The bootstrap intentionally depends only on the standard library plus
+# a YAML reader for configs. Heavy model frameworks (torch, transformers,
+# faiss, ...) are deliberately NOT added yet — see docs/architecture and the
+# implementation roadmap. Add them per-layer as each layer is implemented.
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mednorm_vi = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["mednorm_vi"]
+mypy_path = "src"
+strict = true
+warn_unused_ignores = true

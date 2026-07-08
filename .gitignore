@@ -1,2 +1,72 @@
-# Local Vietnamese architecture specification
+# === MedNorm-VI .gitignore ===
+# Keep base models, adapters, raw competition data, generated indices, and
+# prediction outputs OUT of version control. Only code, configs, docs, tests,
+# and small tracked fixtures belong in the repository.
+
+# --- Local Vietnamese architecture specification (authoritative doc is the
+#     English PDF; the Vietnamese copy is intentionally untracked) ---
 MedNorm-VI_Architecture_Vietnamese.pdf
+
+# --- Model weights / checkpoints / adapters ---
+models/**
+!models/.gitkeep
+!models/README.md
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.gguf
+*.onnx
+
+# --- Raw / private competition data & KB snapshots ---
+data/**
+!data/.gitkeep
+!data/README.md
+
+# --- Generated retrieval indices ---
+indices/**
+!indices/.gitkeep
+!indices/README.md
+
+# --- Prediction outputs & submission packages ---
+outputs/**
+!outputs/.gitkeep
+!outputs/README.md
+output/
+*.zip
+
+# --- Audit run artifacts (numbered audit .md files ARE tracked) ---
+audits/**/*.log
+audits/**/*.json
+
+# --- Secrets ---
+.env
+.env.*
+*.key
+*.pem
+secrets/
+credentials*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json

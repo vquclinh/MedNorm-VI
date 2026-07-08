@@ -1,0 +1,157 @@
+# MedNorm-VI Case Router configuration (L2)
+# ------------------------------------------------------------------------------
+# Declarative, versioned, EXTENSIBLE placeholders for the seven routed case
+# families (C1-C7). The router is MULTI-LABEL: a single segment may activate
+# several cases at once (e.g. C1 + C4 + C6).
+#
+# IMPORTANT: The cues below are seed examples, NOT the closed/final medical
+# lexicon. Per spec section 4.3, real coverage combines exact/regex matching,
+# character n-grams, fuzzy retrieval, abbreviation expansion, and contextual
+# classification. Grow these lists via the data engine + regression tests; do
+# not hard-code the full lexicon here.
+version: 1
+lexicon_version: 0            # bump when cue families change; ties to regression tests
+multi_label: true             # segments may carry multiple case tags simultaneously
+default_route: C3             # narrative is the safe fallback when signals are weak
+
+# Global default thresholds; individual cases may override.
+thresholds_default:
+  activate: 0.50              # min router score to attach a RouteTag
+  strong: 0.80               # score above which the case prior is treated as strong
+
+cases:
+  C1:
+    name: Medication-list
+    description: Numbered/bulleted medication lines with repeated route-frequency patterns.
+    lexical_cues: []          # TODO: dose-form / route / frequency tokens (po, iv, bid, qhs, prn, mg, ...)
+    structural_cues:
+      - numbering
+      - bullets
+      - repeated_route_frequency_pattern
+      - repeated_drug_names
+    section_priors:
+      - pre_admission_medications   # -> isHistorical prior
+      - home_medications
+      - current_medication_list
+    thresholds: {}            # inherits thresholds_default
+    activated_modules:
+      - specialists.rxnorm
+      - mention_factory.medication_grammar   # E1
+      - boundary_type
+
+  C2:
+    name: Lab-semi-structured
+    description: "name: value unit [flag] [reference-range] rows, colons/semicolons, decimals."
+    lexical_cues: []          # TODO: unit tokens, H/L flags, reference-range markers
+    structural_cues:
+      - colon_separated
+      - semicolon_separated
+      - units_present
+      - decimals
+      - reference_ranges
+    section_priors:
+      - laboratory
+      - investigations
+      - hematology
+      - chemistry
+    thresholds: {}
+    activated_modules:
+      - mention_factory.lab_parser           # E2 (TEST_NAME -has_result-> VALUE)
+      - boundary_type
+
+  C3:
+    name: Clinical-narrative
+    description: Long sentences with multiple symptoms/diagnoses and soft boundaries.
+    lexical_cues: []
+    structural_cues:
+      - long_sentences
+      - multiple_clauses
+      - soft_boundaries
+    section_priors:
+      - current_examination
+      - symptoms
+      - diagnosis
+      - conclusion
+    thresholds: {}
+    activated_modules:
+      - mention_factory.span_ner_ensemble     # E3-E6 (ViHealthBERT/W2NER/MRC/GLiNER)
+      - boundary_type
+      - specialists.assertion
+
+  C4:
+    name: Assertion-heavy
+    description: Negation / history / family cues, conjunctions and contrast.
+    lexical_cues: []          # TODO: negation/history/family cue families (see spec 4.3)
+    structural_cues:
+      - conjunctions
+      - contrast_markers
+      - coordinated_negation
+    section_priors:
+      - medical_history
+      - family_history
+    thresholds: {}
+    activated_modules:
+      - specialists.assertion                  # cue + scope + section + relation
+      - boundary_type
+
+  C5:
+    name: Abbreviation-noise
+    description: "Abbreviations (THA, DTD, qhs), accent errors, English-Vietnamese code switching."
+    lexical_cues: []          # TODO: abbreviation alias families
+    structural_cues:
+      - unaccented_tokens
+      - mixed_language
+      - ocr_like_artifacts
+    section_priors: []
+    thresholds:
+      activate: 0.45           # lower bar: noise is easy to miss, cheap to propose
+    activated_modules:
+      - mention_factory.abbreviation_lattice
+      - confidence_cascade                     # LLM expansion verifier for hard cases
+
+  C6:
+    name: Ambiguous-linking
+    description: "ICD parent/child ambiguity; same RxNorm ingredient, different strength/form."
+    lexical_cues: []
+    structural_cues:
+      - competing_ontology_candidates
+      - strength_form_variation
+    section_priors: []
+    thresholds:
+      strong: 0.75
+    activated_modules:
+      - specialists.icd
+      - specialists.rxnorm
+      - confidence_cascade                     # cross-encoder + constrained judge
+
+  C7:
+    name: Overlap-duplicates
+    description: Same text at multiple positions; nested/adjacent spans.
+    lexical_cues: []
+    structural_cues:
+      - repeated_surface_form
+      - nested_spans
+      - adjacent_spans
+    section_priors: []
+    thresholds: {}
+    activated_modules:
+      - evidence_graph                          # absolute-offset interval/graph optimizer
+      - metric_decoder                          # NO text-only deduplication (offsets distinguish)
+
+# Routing signals the router MAY compute per segment to score the cases above.
+# These are hints for the future implementation, not a committed feature set.
+suggested_routing_signals:
+  lexical:
+    - cue_family_hits          # exact/regex/fuzzy matches against versioned lexicons
+    - abbreviation_density
+    - unit_token_density
+  structural:
+    - list_or_bullet_layout
+    - colon_value_pattern
+    - line_length_distribution
+    - delimiter_profile
+  discourse:
+    - section_prior            # from L1 section/discourse parser
+    - repeated_surface_forms   # supports C7
+  learned:
+    - segment_classifier_logits   # contextual multi-label classifier (future)
