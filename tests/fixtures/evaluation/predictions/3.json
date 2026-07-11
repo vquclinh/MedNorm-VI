@@ -1,0 +1,23 @@
+[
+  {
+    "text": "sốt",
+    "type": "TRIỆU_CHỨNG",
+    "position": [
+      10,
+      13
+    ],
+    "assertions": []
+  },
+  {
+    "text": "viêm phổi",
+    "type": "CHẨN_ĐOÁN",
+    "position": [
+      29,
+      38
+    ],
+    "candidates": [
+      "J18.0"
+    ],
+    "assertions": []
+  }
+]

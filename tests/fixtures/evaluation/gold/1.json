@@ -1,0 +1,34 @@
+[
+  {
+    "text": "paracetamol",
+    "type": "THUỐC",
+    "position": [
+      15,
+      26
+    ],
+    "candidates": [
+      "1049640"
+    ],
+    "assertions": [
+      "isHistorical"
+    ],
+    "route_case": "C1",
+    "section": "home_medications"
+  },
+  {
+    "text": "amlodipine",
+    "type": "THUỐC",
+    "position": [
+      34,
+      44
+    ],
+    "candidates": [
+      "197361"
+    ],
+    "assertions": [
+      "isHistorical"
+    ],
+    "route_case": "C1",
+    "section": "home_medications"
+  }
+]

@@ -1,22 +1,38 @@
 # data/
 
 Root for all datasets and knowledge-base snapshots. **Everything under this
-directory except this README is git-ignored.** Never commit raw or private
+directory except READMEs/.gitkeep is git-ignored.** Never commit raw or private
 competition data, organizer gold, or KB snapshots.
 
-## Expected layout (populated locally, not committed)
+## ⚠️ Competition reality — the organizer test set has NO ground truth
+
+The public workflow is: **organizer test inputs → predictions → `output.zip` →
+leaderboard → score**. There are **no** hidden test labels. Never create,
+reconstruct, infer, leak, or fabricate organizer-test labels, and never call
+organizer-test predictions "locally evaluated". Organizer test **inputs** and
+internal **labeled** data use **separate namespaces** (below).
+
+## Trust-level namespaces (populated locally, not committed)
 
 ```
 data/
-├── raw/            # organizer-provided input documents (private)
-├── gold/           # manual/organizer gold annotations (private)
-├── kb/
-│   ├── icd10/      # frozen WHO ICD-10 snapshot (exact organizer version + hash)
-│   └── rxnorm/     # frozen NLM RxNorm release (exact organizer release + hash)
-├── synthetic/      # controlled synthetic data (must preserve exact spans)
-├── weak/           # weak-labeling / teacher-consensus outputs
-└── folds/          # group-split CV folds (by template/source/document)
+├── organizer_test/       # INPUT ONLY — organizer competition inputs; never labeled
+├── dev_gold/             # GOLD: human-reviewed, adjudicated team ground truth
+├── dev_silver/           # SILVER: weak/pseudo/LLM labels (lower trust)
+├── synthetic/            # SYNTHETIC: controlled generated examples
+├── external_permitted/   # EXTERNAL_PERMITTED: public data allowed by the rules
+└── kb/
+    ├── icd10/            # frozen WHO ICD-10 snapshot (exact organizer version + hash)
+    └── rxnorm/           # frozen NLM RxNorm release (exact organizer release + hash)
 ```
+
+Each labeled dataset carries a `manifest.yaml` with `provenance` and `labeled`.
+A manifest that includes organizer test inputs **must** set `labeled: false`; a
+manifest declaring `provenance: ORGANIZER_TEST` with `labeled: true` is rejected
+by `mednorm_vi.annotation.validation`. See
+[`docs/annotation/GOLD_SILVER_POLICY.md`](../docs/annotation/GOLD_SILVER_POLICY.md).
+Only the provisional local evaluator's labeled provenances (GOLD/SILVER/
+SYNTHETIC/ORGANIZER_PUBLISHED_EXAMPLE/EXTERNAL_PERMITTED) may be evaluated.
 
 ## Rules (see the architecture spec, sections 4, 14, 15.2, 21)
 

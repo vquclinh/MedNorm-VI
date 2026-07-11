@@ -1,7 +1,7 @@
 # MedNorm-VI — Architecture Digest
 
 > Faithful engineering summary of the authoritative English specification
-> `MedNorm-VI_Architecture.pdf` (Super Architecture Specification, Version 1.1,
+> `docs/MedNorm-VI_Architecture.pdf` (Super Architecture Specification, Version 1.1,
 > 08 July 2026). This digest **does not invent requirements**; where the PDF is
 > silent or defers to organizer data, that is stated explicitly. The PDF remains
 > the source of truth — read it before any architecture-sensitive change.

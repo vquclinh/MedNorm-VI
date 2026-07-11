@@ -1,9 +1,9 @@
 # MedNorm-VI — Layer Contracts
 
 > Per-layer input/output contracts for the nine processing layers. Derived from
-> `MedNorm-VI_Architecture.pdf` (sections 3–13, 16, 19). These are **interface
+> `docs/MedNorm-VI_Architecture.pdf` (sections 3–13, 16, 19). These are **interface
 > contracts**, not implementations. Every layer is mandatory — do not silently
-> simplify or bypass a layer (see `CLAUDE.md`).
+> simplify or bypass a layer.
 
 ## Cross-cutting invariants (apply to every layer)
 

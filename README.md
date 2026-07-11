@@ -8,11 +8,31 @@ MedNorm-VI is a multi-expert system that converts free-form Vietnamese clinical
 notes into structured, offset-preserving entity hypotheses with assertions and
 ICD-10 / RxNorm candidate codes.
 
-> **Status: architecture / bootstrap stage.** This repository currently contains
-> the typed data contracts, the deterministic validation foundation (Phase 0),
-> configuration, and per-layer module stubs. **No models, indices, or datasets
-> are downloaded or implemented yet.** See `docs/architecture/` and the audit
-> trail in `audits/`.
+> **Status: research-foundation stage (Phase 0 + Phase 0.5).** This repository
+> contains the typed data contracts, the deterministic validation foundation,
+> per-layer module stubs, and — new in Phase 0.5 — a **PROVISIONAL LOCAL
+> EVALUATOR**, an **annotation/data-quality** foundation, and **leaderboard
+> experiment tracking**. **No models, indices, or datasets are downloaded or
+> implemented yet.** See `docs/` and the audit trail in `docs/audits/`.
+
+> ### ⚠️ Competition reality
+> The organizer does **not** release ground truth for the competition test set.
+> The workflow is: **organizer test inputs → predictions → `output.zip` →
+> leaderboard → score**. The local evaluator scores **team-owned labeled data
+> only** (gold / silver / synthetic / permitted / organizer-published examples).
+> Organizer test inputs are input-only and never labeled.
+
+## Intended order of operations
+
+```
+internal annotation
+  → local provisional evaluation
+  → controlled experiment (tracked)
+  → organizer test inference
+  → output.zip
+  → leaderboard submission
+  → manual score recording
+```
 
 ## What MedNorm-VI solves
 
@@ -143,8 +163,8 @@ src/mednorm_vi/
             evidence_graph/         L6   confidence_cascade/  L7
             metric_decoder/         L8   validator/           L9 (implemented)
 tests/      unit/ integration/ fixtures/
-data/ models/ indices/ outputs/    git-ignored artifact roots (see each README)
-audits/     numbered audit records of every meaningful change
+data/ models/ indices/ outputs/ reports/    git-ignored artifact roots (see each README)
+docs/audits/  numbered audit records of every meaningful change (see docs/audits/README.md)
 ```
 
 ## Installation
@@ -157,6 +177,39 @@ Requires Python ≥ 3.10. The bootstrap depends only on `PyYAML` (+ `pytest`,
 `ruff`, `mypy` for development). Heavy model frameworks are intentionally not
 added yet.
 
+## Phase 0.5 research tooling
+
+Provisional local evaluator (team-owned labeled data only):
+
+```bash
+python -m mednorm_vi.evaluation.cli \
+  --ground-truth data/dev_gold/example \
+  --predictions outputs/example \
+  --config configs/evaluation/provisional_v1.yaml \
+  --report-dir reports/example
+```
+
+Annotation / manifest validation:
+
+```bash
+python -m mednorm_vi.annotation.validation \
+  --dataset data/dev_gold/example --manifest path/to/manifest.yaml
+```
+
+Experiment + leaderboard tracking (local only; scores entered manually):
+
+```bash
+python -m mednorm_vi.experiments.cli create --title "baseline deterministic"
+python -m mednorm_vi.experiments.cli attach-output --experiment EXP-0001 --zip output.zip
+python -m mednorm_vi.experiments.cli record-local --experiment EXP-0001 --kind gold --score 0.83
+python -m mednorm_vi.experiments.cli record-leaderboard --experiment EXP-0001 --score 0.71234
+python -m mednorm_vi.experiments.cli compare EXP-0001 EXP-0002
+```
+
+Docs: [`docs/evaluation/`](docs/evaluation/), [`docs/annotation/`](docs/annotation/),
+[`docs/experiments/`](docs/experiments/). Metric confirmed-vs-provisional split:
+[`docs/evaluation/METRIC_ASSUMPTIONS.md`](docs/evaluation/METRIC_ASSUMPTIONS.md).
+
 ## Test & static checks
 
 ```bash
@@ -167,9 +220,10 @@ mypy                      # strict type check
 
 ## Authoritative specification
 
-The complete, authoritative design is the English PDF at the repository root:
-**`MedNorm-VI_Architecture.pdf`** (Super Architecture Specification, v1.1). Read
+The complete, authoritative design is the English PDF under `docs/`:
+**`docs/MedNorm-VI_Architecture.pdf`** (Super Architecture Specification, v1.1). Read
 it before any architecture-sensitive change. A local Vietnamese translation may
 exist but is intentionally **untracked** (git-ignored) and must not be committed.
 
-See also [`CLAUDE.md`](CLAUDE.md) / [`AGENTS.md`](AGENTS.md) for repository rules.
+Engineering contracts are documented under [`docs/architecture/`](docs/architecture/);
+the change log lives in [`docs/audits/`](docs/audits/).

@@ -1,0 +1,34 @@
+[
+  {
+    "text": "WBC",
+    "type": "TÊN_XÉT_NGHIỆM",
+    "position": [
+      12,
+      15
+    ]
+  },
+  {
+    "text": "14.43",
+    "type": "KẾT_QUẢ_XÉT_NGHIỆM",
+    "position": [
+      17,
+      22
+    ]
+  },
+  {
+    "text": "RBC",
+    "type": "TÊN_XÉT_NGHIỆM",
+    "position": [
+      24,
+      27
+    ]
+  },
+  {
+    "text": "4.5",
+    "type": "KẾT_QUẢ_XÉT_NGHIỆM",
+    "position": [
+      29,
+      32
+    ]
+  }
+]

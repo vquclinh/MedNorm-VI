@@ -2,7 +2,7 @@
 
 These sets are authoritative for validation. They are intentionally small and
 frozen; changing them is an architecture-sensitive change and must be justified
-against ``MedNorm-VI_Architecture.pdf``.
+against ``docs/MedNorm-VI_Architecture.pdf``.
 """
 
 from __future__ import annotations

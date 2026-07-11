@@ -4,7 +4,7 @@
 # its own file and reference these values. Nothing here selects or downloads a
 # model; model selection is governed by configs/parameter_budget.yaml.
 #
-# The English PDF (MedNorm-VI_Architecture.pdf) is the authoritative spec.
+# The English PDF (docs/MedNorm-VI_Architecture.pdf) is the authoritative spec.
 version: 1
 system_name: MedNorm-VI
 
@@ -88,7 +88,7 @@ paths:
   models: models
   indices: indices
   outputs: outputs
-  audits: audits
+  audits: docs/audits
 
 # --- Frozen knowledge-base snapshots (populate when organizer data arrives) ---
 # These are placeholders; the exact ICD-10 version and RxNorm release are

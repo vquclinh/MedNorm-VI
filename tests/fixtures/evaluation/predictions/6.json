@@ -1,0 +1,14 @@
+[
+  {
+    "text": "viêm dạ dày",
+    "type": "CHẨN_ĐOÁN",
+    "position": [
+      11,
+      22
+    ],
+    "candidates": [
+      "K29.7"
+    ],
+    "assertions": []
+  }
+]

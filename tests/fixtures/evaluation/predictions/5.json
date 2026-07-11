@@ -1,0 +1,14 @@
+[
+  {
+    "text": "metformin",
+    "type": "THUỐC",
+    "position": [
+      22,
+      31
+    ],
+    "candidates": [
+      "6809"
+    ],
+    "assertions": []
+  }
+]

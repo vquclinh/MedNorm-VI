@@ -19,9 +19,21 @@ models/**
 *.onnx
 
 # --- Raw / private competition data & KB snapshots ---
+# Namespaced by trust level. Organizer test inputs are INPUT ONLY and never
+# labeled. Only READMEs and .gitkeep markers are tracked; real data stays out.
 data/**
 !data/.gitkeep
 !data/README.md
+!data/**/.gitkeep
+!data/**/README.md
+
+# --- Generated evaluation / experiment reports ---
+reports/**
+!reports/.gitkeep
+!reports/README.md
+
+# --- Experiment registry: EXP-*.json records ARE tracked (diff-friendly);
+#     only generated outputs/predictions are ignored elsewhere. ---
 
 # --- Generated retrieval indices ---
 indices/**
@@ -35,9 +47,9 @@ outputs/**
 output/
 *.zip
 
-# --- Audit run artifacts (numbered audit .md files ARE tracked) ---
-audits/**/*.log
-audits/**/*.json
+# --- Audit run artifacts (numbered audit .md files under docs/audits/ ARE tracked) ---
+docs/audits/**/*.log
+docs/audits/**/*.json
 
 # --- Secrets ---
 .env
@@ -46,6 +58,15 @@ audits/**/*.json
 *.pem
 secrets/
 credentials*.json
+
+# --- AI-assistant local files (never commit; kept locally under .claude/) ---
+CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.md
+AGENTS.md
+**/AGENTS.md
+.claude/
+.claude.json
 
 # --- Python ---
 __pycache__/

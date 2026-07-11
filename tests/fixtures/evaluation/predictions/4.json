@@ -1,0 +1,27 @@
+[
+  {
+    "text": "sốt",
+    "type": "TRIỆU_CHỨNG",
+    "position": [
+      6,
+      9
+    ],
+    "assertions": [
+      "isNegated"
+    ]
+  },
+  {
+    "text": "đái tháo đường",
+    "type": "CHẨN_ĐOÁN",
+    "position": [
+      31,
+      45
+    ],
+    "candidates": [
+      "E11.9"
+    ],
+    "assertions": [
+      "isFamily"
+    ]
+  }
+]

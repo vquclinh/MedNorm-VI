@@ -1,0 +1,6 @@
+dataset_id: eval_fixture_synthetic
+version: 1
+provenance: SYNTHETIC
+labeled: true
+n_documents: 8
+includes_organizer_test_inputs: false

@@ -1,0 +1,14 @@
+[
+  {
+    "text": "Ho khan",
+    "type": "CHẨN_ĐOÁN",
+    "position": [
+      0,
+      7
+    ],
+    "candidates": [
+      "R05"
+    ],
+    "assertions": []
+  }
+]

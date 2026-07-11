@@ -1,0 +1,76 @@
+# MedNorm-VI — PROVISIONAL LOCAL EVALUATOR config (v1)
+# ------------------------------------------------------------------------------
+# This is NOT an official evaluator clone. It approximates the published metric
+# on TEAM-OWNED labeled data. The organizer competition test set has NO ground
+# truth and must never be evaluated as labels. See docs/evaluation/*.
+evaluator_version: provisional-v1
+
+# --- Confirmed final component weights (published) ---
+final_weights:
+  text: 0.30          # 1 - WER
+  assertions: 0.30    # Jaccard
+  candidates: 0.40    # Jaccard, weight = len(GT candidates)+1
+
+# --- Entity matching (PROVISIONAL: organizer algorithm unpublished) ---
+# One of: exact-position | exact-text-occurrence | min-cost-bipartite.
+# Default: exact-text-occurrence. Rationale: the confirmed rules use text +
+# type, correctly keep repeated mentions at different positions distinct, and do
+# not assume position participates in matching (an open question). It is the most
+# defensible default until the organizer confirms the algorithm.
+matching_strategy: exact-text-occurrence
+
+# --- WER tokenization (PROVISIONAL: organizer tokenization unpublished) ---
+# One of: whitespace | whitespace-punctuation | character-diagnostic.
+# Default: whitespace-punctuation. Rationale: clinical text is punctuation-dense
+# (dose "10 mg", ranges "325-650", "WBC:14.43"); treating punctuation as its own
+# token avoids a single punctuation slip dominating a short entity's WER, while
+# not normalizing/altering the organizer-facing text.
+tokenization: whitespace-punctuation
+
+# --- Aggregation (PROVISIONAL) ---
+# One of: provisional-v1 | macro-document | micro-entity-diagnostic.
+# Only provisional-v1 approximates the published score.
+aggregation_policy: provisional-v1
+
+# --- Text-score clipping (PROVISIONAL: whether organizer clips 1-WER) ---
+# When false, raw 1-WER (which can be negative if WER>1) is used as the score.
+# Raw values are ALWAYS preserved in reports regardless of this setting.
+clip_text_score: false
+
+# --- min-cost-bipartite cost weights (only used by that matcher) ---
+cost_weights:
+  token_wer: 0.5
+  char_overlap: 0.3
+  position_distance: 0.15
+  boundary_length: 0.05
+  exact_text_bonus: 0.5
+  position_scale: 50.0     # chars; normalizes |Δstart|
+max_matching_cost: 0.9      # assigned pairs above this cost are rejected
+
+# --- Unmatched handling (documented; unmatched slots score 0 for their fields) ---
+unmatched:
+  missing_entity_text_score: 0.0
+  spurious_entity_text_score: 0.0
+
+# --- Duplicate handling ---
+duplicates:
+  dedup_assertions: true
+  dedup_candidates: true
+  emit_duplicate_diagnostics: true
+
+# --- Reports ---
+report:
+  emit_html: true
+  emit_jsonl: true
+
+# --- Determinism ---
+deterministic: true
+
+# --- Provenance gate: only these labeled provenance levels may be evaluated. ---
+# ORGANIZER_TEST is intentionally absent and can never appear here.
+allowed_provenance:
+  - GOLD
+  - SILVER
+  - SYNTHETIC
+  - ORGANIZER_PUBLISHED_EXAMPLE
+  - EXTERNAL_PERMITTED

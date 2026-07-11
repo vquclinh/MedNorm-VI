@@ -40,6 +40,12 @@
 - Candidate **syntax** is kept light (RxNorm = numeric RxCUI strings; ICD-10 =
   opaque strings). **KB-membership** validation remains deferred until frozen KB
   releases exist (question 3 above).
+- **Phase 0.5 (Audit 0003):** the organizer test set has **no ground truth**, so
+  the local evaluator is `PROVISIONAL` and scores team-owned labeled data only.
+  Questions 1 (matching mode), 2 (WER tokenization), and 4 (candidate ordering /
+  max length) are surfaced as configurable, auditable switches in
+  `configs/evaluation/provisional_v1.yaml`; see
+  `docs/evaluation/METRIC_ASSUMPTIONS.md`. These remain OPEN.
 
 ## Decision-record convention
 

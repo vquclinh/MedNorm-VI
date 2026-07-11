@@ -1,0 +1,30 @@
+[
+  {
+    "text": "THA",
+    "type": "CHẨN_ĐOÁN",
+    "position": [
+      0,
+      3
+    ],
+    "candidates": [
+      "I10"
+    ],
+    "assertions": [],
+    "route_case": "C5",
+    "section": "diagnosis"
+  },
+  {
+    "text": "metformin",
+    "type": "THUỐC",
+    "position": [
+      22,
+      31
+    ],
+    "candidates": [
+      "6809"
+    ],
+    "assertions": [],
+    "route_case": "C5",
+    "section": "current"
+  }
+]

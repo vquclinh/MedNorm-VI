@@ -1,6 +1,6 @@
 # MedNorm-VI — Case Routing (L2)
 
-> Describes the seven routed case families from `MedNorm-VI_Architecture.pdf`
+> Describes the seven routed case families from `docs/MedNorm-VI_Architecture.pdf`
 > (section 5) and how the multi-label router activates specialist modules.
 > Declarative placeholders live in `configs/routes.yaml`. Cue lists there are
 > **seed examples, not the closed medical lexicon** (spec section 4.3).

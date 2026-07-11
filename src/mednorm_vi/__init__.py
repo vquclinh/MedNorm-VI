@@ -6,8 +6,8 @@ contracts (``schemas``), a deterministic ``validator`` foundation, and empty
 layer packages (L1-L9) to be implemented incrementally. No models are loaded or
 downloaded here.
 
-The authoritative specification is ``MedNorm-VI_Architecture.pdf`` at the repo
-root. Read it before any architecture-sensitive change.
+The authoritative specification is ``docs/MedNorm-VI_Architecture.pdf``. Read it
+before any architecture-sensitive change.
 """
 
 __version__ = "0.0.1"
