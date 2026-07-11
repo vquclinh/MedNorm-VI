@@ -48,3 +48,4 @@ Each audit should record, at minimum:
 - `0003-phase-0_5-validation-annotation-evaluation-experiments.md`
 - `0004-remove-claude-md-canonicalize-agents.md`
 - `0005-remove-agents-md-move-pdfs-to-docs.md`
+- `0006-phase-1a-l1-document-intelligence.md`

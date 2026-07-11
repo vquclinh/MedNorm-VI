@@ -8,12 +8,14 @@ MedNorm-VI is a multi-expert system that converts free-form Vietnamese clinical
 notes into structured, offset-preserving entity hypotheses with assertions and
 ICD-10 / RxNorm candidate codes.
 
-> **Status: research-foundation stage (Phase 0 + Phase 0.5).** This repository
-> contains the typed data contracts, the deterministic validation foundation,
-> per-layer module stubs, and — new in Phase 0.5 — a **PROVISIONAL LOCAL
-> EVALUATOR**, an **annotation/data-quality** foundation, and **leaderboard
-> experiment tracking**. **No models, indices, or datasets are downloaded or
-> implemented yet.** See `docs/` and the audit trail in `docs/audits/`.
+> **Status: Phase 1A — first processing layer implemented.** On top of the
+> Phase 0/0.5 foundations (typed contracts, deterministic validation, PROVISIONAL
+> LOCAL EVALUATOR, annotation + experiment tracking), **L1 Document Intelligence**
+> is now implemented: exact UTF-8 loading, reversible normalization with O(n)
+> character alignment, section/sentence/list/table-row/token segmentation, and a
+> deterministic `DocumentGraph`. L1 detects **structure only** — never medical
+> entities. **No models, indices, or datasets are downloaded or implemented yet.**
+> See `docs/` and the audit trail in `docs/audits/`.
 
 > ### ⚠️ Competition reality
 > The organizer does **not** release ground truth for the competition test set.
@@ -209,6 +211,26 @@ python -m mednorm_vi.experiments.cli compare EXP-0001 EXP-0002
 Docs: [`docs/evaluation/`](docs/evaluation/), [`docs/annotation/`](docs/annotation/),
 [`docs/experiments/`](docs/experiments/). Metric confirmed-vs-provisional split:
 [`docs/evaluation/METRIC_ASSUMPTIONS.md`](docs/evaluation/METRIC_ASSUMPTIONS.md).
+
+## L1 Document Intelligence (Phase 1A)
+
+Deterministic structural analysis of a clinical document into a `DocumentGraph`
+(structure only — no medical entities):
+
+```python
+from mednorm_vi.document_intelligence import analyze_text, analyze_document
+graph = analyze_document("note.txt")   # exact UTF-8 load + structural graph
+```
+
+```bash
+python -m mednorm_vi.document_intelligence.cli \
+  --input tests/fixtures/document_intelligence/synthetic_multisection.txt \
+  --config configs/document_intelligence/base.yaml \
+  --output /tmp/document_graph.json --inspect
+```
+
+Docs: [`docs/document_intelligence/`](docs/document_intelligence/) (overview,
+offset alignment, section parsing, segmentation, known limitations).
 
 ## Test & static checks
 

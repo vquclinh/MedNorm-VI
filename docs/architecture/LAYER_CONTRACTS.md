@@ -25,19 +25,28 @@
 
 ---
 
-## L1 — Document Intelligence
+## L1 — Document Intelligence — **IMPLEMENTED (Phase 1A)**
 - **Input:** raw UTF-8 `original_text` of one document.
-- **Output:** `DocumentGraph` (sections, sentences, list rows, table-like cells,
-  segments) + `NormalizedView` with an `OffsetAlignment` back to `original_text`.
-- **Responsibility:** segmentation; section/discourse parsing with priors;
-  reversible Unicode/abbreviation/unit normalization; list splitting that
-  retains separators and absolute offsets.
+- **Output:** `DocumentGraph` (`mednorm_vi.document_intelligence.models`) — an
+  immutable `original_text`, named normalized views (`match`, `accent`) each with
+  a reversible `CharAlignment`, and structural nodes: sections (+ priors),
+  paragraphs, lines, sentences, list items/markers, table-like/key-value rows,
+  table cells, delimiters, and tokens — every node with absolute offsets.
+- **Responsibility:** exact loading (BOM/newline policy, no silent normalization);
+  reversible O(n) normalization with boundary-level alignment; section/discourse
+  parsing with priors (versioned lexicon + structural evidence); line/paragraph/
+  sentence/list/table-row/token segmentation preserving delimiters and offsets.
 - **Must not:** trim whitespace, re-case, or rewrite punctuation on the original;
-  lose or approximate original offsets; treat a section prior as an absolute rule.
-- **Provenance/confidence:** each node stores its absolute offsets; section nodes
-  store the matched pattern and a `prior_strength`.
-- **Offsets:** builds the alignment used by every later layer; guarantees every
-  normalized code point maps back to an original code point.
+  normalize newlines; lose or approximate original offsets; treat a section prior
+  as an absolute rule; **claim a medical entity was detected** (structure only).
+- **Provenance/confidence:** each node stores absolute offsets; section nodes store
+  `matched_rule`, `confidence`, `prior_label`, `prior_strength`; tokens store
+  normalized form/category/provenance.
+- **Offsets:** `original_text[start:end] == node.text` for every node
+  (`validation.validate_graph`); normalized coordinates never become output
+  coordinates — a normalized span only ever yields a *covering* original span.
+- **Docs:** `docs/document_intelligence/`. **Deferred to L2+:** NER, medication/lab
+  entity extraction, assertions, ICD/RxNorm linking, case routing.
 
 ## L2 — Case Router
 - **Input:** `DocumentGraph` segments (+ section priors).

@@ -1,0 +1,163 @@
+# MedNorm-VI — L1 section-header lexicon (v1)
+# ------------------------------------------------------------------------------
+# Versioned, EXTENSIBLE inventory of section-header aliases. These are
+# representative examples, NOT a claim of exhaustive coverage. Aliases are
+# matched against a normalized (casefold + accent-stripped + whitespace) view of
+# short, header-like lines; a fuzzy hit additionally requires structural evidence
+# (see configs/document_intelligence/base.yaml::sections).
+#
+# A section is EVIDENCE, not an absolute semantic rule. L1 stores section context
+# + provenance; it never assigns final assertions. `prior_label`/`prior_strength`
+# are hints later layers may weigh and local text may override.
+version: 1
+lexicon_version: 1
+
+categories:
+  - category: medical_history
+    semantic_group: history
+    prior_label: isHistorical
+    prior_strength: 0.6
+    aliases:
+      - {form: "Tiền sử bệnh", language: vi, accent: accented}
+      - {form: "Tiền sử", language: vi, accent: accented}
+      - {form: "Bệnh sử", language: vi, accent: accented}
+      - {form: "Tiền căn", language: vi, accent: accented}
+      - {form: "Past medical history", language: en}
+      - {form: "Medical history", language: en}
+      - {form: "PMH", language: en, abbreviation: true}
+    positive_examples: ["Tiền sử:", "PAST MEDICAL HISTORY"]
+    negative_examples: ["Bệnh nhân có tiền sử hút thuốc lá."]
+
+  - category: family_history
+    semantic_group: family
+    prior_label: isFamily
+    prior_strength: 0.6
+    aliases:
+      - {form: "Tiền sử gia đình", language: vi, accent: accented}
+      - {form: "Gia đình", language: vi, accent: accented}
+      - {form: "Family history", language: en}
+      - {form: "FHx", language: en, abbreviation: true}
+    positive_examples: ["Tiền sử gia đình:"]
+    negative_examples: ["Gia đình bệnh nhân đồng ý điều trị."]
+
+  - category: pre_admission_medications
+    semantic_group: medication_section
+    prior_label: isHistorical
+    prior_strength: 0.5
+    aliases:
+      - {form: "Thuốc trước nhập viện", language: vi, accent: accented}
+      - {form: "Thuốc đang dùng", language: vi, accent: accented}
+      - {form: "Pre-admission medications", language: en}
+      - {form: "Home medications", language: en}
+    positive_examples: ["Thuốc trước nhập viện:"]
+    negative_examples: []
+
+  - category: home_medications
+    semantic_group: medication_section
+    prior_label: isHistorical
+    prior_strength: 0.5
+    aliases:
+      - {form: "Thuốc tại nhà", language: vi, accent: accented}
+      - {form: "Thuốc dùng tại nhà", language: vi, accent: accented}
+      - {form: "Home meds", language: en, abbreviation: true}
+    positive_examples: ["Thuốc tại nhà:"]
+    negative_examples: []
+
+  - category: current_medications
+    semantic_group: medication_section
+    prior_label: null
+    prior_strength: 0.3
+    aliases:
+      - {form: "Thuốc hiện tại", language: vi, accent: accented}
+      - {form: "Y lệnh", language: vi, accent: accented}
+      - {form: "Điều trị hiện tại", language: vi, accent: accented}
+      - {form: "Current medications", language: en}
+    positive_examples: ["Thuốc hiện tại:"]
+    negative_examples: []
+
+  - category: laboratory
+    semantic_group: laboratory
+    prior_label: null
+    prior_strength: 0.4
+    aliases:
+      - {form: "Xét nghiệm", language: vi, accent: accented}
+      - {form: "Cận lâm sàng", language: vi, accent: accented}
+      - {form: "Kết quả xét nghiệm", language: vi, accent: accented}
+      - {form: "Laboratory", language: en}
+      - {form: "Investigations", language: en}
+      - {form: "Labs", language: en, abbreviation: true}
+    positive_examples: ["Xét nghiệm:", "CẬN LÂM SÀNG"]
+    negative_examples: []
+
+  - category: diagnosis
+    semantic_group: diagnosis
+    prior_label: null
+    prior_strength: 0.5
+    aliases:
+      - {form: "Chẩn đoán", language: vi, accent: accented}
+      - {form: "Chẩn đoán xác định", language: vi, accent: accented}
+      - {form: "Kết luận", language: vi, accent: accented}
+      - {form: "Diagnosis", language: en}
+      - {form: "Impression", language: en}
+      - {form: "Dx", language: en, abbreviation: true}
+    positive_examples: ["Chẩn đoán:", "DIAGNOSIS"]
+    negative_examples: ["Cần chẩn đoán phân biệt với viêm phổi."]
+
+  - category: current_examination
+    semantic_group: examination
+    prior_label: null
+    prior_strength: 0.3
+    aliases:
+      - {form: "Khám hiện tại", language: vi, accent: accented}
+      - {form: "Thăm khám", language: vi, accent: accented}
+      - {form: "Khám bệnh", language: vi, accent: accented}
+      - {form: "Examination", language: en}
+      - {form: "Physical exam", language: en}
+    positive_examples: ["Thăm khám:"]
+    negative_examples: []
+
+  - category: symptoms
+    semantic_group: symptoms
+    prior_label: null
+    prior_strength: 0.3
+    aliases:
+      - {form: "Triệu chứng", language: vi, accent: accented}
+      - {form: "Lý do vào viện", language: vi, accent: accented}
+      - {form: "Symptoms", language: en}
+      - {form: "Chief complaint", language: en}
+    positive_examples: ["Triệu chứng:", "Lý do vào viện:"]
+    negative_examples: []
+
+  - category: treatment
+    semantic_group: treatment
+    prior_label: null
+    prior_strength: 0.3
+    aliases:
+      - {form: "Điều trị", language: vi, accent: accented}
+      - {form: "Hướng điều trị", language: vi, accent: accented}
+      - {form: "Treatment", language: en}
+      - {form: "Plan", language: en}
+    positive_examples: ["Điều trị:"]
+    negative_examples: []
+
+  - category: admission_information
+    semantic_group: admission
+    prior_label: null
+    prior_strength: 0.2
+    aliases:
+      - {form: "Thông tin nhập viện", language: vi, accent: accented}
+      - {form: "Lý do nhập viện", language: vi, accent: accented}
+      - {form: "Admission", language: en}
+    positive_examples: ["Lý do nhập viện:"]
+    negative_examples: []
+
+  - category: discharge_information
+    semantic_group: discharge
+    prior_label: null
+    prior_strength: 0.2
+    aliases:
+      - {form: "Thông tin ra viện", language: vi, accent: accented}
+      - {form: "Ra viện", language: vi, accent: accented}
+      - {form: "Discharge", language: en}
+    positive_examples: ["Discharge summary"]
+    negative_examples: []
