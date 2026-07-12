@@ -1,35 +1,28 @@
-"""L2 — Case Router (spec section 5).
+"""L2 — Case Router (Phase 1B): deterministic multi-label routing over L1.
 
-Responsibility: assign one or more cases (C1-C7) to each segment. MULTI-LABEL —
-no forced exclusivity. Declarative cues live in ``configs/routes.yaml``.
-
-Contract:
-    route_segments(graph: DocumentGraph, routes_config: dict) -> list[RouteDecision]
-
-Status: NOT IMPLEMENTED (bootstrap). Interface only.
+A route tag (C1-C7) is a PROCESSING CASE, not an entity type and not a final
+prediction. Routing is multi-label; a node may carry several cases. Route scores
+are deterministic heuristic evidence. See ``docs/case_router/``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from .models import CaseScore, NodeRouting, RouteSignal
+from .router import CaseRouter, build_line_contexts
+from .serialization import routing_to_dict, routings_to_list
+from .signals import LineContext, RouterConfig, load_router_config
+from .validation import validate_routings
 
-from ..schemas import DocumentGraph, RouteDecision
-
-
-class CaseRouter(Protocol):
-    """Interface for the L2 multi-label router."""
-
-    def route_segments(
-        self, graph: DocumentGraph, routes_config: dict[str, Any]
-    ) -> list[RouteDecision]:
-        ...
-
-
-def route_segments(
-    graph: DocumentGraph, routes_config: dict[str, Any]
-) -> list[RouteDecision]:
-    """TODO(L2): score C1-C7 per segment from lexical/structural/section signals."""
-    raise NotImplementedError("L2 Case Router is not implemented yet (bootstrap).")
-
-
-__all__ = ["CaseRouter", "route_segments"]
+__all__ = [
+    "CaseRouter",
+    "RouterConfig",
+    "load_router_config",
+    "build_line_contexts",
+    "LineContext",
+    "NodeRouting",
+    "CaseScore",
+    "RouteSignal",
+    "routing_to_dict",
+    "routings_to_list",
+    "validate_routings",
+]

@@ -1,0 +1,28 @@
+# MedNorm-VI — Laboratory test-name seed lexicon (v1)
+# ------------------------------------------------------------------------------
+# SMALL representative seed of common test names/abbreviations for tests and
+# bootstrapping ONLY. Not an exhaustive lab ontology; nothing is downloaded. A
+# LOCAL, git-ignored production lexicon may be loaded later.
+version: 1
+lexicon_version: lab-lex-seed-1
+provenance: representative_seed
+production_lexicon_path: data/lexicons/lab_tests.txt   # git-ignored; may be absent
+
+# Match forms (case-insensitive; '%'-suffixed names kept literally).
+tests:
+  - {name: WBC, aliases: [bạch cầu, "bach cau"]}
+  - {name: RBC, aliases: [hồng cầu, "hong cau"]}
+  - {name: HGB, aliases: [Hb, hemoglobin, huyết sắc tố]}
+  - {name: PLT, aliases: [tiểu cầu, "tieu cau"]}
+  - {name: "NEUT%", aliases: [neutrophil]}
+  - {name: "LYMPH%", aliases: [lymphocyte]}
+  - {name: Glucose, aliases: [đường huyết, "duong huyet", glucose máu]}
+  - {name: Creatinine, aliases: [creatinin]}
+  - {name: Ure, aliases: [urea, BUN]}
+  - {name: AST, aliases: [SGOT]}
+  - {name: ALT, aliases: [SGPT]}
+  - {name: Natri, aliases: [Na, sodium]}
+  - {name: Kali, aliases: [K, potassium]}
+  - {name: Clo, aliases: [Cl, chloride]}
+  - {name: CRP, aliases: []}
+  - {name: HbA1c, aliases: []}

@@ -4,6 +4,12 @@
 > (section 5) and how the multi-label router activates specialist modules.
 > Declarative placeholders live in `configs/routes.yaml`. Cue lists there are
 > **seed examples, not the closed medical lexicon** (spec section 4.3).
+>
+> **Phase 1B status:** an initial deterministic multi-label router is implemented
+> in `src/mednorm_vi/case_router/`, configured by `configs/case_router/` (not the
+> `configs/routes.yaml` placeholder). It routes L1 LINE nodes for C1-C7 as
+> processing cases (evidence only) and activates the medication grammar (C1/C5)
+> and laboratory parser (C2). See `docs/case_router/`.
 
 ## Multi-label routing
 

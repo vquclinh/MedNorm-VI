@@ -8,14 +8,16 @@ MedNorm-VI is a multi-expert system that converts free-form Vietnamese clinical
 notes into structured, offset-preserving entity hypotheses with assertions and
 ICD-10 / RxNorm candidate codes.
 
-> **Status: Phase 1A — first processing layer implemented.** On top of the
-> Phase 0/0.5 foundations (typed contracts, deterministic validation, PROVISIONAL
-> LOCAL EVALUATOR, annotation + experiment tracking), **L1 Document Intelligence**
-> is now implemented: exact UTF-8 loading, reversible normalization with O(n)
-> character alignment, section/sentence/list/table-row/token segmentation, and a
-> deterministic `DocumentGraph`. L1 detects **structure only** — never medical
-> entities. **No models, indices, or datasets are downloaded or implemented yet.**
-> See `docs/` and the audit trail in `docs/audits/`.
+> **Status: Phase 1B — deterministic medical specialists implemented.** On top of
+> Phase 0/0.5 (contracts, validation, PROVISIONAL LOCAL EVALUATOR, annotation +
+> experiment tracking) and **Phase 1A** (L1 Document Intelligence), Phase 1B adds
+> the first **medical-structure** components over the L1 `DocumentGraph`: an
+> initial **multi-label Case Router** (C1-C7), a **medication grammar**, and a
+> **laboratory parser** with test-result pairing. These emit auditable
+> **`SpanProposal`/`RelationProposal`** objects — **not** final entities,
+> assertions, ontology codes, or organizer JSON. Deterministic heuristic scores
+> are not calibrated probabilities. **No models, indices, or datasets are
+> downloaded.** See `docs/` and the audit trail in `docs/audits/`.
 
 > ### ⚠️ Competition reality
 > The organizer does **not** release ground truth for the competition test set.
@@ -231,6 +233,33 @@ python -m mednorm_vi.document_intelligence.cli \
 
 Docs: [`docs/document_intelligence/`](docs/document_intelligence/) (overview,
 offset alignment, section parsing, segmentation, known limitations).
+
+## Phase 1B — deterministic medical specialists
+
+Case Router + medication grammar + laboratory parser over the L1 graph. Produces
+proposals (not final entities):
+
+```python
+from mednorm_vi.document_intelligence import analyze_document
+from mednorm_vi.deterministic_baseline import Phase1BConfig, run_phase1b
+graph = analyze_document("note.txt")
+config = Phase1BConfig.load("configs/case_router/base.yaml",
+                            "configs/medication/grammar_v1.yaml",
+                            "configs/laboratory/parser_v1.yaml")
+result = run_phase1b(graph, config)   # SpanProposals + has_result relations
+```
+
+```bash
+python -m mednorm_vi.deterministic_baseline.cli \
+  --input tests/fixtures/phase1b/synthetic_medical_document.txt \
+  --router-config configs/case_router/base.yaml \
+  --medication-config configs/medication/grammar_v1.yaml \
+  --laboratory-config configs/laboratory/parser_v1.yaml \
+  --output /tmp/mednorm-phase1b.json --inspect
+```
+
+Docs: [`docs/case_router/`](docs/case_router/), [`docs/medication/`](docs/medication/),
+[`docs/laboratory/`](docs/laboratory/), [`docs/deterministic_baseline/`](docs/deterministic_baseline/).
 
 ## Test & static checks
 

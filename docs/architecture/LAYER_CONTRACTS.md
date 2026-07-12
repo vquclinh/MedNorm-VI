@@ -48,33 +48,38 @@
 - **Docs:** `docs/document_intelligence/`. **Deferred to L2+:** NER, medication/lab
   entity extraction, assertions, ICD/RxNorm linking, case routing.
 
-## L2 — Case Router
-- **Input:** `DocumentGraph` segments (+ section priors).
-- **Output:** for each segment, a set of `RouteTag`s (a `RouteDecision`) with
-  per-case scores and applied priors. **Multi-label** — a segment may carry
-  several cases (e.g. C1+C4+C6).
-- **Responsibility:** score C1–C7 from lexical/structural/section/learned
-  signals; attach priors (e.g. `isHistorical` for pre-admission sections).
-- **Must not:** force single-label exclusivity; drop a segment for lacking a
-  strong case (fallback route `C3`); emit spans or entities.
-- **Provenance/confidence:** each `RouteTag` stores the case id, score, the
-  signals that fired, and `lexicon_version`.
-- **Offsets:** carries segment offsets through unchanged.
+## L2 — Case Router — **INITIAL RULE-BASED (Phase 1B)**
+- **Input:** L1 `DocumentGraph` (routes each non-blank LINE node).
+- **Output:** a `NodeRouting` per node with multi-label `CaseScore`s (C1-C7),
+  fired signals, activated specialists, section priors, and a deterministic
+  `decision_id`. Bridges to `schemas.routing.RouteDecision`. **Multi-label** —
+  a node may carry several cases (e.g. C1+C4+C6).
+- **Responsibility:** score C1-C7 from versioned lexical + structural signals and
+  section priors; C6/C7 are derived from specialist proposals. A route tag is a
+  **processing case**, not an entity type or final prediction.
+- **Must not:** force single-label exclusivity; deduplicate by text; emit spans,
+  entities, or final assertions; treat section priors as final labels.
+- **Provenance/confidence:** each `CaseScore` stores fired `RouteSignal`s +
+  weights; scores are deterministic heuristic evidence, not probabilities.
+- **Docs:** `docs/case_router/`. Config: `configs/case_router/`.
 
-## L3 — Mention Factory
-- **Input:** routed segments.
-- **Output:** a **span lattice** — many overlapping `SpanProposal`s from experts
-  E1–E7. High recall by design.
-- **Responsibility:** propose every plausible entity span (grammar, lexicon,
-  span/W2NER/MRC/GLiNER encoders, LLM proposer for hard cases).
-- **Must not:** emit final entities; deduplicate prematurely; let any single
-  expert decide a boundary unilaterally; let the LLM proposer invent text that
-  is not an exact substring.
-- **Provenance/confidence:** each `SpanProposal` stores `source` (expert id),
-  `local_score`, `route`, `proposed_types`, and grammar/lexicon features
-  (`SpanProvenance`).
-- **Offsets:** every proposal carries the absolute coordinate triplet; proposer
-  substrings are validated against `original_text`.
+## L3 — Mention Factory — **DETERMINISTIC SPECIALISTS (Phase 1B)**
+- **Input:** routed L1 nodes.
+- **Output:** high-recall `SpanProposal`s + internal `RelationProposal`s from two
+  deterministic specialists so far — **medication grammar** (E1) and
+  **laboratory parser** (E2). Multiple boundary candidates per mention.
+- **Responsibility:** propose plausible spans + structured parses (grammar,
+  versioned lexicons); pair `TEST_NAME --has_result--> TEST_RESULT` internally.
+  Neural experts (E3-E7) are deferred.
+- **Must not:** emit final entities/assertions/ontology codes/organizer JSON;
+  deduplicate by text; let a specialist pick a single final boundary; invent text
+  that is not an exact substring.
+- **Provenance/confidence:** each `SpanProposal` stores specialist, source node,
+  source routes, `local_score` (heuristic), matched rule, components (exact
+  offsets), `parse_ref`, config/lexicon versions, warnings.
+- **Offsets:** `original_text[start:end] == proposal.text` for every proposal and
+  component; validated centrally. **Docs:** `docs/medication/`, `docs/laboratory/`,
+  `docs/deterministic_baseline/`.
 
 ## L4 — Boundary & Type Resolver
 - **Input:** the span lattice (overlapping `SpanProposal`s) + route features.
