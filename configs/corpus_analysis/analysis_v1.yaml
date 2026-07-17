@@ -1,0 +1,70 @@
+# MedNorm-VI — Phase 2A corpus-analysis cue inventory (v1)
+# -----------------------------------------------------------------------------
+# DESCRIPTIVE analysis only. These regexes classify LAYOUT/STYLE for statistics —
+# they never extract entities, never predict, and never produce proposals. Cues
+# live in config (not Python) per repo convention. Matched case-insensitively
+# against a line's ORIGINAL text; accented + unaccented Vietnamese and English
+# variants are listed explicitly.
+version: 1
+analysis_version: corpus-2a-1
+
+# --- laboratory LAYOUT families (structural/lexical shape, not lab entities) ---
+laboratory:
+  numeric_with_unit:
+    - '\d\s?(mg/dl|mmol/l|g/l|g/dl|u/l|iu/l|ng/ml|pg/ml|umol/l|µmol/l|mmol|mm3|/mm3)\b'
+    - '\d\s?(cells?/[uµ]l|10\^?\d+/l|mmhg|bpm)\b'
+    - '\d\s?%'
+  reference_range:
+    - '\(\s*\d+([.,]\d+)?\s*[-–]\s*\d+([.,]\d+)?\s*\)'
+    - '\[\s*\d+([.,]\d+)?\s*[-–]\s*\d+([.,]\d+)?\s*\]'
+  qualitative_result:
+    - '\b(am tinh|âm tính|duong tinh|dương tính|khong phat hien|không phát hiện)\b'
+    - '\b(positive|negative|reactive|detected|not detected|trace)\b'
+    - '\((\s*[+-]\s*)\)'
+  normality_phrase:
+    - '\b(binh thuong|bình thường|trong gioi han|trong giới hạn)\b'
+    - '\b(normal|unremarkable|within normal limits)\b'
+  lab_section_cue:
+    - '\b(xet nghiem|xét nghiệm|can lam sang|cận lâm sàng|cong thuc mau|công thức máu|sinh hoa|sinh hóa)\b'
+  bare_numeric_result:
+    - '^\s*[-•*]?\s*\S.{0,40}?\s\d+([.,]\d+)?\s*$'
+
+# --- medication-list PATTERNS (shape of a med line, not medication entities) ---
+medication:
+  strength:
+    - '\d\s?(mg|mcg|µg|ug|g|kg|ml|mL|l|iu|ui|u)\b'
+    - '\bmg/m?l\b'
+  route:
+    - '\b(po|iv|im|sc|sl|pr|inh)\b'
+    - '\b(uong|uống|tiem bap|tiêm bắp|duoi da|dưới da|dat|đặt)\b'
+  frequency:
+    - '\b(qd|bid|tid|qid|prn|qhs|qam|od|nocte)\b'
+    - '\bq\d+h\b'
+    - '\b(daily|once daily|twice daily)\b'
+    - '\b(moi ngay|mỗi ngày|ngay \d lan|ngày \d lần)\b'
+  dose_form:
+    - '\b(tablet|tab|capsule|cap|solution|syrup|injection|vial|amp|cream|patch|drops)\b'
+    - '\b(vien|viên|vien nen|viên nén|nang|dung dich|dung dịch|siro|tiem|tiêm)\b'
+  med_section_cue:
+    - '\b(thuoc|thuốc|dang dung|đang dùng|toa thuoc|toa thuốc)\b'
+
+# --- imaging / report STYLE cues ---
+imaging:
+  modality:
+    - '\b(x-quang|xquang|x quang|ct|cat|mri|ecg|dien tam do|điện tâm đồ|sieu am|siêu âm)\b'
+    - '\b(chup cat lop|chụp cắt lớp|cong huong tu|cộng hưởng từ|noi soi|nội soi)\b'
+    - '\b(x-ray|ultrasound|echo|holter)\b'
+  imaging_section_cue:
+    - '\b(chan doan hinh anh|chẩn đoán hình ảnh|hinh anh|hình ảnh)\b'
+  # Observed style: "- <finding> (<modality>)" — a trailing parenthetical modality.
+  trailing_modality_parenthetical:
+    - '\([^()]{2,40}\)\s*$'
+
+# --- structural profile thresholds (descriptive buckets, not predictions) ---
+profile:
+  # a document is "list dominant" when list items are at least this share of
+  # non-blank lines; "narrative dominant" when at or below the narrative share.
+  list_dominant_min_share: 0.5
+  narrative_dominant_max_share: 0.2
+  # length buckets (characters) for the distribution table
+  length_buckets: [250, 500, 1000, 2000, 4000, 8000]
