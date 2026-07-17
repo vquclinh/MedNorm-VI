@@ -1,0 +1,7 @@
+code,label_vi,label_en,aliases,parent
+A09,Tiêu chảy và viêm dạ dày ruột nhiễm khuẩn,Diarrhoea and gastroenteritis,,
+A099,Viêm dạ dày - ruột không rõ nguyên nhân,Gastroenteritis of unspecified origin,viêm dạ dày ruột,A09
+E11,Đái tháo đường típ 2,Type 2 diabetes mellitus,ĐTĐ típ 2,
+E11.9,Đái tháo đường típ 2 không biến chứng,T2DM without complications,,E11
+E11.65,Đái tháo đường típ 2 có tăng đường huyết,T2DM with hyperglycemia,,E11
+I10,Tăng huyết áp vô căn,Essential hypertension,THA,

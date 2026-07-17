@@ -1,0 +1,68 @@
+# MedNorm-VI — RxNorm decoding-policy HYPOTHESES (v1)
+# -----------------------------------------------------------------------------
+# Candidate strategies for turning a structured medication parse into RxCUI
+# candidate(s). Every entry is an EXPERIMENT HYPOTHESIS, not a confirmed rule.
+# No global winner is selected here; selection is deferred to leaderboard probes.
+# The undisclosed sub-policies (release, distribution, TTY priority, missing
+# strength, range, combination) live in unresolved_policies_v1.yaml.
+registry: rxnorm_decoding_hypotheses
+version: 1
+
+hypotheses:
+  - policy_id: RXDEC-INGREDIENT-SAFE
+    title: Ingredient-safe
+    description: Emit the ingredient (IN/PIN) concept — highest precision, lowest specificity.
+    status: hypothesis
+    confidence: low
+    trade_off: high precision, misses strength/form-specific gold.
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-MOST-SPECIFIC
+    title: Most-specific-supported
+    description: Emit the most specific supported concept (SCD/SBD) the parse licenses.
+    status: hypothesis
+    confidence: low
+    trade_off: high specificity, risk of wrong strength/form.
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-SCD-FIRST
+    title: SCD-first
+    description: Prefer clinical drug (SCD) over branded (SBD) when both exist.
+    status: hypothesis
+    confidence: low
+    trade_off: depends on undisclosed TTY priority (UNRES-RXNORM-TTY-PRIORITY).
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-GENERIC-FIRST
+    title: Generic-first
+    description: Prefer generic ingredient/clinical concepts over brand concepts.
+    status: hypothesis
+    confidence: low
+    trade_off: may miss brand-name gold.
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-LEGACY-COMPATIBLE
+    title: Legacy-compatible
+    description: Prefer a CUI valid across releases; follow remaps to a stable current CUI.
+    status: hypothesis
+    confidence: low
+    trade_off: depends on UNRES-RXNORM-REMAP and UNRES-RXNORM-RELEASE.
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-LOWER-BOUND-RANGE
+    title: Lower-bound-range
+    description: For a range strength, decode using the lower bound.
+    status: hypothesis
+    confidence: low
+    trade_off: depends on UNRES-RXNORM-RANGE-STRENGTH.
+    leaderboard_experiment_id: null
+
+  - policy_id: RXDEC-MULTI-CANDIDATE
+    title: Multi-candidate diagnostic
+    description: >-
+      Emit an ordered set of candidates spanning ingredient→specific for
+      diagnostics; NOT a final decode. Useful before the matching mode is known.
+    status: hypothesis
+    confidence: low
+    trade_off: not a single-answer policy; for analysis only.
+    leaderboard_experiment_id: null

@@ -1,0 +1,59 @@
+# MedNorm-VI — ICD-10 (Vietnamese) format HYPOTHESES (v1)
+# -----------------------------------------------------------------------------
+# Candidate assumptions about the undisclosed Vietnamese ICD-10 source/format.
+# Every entry is a HYPOTHESIS. The authoritative source/version, dotted-vs-
+# undotted output, and specificity requirement remain in unresolved_policies.
+registry: icd_format_hypotheses
+version: 1
+
+hypotheses:
+  - policy_id: ICDF-DOTTED-OUTPUT
+    title: Dotted output
+    description: Emit dotted codes (e.g. A09.9). Reversible to undotted internally.
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-DOTTED
+    leaderboard_experiment_id: null
+
+  - policy_id: ICDF-UNDOTTED-OUTPUT
+    title: Undotted output
+    description: Emit undotted codes (e.g. A099).
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-DOTTED
+    leaderboard_experiment_id: null
+
+  - policy_id: ICDF-CATEGORY-ACCEPTED
+    title: 3-char category accepted
+    description: A 3-character category (e.g. A09) is an acceptable answer.
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-SPECIFICITY
+    leaderboard_experiment_id: null
+
+  - policy_id: ICDF-MOST-SPECIFIC-REQUIRED
+    title: Most-specific leaf required
+    description: The most specific available subcode is required.
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-SPECIFICITY
+    leaderboard_experiment_id: null
+
+  - policy_id: ICDF-SOURCE-MOH
+    title: Vietnamese MoH edition
+    description: The Vietnamese Ministry-of-Health ICD-10 edition is authoritative.
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-SOURCE
+    leaderboard_experiment_id: null
+
+  - policy_id: ICDF-SOURCE-WHO-VI
+    title: WHO Vietnamese translation
+    description: A WHO ICD-10 Vietnamese translation is authoritative.
+    status: hypothesis
+    confidence: low
+    linked_unresolved: UNRES-ICD-SOURCE
+    leaderboard_experiment_id: null
+
+# We do NOT assume WHO vs ICD-10-CM vs MoH until a manifest declares it.
+assume_who_vs_cm: false

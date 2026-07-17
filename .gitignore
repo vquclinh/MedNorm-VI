@@ -26,6 +26,17 @@ data/**
 !data/README.md
 !data/**/.gitkeep
 !data/**/README.md
+# Phase 1C-A resource governance: re-include ONLY these directories so git
+# descends into them (git will not apply a nested file exception if the parent
+# dir is treated as excluded). Other data/ subdirs keep their prior behavior.
+!data/external/
+!data/external/**/
+!data/derived/
+!data/manifests/
+# Filled-in resource/KB governance manifests (metadata only) ARE tracked; the raw
+# RxNorm/ICD/NER payloads they describe stay ignored above.
+!data/manifests/*.yaml
+!data/manifests/*.yml
 
 # --- Generated evaluation / experiment reports ---
 reports/**

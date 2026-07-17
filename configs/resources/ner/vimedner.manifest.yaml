@@ -1,0 +1,24 @@
+# ViMedNer — public NER dataset manifest (TEMPLATE / unverified)
+manifest_version: 1
+dataset_id: vimedner
+title: ViMedNer (Vietnamese medical NER)
+source:
+  organization: <VERIFY>
+  url: <SOURCE_URL_PLACEHOLDER>
+  description: Vietnamese medical NER dataset; label set to be verified on acquisition.
+license:
+  name: <VERIFY_LICENSE>
+  status: LICENSE_UNKNOWN
+  text_reference: <PATH_OR_URL>
+redistribution: {permission: unknown}
+original_labels: []          # fill from the acquired dataset
+label_mappings: []           # map to THUỐC/CHẨN_ĐOÁN/TRIỆU_CHỨNG/TÊN_XÉT_NGHIỆM/KẾT_QUẢ_XÉT_NGHIỆM or DROP/REVIEW
+incompatible_labels: []
+boundary_convention: <VERIFY>
+assertion_availability: none
+normalization_availability: none
+privacy_considerations: <VERIFY>
+split_provenance: <VERIFY>
+leakage_risk: unknown
+permitted_use: []
+review_status: pending

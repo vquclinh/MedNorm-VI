@@ -50,3 +50,4 @@ Each audit should record, at minimum:
 - `0005-remove-agents-md-move-pdfs-to-docs.md`
 - `0006-phase-1a-l1-document-intelligence.md`
 - `0007-phase-1b-deterministic-medical-specialists.md`
+- `0008-phase-1c-a-policy-resource-kb-foundation.md`

@@ -1,0 +1,15 @@
+# MedNorm-VI — deterministic L4 resolver foundation config (v1)
+# Boundary policies are CONFIGURABLE. The organizer's boundary policy is largely
+# unresolved; defaults are grounded where possible (the confirmed medication
+# golden example favours the FULL span) and conservative otherwise.
+config_version: resolver-v1
+
+# Medication boundary: name_only | name_strength | name_strength_route | full
+medication_boundary: full
+
+# Descriptive/numeric TEST_RESULT boundary: value_only | value_with_unit
+# (UNRES-TESTRESULT-BOUNDARY — conservative default, value_only).
+test_result_boundary: value_only
+
+# Abstain (mark both unresolved) on a tied same-type overlap instead of picking.
+abstain_on_conflict: false

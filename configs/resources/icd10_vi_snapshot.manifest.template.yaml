@@ -1,0 +1,53 @@
+# Vietnamese ICD-10 snapshot — resource manifest TEMPLATE
+# -----------------------------------------------------------------------------
+# Copy to data/manifests/icd10_vi_<source>.yaml, fill placeholders after a MANUAL
+# acquisition, then validate. Raw table stays under data/external/icd10_vi/.
+# The exact organizer source/version is undisclosed — declare what YOU acquired;
+# do NOT assume WHO vs ICD-10-CM unless the source states it.
+manifest_version: 1
+resource_id: icd10-vi-<source>
+title: Vietnamese ICD-10 table (<source>)
+
+source:
+  organization: <SOURCE_ORG>             # e.g. Vietnamese MoH / WHO-VI translation
+  url: <SOURCE_URL_PLACEHOLDER>
+  description: Vietnamese ICD-10 code + label table.
+
+snapshot:
+  snapshot_id: <SNAPSHOT_ID>
+  version: <VERSION>                      # undisclosed which the organizer uses
+  release_date: <YYYY-MM-DD>
+  acquisition_date: <YYYY-MM-DD>
+
+license:
+  name: <LICENSE_NAME>
+  status: LICENSE_UNKNOWN                 # human reviewer sets this
+  text_reference: <PATH_OR_URL>
+  permits_redistribution: null
+  notes: ""
+
+redistribution:
+  permission: unknown
+  organizer_submission_implications: Do not redistribute ICD content in the submission.
+  notes: ""
+
+files:
+  - {path: icd10_vi.csv, sha256: <SHA256>, bytes: <BYTES>}
+
+raw_path: data/external/icd10_vi/
+processed_path: data/derived/icd10_vi/<snapshot_id>/
+permitted_use: [linking]
+intended_use: [linking]
+
+# Column mapping for the configurable tabular loader (see kb/icd10/loaders.py).
+label_schema:
+  - "code_column=<COL>"
+  - "label_vi_column=<COL>"
+  - "parent_column=<COL_OR_EMPTY>"
+
+provenance: manual_acquisition
+review_status: pending
+reviewer: <REVIEWER>
+unresolved_legal_questions:
+  - Which Vietnamese ICD-10 source/version the organizer uses (UNRES-ICD-SOURCE).
+  - Dotted vs undotted expected output (UNRES-ICD-DOTTED).

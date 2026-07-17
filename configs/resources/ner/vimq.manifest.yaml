@@ -1,0 +1,24 @@
+# ViMQ — public NER/medical-query dataset manifest (TEMPLATE / unverified)
+manifest_version: 1
+dataset_id: vimq
+title: ViMQ (Vietnamese medical questions)
+source:
+  organization: <VERIFY>
+  url: <SOURCE_URL_PLACEHOLDER>
+  description: Vietnamese medical query dataset; suitability + labels to be verified.
+license:
+  name: <VERIFY_LICENSE>
+  status: LICENSE_UNKNOWN
+  text_reference: <PATH_OR_URL>
+redistribution: {permission: unknown}
+original_labels: []
+label_mappings: []
+incompatible_labels: []
+boundary_convention: <VERIFY>
+assertion_availability: none
+normalization_availability: none
+privacy_considerations: <VERIFY>
+split_provenance: <VERIFY>
+leakage_risk: unknown
+permitted_use: []
+review_status: pending

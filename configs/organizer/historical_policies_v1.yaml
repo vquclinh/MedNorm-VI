@@ -1,0 +1,36 @@
+# MedNorm-VI — isHistorical assertion HYPOTHESES (v1)
+# -----------------------------------------------------------------------------
+# isHistorical semantics are only partly disclosed. These are HYPOTHESES about
+# what triggers the label; none is a confirmed rule. Assertion classification is
+# OUT OF SCOPE for this milestone — this file only records the policy slots so a
+# later assertion specialist and leaderboard probes can resolve them.
+registry: historical_policies
+version: 1
+linked_unresolved: UNRES-ISHISTORICAL
+
+hypotheses:
+  - policy_id: HIST-PAST-REFERENCE
+    title: Any past-tense reference
+    description: Any past-tense clinical reference (tiền sử, trước đây, đã từng) sets isHistorical.
+    status: hypothesis
+    confidence: low
+    supporting_observation: Common clinical-NLP convention; not organizer-confirmed.
+    leaderboard_experiment_id: null
+
+  - policy_id: HIST-PRIOR-ENCOUNTER
+    title: Prior encounter/admission
+    description: Tied to a prior encounter/admission (bệnh sử, trước nhập viện).
+    status: hypothesis
+    confidence: low
+    leaderboard_experiment_id: null
+
+  - policy_id: HIST-RESOLVED-ONLY
+    title: Resolved conditions only
+    description: Only explicitly resolved/past conditions, not ongoing history.
+    status: hypothesis
+    confidence: low
+    leaderboard_experiment_id: null
+
+# Interaction with the other multi-label assertions is unresolved; isHistorical
+# can co-occur with isNegated / isFamily (assertions are multi-label — confirmed).
+multi_label: true

@@ -1,0 +1,82 @@
+# MedNorm-VI — Organizer CONFIRMED facts (v1)
+# -----------------------------------------------------------------------------
+# ONLY facts explicitly confirmed by the organizer belong here. Anything
+# inferred, guessed, or partially disclosed goes in unresolved_policies_v1.yaml
+# (or a hypotheses file) — never here. Each fact records the confirming source
+# so a human can re-verify it. These are observations/constraints, not code.
+registry: organizer_confirmed_facts
+version: 1
+
+facts:
+  - fact_id: FACT-DATASETS-TRAINING
+    statement: >-
+      Public / external datasets may be used for training, subject to their
+      individual licenses.
+    source: organizer_rules
+    since: "2026"
+
+  - fact_id: FACT-DATA-PROVENANCE-REQUEST
+    statement: >-
+      The team may be required to provide the data or the data-generation
+      process used for training.
+    source: organizer_rules
+
+  - fact_id: FACT-RXNORM-2026
+    statement: The organizer describes RxNorm as a 2026 version.
+    source: organizer_rules
+    note: The exact 2026 release/date/distribution is NOT disclosed (see UNRES-RXNORM-RELEASE).
+
+  - fact_id: FACT-ICD10-VIETNAMESE
+    statement: ICD-10 uses a Vietnamese version.
+    source: organizer_rules
+    note: The exact source/version/format is NOT disclosed (see UNRES-ICD-SOURCE).
+
+  - fact_id: FACT-KB-NOT-PROVIDED
+    statement: The organizer will not provide the ICD / RxNorm files.
+    source: organizer_rules
+
+  - fact_id: FACT-TESTNAME-RESULT-INDEPENDENT
+    statement: TEST_NAME and TEST_RESULT may occur independently of each other.
+    source: organizer_rules
+
+  - fact_id: FACT-TESTRESULT-NONNUMERIC
+    statement: A TEST_RESULT need not be numeric.
+    source: organizer_rules
+
+  - fact_id: FACT-NO-PAIRING-REQUIRED
+    statement: >-
+      TEST_NAME–TEST_RESULT pairing is not required in the final output.
+    source: organizer_rules
+    note: has_result is INTERNAL evidence only (Phase 1B); never emitted.
+
+  - fact_id: FACT-REPEATED-SYMPTOMS-DISTINCT
+    statement: Repeated symptom occurrences are separate concepts.
+    source: organizer_rules
+
+  - fact_id: FACT-ASSERTIONS-MULTILABEL
+    statement: Assertions are multi-label (isNegated / isHistorical / isFamily).
+    source: organizer_rules
+
+  # Facts already confirmed earlier in the project (ADR 0001 R1-R3), restated
+  # here so the registry is self-contained. Enforced by validator/*.
+  - fact_id: FACT-OFFSET-CONVENTION
+    statement: >-
+      Emitted positions are Python-style end-exclusive character offsets over
+      Unicode code points: original_text[start:end] == entity.text.
+    source: organizer_published_example
+    note: >-
+      Confirmed for the PUBLISHED example. Whether the graded matcher uses
+      position at all, and over which coordinate space, remains unresolved
+      (see UNRES-MATCH-MODE, UNRES-POS-COORD-SPACE).
+
+  - fact_id: FACT-SUBMISSION-LAYOUT
+    statement: >-
+      output.zip contains one output/ directory with 1.json … 100.json (exactly
+      100 documents, no missing or extra prediction files).
+    source: organizer_rules
+
+  - fact_id: FACT-ORGANIZER-LABELS
+    statement: >-
+      Entity type labels are the Vietnamese strings THUỐC, CHẨN_ĐOÁN,
+      TRIỆU_CHỨNG, TÊN_XÉT_NGHIỆM, KẾT_QUẢ_XÉT_NGHIỆM with fixed per-type fields.
+    source: organizer_rules

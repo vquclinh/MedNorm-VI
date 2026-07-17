@@ -1,0 +1,71 @@
+# MedNorm-VI — Registered submission position policies (v1)
+# -----------------------------------------------------------------------------
+# Declares the position-encoding policies the PositionPolicyRegistry exposes.
+# The internal invariant original_text[start:end] == text is ALWAYS enforced on
+# raw code-point spans; these policies only describe how an internal raw span is
+# ENCODED into a submission coordinate, each with reversible provenance. No
+# policy is asserted to be the organizer's global choice.
+registry: position_policies
+version: 1
+
+# The default internal + diagnostic coordinate space. Never changed silently.
+default_policy: raw-codepoint-half-open
+
+policies:
+  - policy_id: raw-codepoint-half-open
+    title: Raw code-point, end-exclusive
+    coordinate_space: codepoint
+    interval: half_open
+    line_ending: raw
+    reversible: true
+    description: Identity encoding over original_text code points. The internal default.
+
+  - policy_id: utf8-byte-half-open
+    title: UTF-8 byte, end-exclusive
+    coordinate_space: utf8_byte
+    interval: half_open
+    line_ending: raw
+    reversible: true
+    description: Map raw code-point spans to UTF-8 byte offsets. Reversible per document.
+
+  - policy_id: canonical-lf-codepoint
+    title: Canonical LF, code-point, end-exclusive
+    coordinate_space: codepoint
+    interval: half_open
+    line_ending: lf_canonical
+    reversible: true
+    description: >-
+      Offsets computed after CRLF is collapsed to LF. Reversible only when the
+      CRLF→LF alignment is retained (it is).
+
+  - policy_id: canonical-crlf-codepoint
+    title: Canonical CRLF, code-point, end-exclusive
+    coordinate_space: codepoint
+    interval: half_open
+    line_ending: crlf_canonical
+    reversible: true
+    description: >-
+      Offsets computed after every lone LF is expanded to CRLF. Reversible via
+      the retained alignment.
+
+  - policy_id: separator-reconstruction-codepoint
+    title: Configurable separator reconstruction
+    coordinate_space: codepoint
+    interval: half_open
+    line_ending: configurable
+    reversible: true
+    description: >-
+      Re-expresses offsets against a text whose line separators are reconstructed
+      to a configured sequence (e.g. \n, \r\n,  ). Reversible when the
+      reconstruction is an injective per-line transform.
+
+  - policy_id: normalized-view-codepoint
+    title: Normalized-view, code-point, end-exclusive
+    coordinate_space: normalized_codepoint
+    interval: half_open
+    line_ending: raw
+    reversible: conditional
+    description: >-
+      Offsets into the L1 normalized_view. Available ONLY when a reversible
+      OffsetAlignment exists; otherwise the encoder fails clearly. Normalized
+      coordinates must never silently become output coordinates.

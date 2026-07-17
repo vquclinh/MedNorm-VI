@@ -49,9 +49,15 @@ python -m mednorm_vi.deterministic_baseline.cli \
   --output /tmp/mednorm-phase1b.json --inspect
 ```
 
+## Consumed by the Phase 1C-A resolver
+
+The deterministic L4 Boundary & Type Resolver foundation (Phase 1C-A) consumes
+these proposals + relations and produces `EntityHypothesis` objects (chosen
+boundary, retained alternatives, accepted/rejected/unresolved). It performs no
+ontology linking and emits no final entities. See `docs/resolution/RESOLVER.md`.
+
 ## What remains (Phase 1C / Phase 2)
 
-L4 boundary/type resolution (choose among boundary candidates), assertion
-classification, ICD-10 / RxNorm linking over frozen permitted KB snapshots, the
-evidence graph, and the first organizer-compatible baseline output. See
-`docs/architecture/LAYER_CONTRACTS.md`.
+Assertion classification, ICD-10 / RxNorm linking over frozen permitted KB
+snapshots (foundation in `docs/kb/`), the evidence graph, and the first
+organizer-compatible baseline output. See `docs/architecture/LAYER_CONTRACTS.md`.

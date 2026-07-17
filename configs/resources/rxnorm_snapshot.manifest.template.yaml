@@ -1,0 +1,61 @@
+# RxNorm snapshot — resource manifest TEMPLATE
+# -----------------------------------------------------------------------------
+# Copy to data/manifests/rxnorm_<release>.yaml, fill every <PLACEHOLDER> after a
+# MANUAL, licensed acquisition, then validate with:
+#   python -m mednorm_vi.phase1c_foundation.cli validate-resource-manifest \
+#     --manifest data/manifests/rxnorm_<release>.yaml
+# Raw RRF files stay under data/external/rxnorm/ (git-ignored). Never commit them.
+manifest_version: 1
+resource_id: rxnorm-<release>            # e.g. rxnorm-2026-XX
+title: RxNorm RRF snapshot (<release>)
+
+source:
+  organization: U.S. National Library of Medicine (UMLS/RxNorm)
+  url: <SOURCE_URL_PLACEHOLDER>          # do not auto-download
+  description: RxNorm Full/Prescribable RRF release.
+
+snapshot:
+  snapshot_id: <SNAPSHOT_ID>
+  version: <RELEASE_VERSION>             # organizer says "2026" (exact release undisclosed)
+  release_date: <YYYY-MM-DD>
+  acquisition_date: <YYYY-MM-DD>
+
+license:
+  name: UMLS Metathesaurus License
+  status: REVIEW_REQUIRED                # set by a human reviewer; never inferred
+  text_reference: <PATH_OR_URL_TO_LICENSE>
+  permits_redistribution: null
+  notes: >-
+    UMLS licensing applies; confirm redistribution + submission implications
+    before any use.
+
+redistribution:
+  permission: unknown
+  organizer_submission_implications: >-
+    The team may be required to describe the KB/data-generation process; do NOT
+    redistribute RxNorm content in the submission.
+  notes: ""
+
+files:
+  - {path: RXNCONSO.RRF, sha256: <SHA256>, bytes: <BYTES>}
+  - {path: RXNREL.RRF,   sha256: <SHA256>, bytes: <BYTES>}
+  - {path: RXNSAT.RRF,   sha256: <SHA256>, bytes: <BYTES>}
+  # - {path: RXNSTY.RRF, sha256: <SHA256>, bytes: <BYTES>}
+
+raw_path: data/external/rxnorm/
+processed_path: data/derived/rxnorm/<snapshot_id>/
+permitted_use: [linking]
+intended_use: [linking]
+
+transformation:
+  script: scripts/ingest_rxnorm.py       # deterministic; not provided in Phase 1C-A
+  description: Parse RRF -> local snapshot model. Deterministic.
+  deterministic: true
+  output_paths: [data/derived/rxnorm/<snapshot_id>/snapshot.json]
+
+provenance: manual_acquisition
+review_status: pending
+reviewer: <REVIEWER>
+unresolved_legal_questions:
+  - Exact 2026 release the organizer used (UNRES-RXNORM-RELEASE).
+  - Full vs Prescribable distribution (UNRES-RXNORM-DISTRIBUTION).

@@ -1,0 +1,310 @@
+# MedNorm-VI — Organizer UNRESOLVED policies (v1)
+# -----------------------------------------------------------------------------
+# Intentionally undisclosed or only partially disclosed organizer conventions.
+# Each entry is a HYPOTHESIS SLOT, not a confirmed rule. A policy is resolved
+# only by a leaderboard experiment or an explicit organizer statement — never by
+# assumption. Fields:
+#   policy_id                stable id
+#   title                    short human name
+#   status                   unresolved | investigating | hypothesis_leading | resolved | rejected
+#   question                 the open question in one line
+#   options                  candidate answers (each: id + description)
+#   supporting_observation   evidence that nudges toward an option (may be empty)
+#   contradicting_evidence   evidence against the leading option (may be empty)
+#   confidence               none | low | medium | high
+#   test_method              how we would resolve it (usually a probe submission)
+#   leaderboard_experiment_id  filled once an EXP-* probe exists (else null)
+#   internal_default         what MedNorm-VI does internally UNTIL resolved
+registry: organizer_unresolved_policies
+version: 1
+
+policies:
+  # --- position / matching ------------------------------------------------
+  - policy_id: UNRES-POS-COORD-SPACE
+    title: Position coordinate space
+    status: unresolved
+    question: Are positions code-point offsets, byte offsets, or something else?
+    options:
+      - {id: codepoint, description: Unicode code-point offsets (Python str indexing)}
+      - {id: utf8_byte, description: UTF-8 byte offsets}
+      - {id: utf16_unit, description: UTF-16 code-unit offsets}
+    supporting_observation: Published example is consistent with code-point offsets.
+    contradicting_evidence: ""
+    confidence: low
+    test_method: position-forensics over organizer sample input/output; probe submission.
+    leaderboard_experiment_id: null
+    internal_default: codepoint
+
+  - policy_id: UNRES-POS-CHAR-VS-BYTE
+    title: Character vs byte counting
+    status: unresolved
+    question: Does the grader count characters or bytes when comparing positions?
+    options:
+      - {id: character, description: count Unicode characters}
+      - {id: byte, description: count encoded bytes}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: byte-vs-codepoint delta analysis on multi-byte Vietnamese text.
+    leaderboard_experiment_id: null
+    internal_default: character
+
+  - policy_id: UNRES-POS-LINE-ENDING
+    title: Line-ending behavior
+    status: unresolved
+    question: Are CRLF sequences counted as 1 or 2 positions in graded offsets?
+    options:
+      - {id: lf_normalized, description: CRLF collapsed to LF before offsetting}
+      - {id: raw_crlf, description: raw CRLF, each byte/char counted}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: CRLF/LF systematic-shift detection in position-forensics.
+    leaderboard_experiment_id: null
+    internal_default: raw_crlf
+
+  - policy_id: UNRES-POS-INTERVAL
+    title: Interval convention
+    status: unresolved
+    question: "Is the graded interval end-exclusive [start,end) or end-inclusive [start,end]?"
+    options:
+      - {id: half_open, description: "end-exclusive [start, end)"}
+      - {id: closed, description: "end-inclusive [start, end]"}
+    supporting_observation: Published example length matches half-open (end-start == len).
+    contradicting_evidence: ""
+    confidence: medium
+    test_method: inclusive/exclusive evidence in position-forensics; probe.
+    leaderboard_experiment_id: null
+    internal_default: half_open
+
+  - policy_id: UNRES-MATCH-MODE
+    title: Entity matching mode
+    status: unresolved
+    question: Does matching use position, or only text + type?
+    options:
+      - {id: text_type, description: match on (text, type) only}
+      - {id: text_type_position, description: match on (text, type, position)}
+      - {id: position_overlap, description: position overlap + type}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe submissions that vary only position while holding text/type.
+    leaderboard_experiment_id: null
+    internal_default: text_type_position
+
+  # --- RxNorm --------------------------------------------------------------
+  - policy_id: UNRES-RXNORM-RELEASE
+    title: Exact RxNorm release
+    status: unresolved
+    question: Which 2026 RxNorm monthly/weekly release is authoritative?
+    options:
+      - {id: monthly_2026, description: a full-monthly 2026 release (date unknown)}
+      - {id: weekly_2026, description: a weekly 2026 release (date unknown)}
+    supporting_observation: Organizer says "2026 version".
+    contradicting_evidence: ""
+    confidence: low
+    test_method: snapshot forensics across candidate releases; probe RXCUI presence.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-RXNORM-DISTRIBUTION
+    title: Full vs prescribable RxNorm distribution
+    status: unresolved
+    question: Is the KB the Full release or the Prescribable subset?
+    options:
+      - {id: full, description: full RxNorm (all TTYs/sources)}
+      - {id: prescribable, description: prescribable subset (current prescribable content)}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: presence/absence forensics of TTYs and suppressed concepts.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-RXNORM-STATUS
+    title: Active / suppressed / historical CUI handling
+    status: unresolved
+    question: Are suppressed or historical RXCUIs acceptable answers, or active-only?
+    options:
+      - {id: active_only, description: only non-suppressed current concepts}
+      - {id: include_suppressed, description: suppressed concepts also accepted}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe with a known-suppressed CUI vs its active equivalent.
+    leaderboard_experiment_id: null
+    internal_default: active_only
+
+  - policy_id: UNRES-RXNORM-REMAP
+    title: Legacy CUI remapping
+    status: unresolved
+    question: Should retired RXCUIs be remapped to their current replacements?
+    options:
+      - {id: remap_to_current, description: follow RXNREL remap to current CUI}
+      - {id: keep_legacy, description: emit the legacy CUI as-is}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: legacy/remapped relation probe on the leaderboard.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-RXNORM-TTY-PRIORITY
+    title: RxNorm TTY priority
+    status: unresolved
+    question: Which term type is preferred (IN, PIN, SCD, SBD, SCDC, BN, ...)?
+    options:
+      - {id: ingredient_first, description: prefer IN/PIN}
+      - {id: scd_first, description: prefer SCD}
+      - {id: most_specific, description: prefer the most specific supported TTY}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: multi-candidate decoding probes (see rxnorm_decoding_hypotheses).
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-RXNORM-MISSING-STRENGTH
+    title: Missing-strength fallback
+    status: unresolved
+    question: When strength is absent, fall back to ingredient or abstain?
+    options:
+      - {id: ingredient_fallback, description: emit the ingredient concept}
+      - {id: abstain, description: emit no candidate}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe medication mentions without strength.
+    leaderboard_experiment_id: null
+    internal_default: ingredient_fallback
+
+  - policy_id: UNRES-RXNORM-RANGE-STRENGTH
+    title: Range-strength policy
+    status: unresolved
+    question: For "325-650 mg", use lower bound, upper bound, or abstain?
+    options:
+      - {id: lower_bound, description: use the lower bound}
+      - {id: upper_bound, description: use the upper bound}
+      - {id: abstain, description: emit no strength-specific candidate}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe range-dose mentions.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-RXNORM-COMBINATION
+    title: Combination-drug policy
+    status: unresolved
+    question: For multi-ingredient drugs, emit the combination concept or per-ingredient?
+    options:
+      - {id: combination_concept, description: single combination SCD/SBD}
+      - {id: per_ingredient, description: one candidate per ingredient}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe combination-drug mentions.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  # --- ICD-10 --------------------------------------------------------------
+  - policy_id: UNRES-ICD-SOURCE
+    title: ICD-10 source / version
+    status: unresolved
+    question: Which Vietnamese ICD-10 source and version is authoritative?
+    options:
+      - {id: moh_vi, description: a Vietnamese Ministry-of-Health ICD-10 edition}
+      - {id: who_vi, description: a WHO ICD-10 Vietnamese translation}
+      - {id: icd10_cm_vi, description: an ICD-10-CM-derived Vietnamese mapping}
+    supporting_observation: Organizer says "Vietnamese version".
+    contradicting_evidence: ""
+    confidence: low
+    test_method: ICD snapshot forensics vs candidate sources; probe code presence.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-ICD-DOTTED
+    title: ICD dotted vs undotted output
+    status: unresolved
+    question: Should codes be emitted dotted (A09.9) or undotted (A099)?
+    options:
+      - {id: dotted, description: dotted form}
+      - {id: undotted, description: undotted form}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe both formats for the same diagnosis.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  - policy_id: UNRES-ICD-SPECIFICITY
+    title: ICD specificity
+    status: unresolved
+    question: Is a 3-char category accepted, or is the most specific subcode required?
+    options:
+      - {id: category_ok, description: 3-char category accepted}
+      - {id: most_specific, description: most specific leaf required}
+    supporting_observation: ""
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe category vs leaf code.
+    leaderboard_experiment_id: null
+    internal_default: unknown
+
+  # --- boundaries / entity semantics --------------------------------------
+  - policy_id: UNRES-TESTRESULT-BOUNDARY
+    title: Descriptive TEST_RESULT boundaries
+    status: unresolved
+    question: How far does a non-numeric / descriptive TEST_RESULT span extend?
+    options:
+      - {id: minimal, description: minimal value token(s)}
+      - {id: full_clause, description: the full descriptive clause}
+    supporting_observation: TEST_RESULT need not be numeric (confirmed).
+    contradicting_evidence: ""
+    confidence: low
+    test_method: deferred to later span/boundary models (documented).
+    leaderboard_experiment_id: null
+    internal_default: minimal
+
+  - policy_id: UNRES-PROCEDURE-HANDLING
+    title: Procedure handling
+    status: unresolved
+    question: Are procedures a distinct concept, or folded into another type / dropped?
+    options:
+      - {id: drop, description: not an emitted type in round one}
+      - {id: as_test_name, description: treated as TEST_NAME}
+    supporting_observation: Procedure is not in the five confirmed entity types.
+    contradicting_evidence: ""
+    confidence: low
+    test_method: probe once a procedure specialist exists.
+    leaderboard_experiment_id: null
+    internal_default: drop
+
+  - policy_id: UNRES-SYMPTOM-BOUNDARY
+    title: Symptom / sign boundary policy
+    status: unresolved
+    question: How are multi-word symptom/sign spans delimited?
+    options:
+      - {id: head_noun, description: head noun phrase only}
+      - {id: full_phrase, description: full symptom phrase incl. modifiers}
+    supporting_observation: Repeated symptom occurrences are distinct (confirmed).
+    contradicting_evidence: ""
+    confidence: low
+    test_method: deferred to the symptom specialist + boundary resolution.
+    leaderboard_experiment_id: null
+    internal_default: full_phrase
+
+  - policy_id: UNRES-ISHISTORICAL
+    title: isHistorical semantics
+    status: unresolved
+    question: What exactly triggers isHistorical (past visit, past dx, resolved, timeframe)?
+    options:
+      - {id: past_reference, description: any past-tense clinical reference}
+      - {id: resolved_only, description: only conditions explicitly resolved}
+      - {id: prior_encounter, description: tied to a prior encounter/admission}
+    supporting_observation: Semantics are only partly disclosed.
+    contradicting_evidence: ""
+    confidence: low
+    test_method: assertion probes once an assertion specialist exists.
+    leaderboard_experiment_id: null
+    internal_default: unknown
