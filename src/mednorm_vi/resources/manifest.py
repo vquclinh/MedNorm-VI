@@ -8,8 +8,10 @@ from typing import Any
 
 from .models import (
     AcquisitionRecord,
+    ArchiveRecord,
     ChecksumRecord,
     DerivedArtifactRecord,
+    ExtractedSnapshotRecord,
     LicenseRecord,
     RedistributionPolicy,
     ResourceManifest,
@@ -40,6 +42,18 @@ def _opt_int(value: Any) -> int | None:
         return None
 
 
+def _opt_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
 def manifest_from_mapping(d: dict[str, Any]) -> ResourceManifest:
     src = d.get("source", {}) or {}
     snap = d.get("snapshot", {}) or {}
@@ -47,10 +61,12 @@ def manifest_from_mapping(d: dict[str, Any]) -> ResourceManifest:
     red = d.get("redistribution", {}) or {}
     trans = d.get("transformation")
     acq = d.get("acquisition")
+    arch = d.get("archive")
+    extracted = d.get("extracted_snapshot")
 
     files = tuple(
         ChecksumRecord(path=str(f["path"]), sha256=str(f.get("sha256", "")),
-                       bytes=_opt_int(f.get("bytes")))
+                       bytes=_opt_int(f.get("bytes")), md5=str(f.get("md5", "")))
         for f in d.get("files", []) or []
     )
     derived = tuple(
@@ -102,6 +118,28 @@ def manifest_from_mapping(d: dict[str, Any]) -> ResourceManifest:
         unresolved_legal_questions=tuple(
             str(x) for x in d.get("unresolved_legal_questions", []) or []),
         derived_artifacts=derived,
+        archive=(ArchiveRecord(
+            original_filename=str(arch.get("original_filename", "")),
+            package_type=str(arch.get("package_type", "")),
+            expected_published_md5=str(arch.get("expected_published_md5", "")),
+            locally_calculated_md5=str(arch.get("locally_calculated_md5", "")),
+            locally_verified_archive_md5=str(
+                arch.get("locally_verified_archive_md5", "unknown")).lower(),
+            archive_sha256=str(arch.get("archive_sha256", "")),
+            archive_present=_opt_bool(arch.get("archive_present")),
+            archive_deleted_before_manifest_completion=bool(
+                arch.get("archive_deleted_before_manifest_completion", False)))
+            if arch else None),
+        extracted_snapshot=(ExtractedSnapshotRecord(
+            local_path=str(extracted.get("local_path", "")),
+            tree_hash_sha256=str(extracted.get("tree_hash_sha256", "")),
+            file_count=_opt_int(extracted.get("file_count")),
+            total_bytes=_opt_int(extracted.get("total_bytes")),
+            content_snapshot_id=str(extracted.get("content_snapshot_id", "")),
+            validation_status=str(extracted.get("validation_status", "")),
+            core_relative_paths=tuple(
+                str(x) for x in extracted.get("core_relative_paths", []) or []))
+            if extracted else None),
         manifest_version=int(d.get("manifest_version", 1)))
 
 

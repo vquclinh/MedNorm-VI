@@ -7,6 +7,7 @@ from pathlib import Path
 from mednorm_vi.kb.rxnorm import (
     build_snapshot,
     diff_snapshots,
+    discover_rrf,
     is_active,
     lookup_mention,
     resolve_current,
@@ -56,3 +57,17 @@ def test_legacy_remapped_rxcui() -> None:
 
 def test_snapshot_id_deterministic() -> None:
     assert build_snapshot(FIX / "snapshot_a").snapshot_id == A.snapshot_id
+
+
+def test_nested_rrf_discovery(tmp_path: Path) -> None:
+    nested = tmp_path / "prescribable-2026-07-06" / "raw" / "rrf"
+    nested.mkdir(parents=True)
+    for source in (FIX / "snapshot_a").iterdir():
+        if source.is_file():
+            (nested / source.name).write_text(source.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+
+    files = discover_rrf(tmp_path / "prescribable-2026-07-06")
+    assert files.root == nested
+    assert files.conso == nested / "RXNCONSO.RRF"
+    assert build_snapshot(tmp_path / "prescribable-2026-07-06").snapshot_id == A.snapshot_id

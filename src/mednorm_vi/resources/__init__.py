@@ -10,8 +10,10 @@ from __future__ import annotations
 from .manifest import load_manifest, manifest_from_mapping
 from .models import (
     AcquisitionRecord,
+    ArchiveRecord,
     ChecksumRecord,
     DerivedArtifactRecord,
+    ExtractedSnapshotRecord,
     LicenseRecord,
     RedistributionPolicy,
     ResourceManifest,
@@ -30,6 +32,8 @@ __all__ = [
     "AcquisitionRecord",
     "TransformationRecord",
     "DerivedArtifactRecord",
+    "ArchiveRecord",
+    "ExtractedSnapshotRecord",
     "ResourceManifest",
     "manifest_from_mapping",
     "load_manifest",

@@ -16,12 +16,14 @@ reviewer sets `license.status`.
 | `snapshot.{snapshot_id,version,release_date,acquisition_date}` | ✓ (version or id) | identity |
 | `license.{name,status,text_reference,permits_redistribution,notes}` | ✓ (status) | review record |
 | `redistribution.{permission,organizer_submission_implications,notes}` | | redistribution policy |
-| `files[]` `{path,sha256,bytes}` | ✓ (≥1 with sha256) | integrity |
+| `files[]` `{path,sha256,bytes,md5}` | ✓ (≥1 with sha256) | integrity; `md5` is optional and used when a source publishes or intake requires it |
 | `permitted_use[]` / `intended_use[]` | ✓ (intended) | `domain_adaptation`, `ner_training`, `assertion_training`, `linking`, `evaluation` |
 | `raw_path` / `processed_path` | | untracked local locations |
 | `transformation.{script,description,deterministic,output_paths}` | | how derived artifacts are built |
 | `label_schema[]` | | e.g. loader column mapping |
 | `acquisition.{acquired_by,acquisition_date,method,notes}` | | manual acquisition record |
+| `archive.{original_filename,package_type,expected_published_md5,locally_calculated_md5,locally_verified_archive_md5,archive_sha256,archive_present,archive_deleted_before_manifest_completion}` | | original package/archive provenance; SHA-256 may be unknown only when an absent archive was deleted before manifest completion |
+| `extracted_snapshot.{local_path,tree_hash_sha256,file_count,total_bytes,content_snapshot_id,validation_status,core_relative_paths[]}` | | deterministic integrity summary for a verified local extraction tree |
 | `provenance`, `review_status`, `reviewer` | | governance |
 | `unresolved_legal_questions[]` | | open questions |
 | `derived_artifacts[]` | | deterministic outputs |

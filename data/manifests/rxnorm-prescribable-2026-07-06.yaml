@@ -1,0 +1,132 @@
+manifest_version: 1
+resource_id: rxnorm-prescribable-2026-07-06
+title: RxNorm Current Prescribable Content
+
+source:
+  organization: U.S. National Library of Medicine
+  url: https://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html
+  description: RxNorm Current Prescribable Content RRF package.
+
+snapshot:
+  snapshot_id: rxnorm-local-75a100c0b70b67d0
+  version: "2026-07-06"
+  release_date: "2026-07-06"
+  acquisition_date: unknown
+
+license:
+  name: RxNorm/NLM terms - human review required
+  status: REVIEW_REQUIRED
+  text_reference: https://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html
+  permits_redistribution: null
+  notes: >-
+    The local package README states this Current Prescribable Content file is a
+    no-login download. That does not by itself resolve all terms-of-service,
+    internal-use, or redistribution questions for MedNorm-VI.
+
+redistribution:
+  permission: unknown
+  organizer_submission_implications: >-
+    Do not redistribute RxNorm content in a submission; describe the local KB
+    acquisition and transformation process instead.
+  notes: Human legal/reuse review remains required.
+
+archive:
+  original_filename: RxNorm_full_prescribe_07062026.zip
+  package_type: zip
+  expected_published_md5: 767678e3b5b1d6fe358b61c21659f3ef
+  locally_calculated_md5: ""
+  locally_verified_archive_md5: unknown
+  archive_sha256: ""
+  archive_present: false
+  archive_deleted_before_manifest_completion: true
+
+files:
+  - path: raw/Readme_Full_Prescribe_07062026.txt
+    sha256: 1d46f0dbf4edbe7fbe3c91bd77028be9834e8d6696ac13bc71d51715e2bf05ef
+    bytes: 3067
+  - path: raw/rrf/RXNCONSO.RRF
+    sha256: 4dda3b83bb67af5f8349a5fd455a4c54b8290921cffecc362163cd00f27439a5
+    bytes: 30506659
+  - path: raw/rrf/RXNREL.RRF
+    sha256: 88c25038ab62a189dd9f744b84552fcaa3d61d2bb9d9dc5a83f4a8a8f19b9c9b
+    bytes: 196795423
+  - path: raw/rrf/RXNSAT.RRF
+    sha256: a01d4b60c6386d0f4d13304e78ae4c2e1a0397d223b905f191a4361891ae4793
+    bytes: 280646563
+  - path: raw/scripts/mysql/Indexes_mysql_rxn.sql
+    sha256: 83ae2a095be1325ff554c288580eaf1df54b42488729f9da7460c747c83a34ff
+    bytes: 463
+  - path: raw/scripts/mysql/Load_scripts_mysql_rxn_unix.sql
+    sha256: f97883688026b39c41bb5418b448cfbbb2bf10071fc19311b7c11740e655208c
+    bytes: 1469
+  - path: raw/scripts/mysql/Load_scripts_mysql_rxn_win.sql
+    sha256: 5d7c5d4d197fb5354b5889337d87b90650213f135c40dfd72c04c3047ae9efa3
+    bytes: 1468
+  - path: raw/scripts/mysql/Populate_mysql_rxn.bat
+    sha256: 0f23ef9b5f26e357d126b460ec0b5b2d7970017fe893c59783ad65cbc27acd76
+    bytes: 777
+  - path: raw/scripts/mysql/Table_scripts_mysql_rxn.sql
+    sha256: f15439969ad05bff023c002b0fe9b3eae5f266a1e0b429cbc3f45b7f2b8f90c5
+    bytes: 1749
+  - path: raw/scripts/mysql/populate_mysql_rxn.sh
+    sha256: 5a352f83036cb96ef4d34391fc03ef43daae1cf965591bab02b294ce087ee636
+    bytes: 1609
+  - path: raw/scripts/oracle/RXNCONSO.ctl
+    sha256: 2865d7845a6ac3d3d2028cb68856b37e833c0a1155259e6e9323f1359c600b30
+    bytes: 512
+  - path: raw/scripts/oracle/RXNREL.ctl
+    sha256: d1be7ff56bfc25923cbe76a6d89fdb57554ab5cf67371f68c81eba44f0ac8765
+    bytes: 471
+  - path: raw/scripts/oracle/RXNSAT.ctl
+    sha256: c33fbbbc69ec32f7ce7fbf8ae7d223fa7f861b281fc66157faf1db6027164384
+    bytes: 378
+  - path: raw/scripts/oracle/RxNormDDL.sql
+    sha256: 64bdd8ac9ae8a22796dcf8721b5bbdee746a7bf9bfc205eac94032a0a49154ce
+    bytes: 1373
+  - path: raw/scripts/oracle/populate_oracle_rxn_db.bat
+    sha256: 8d9e3c46416a84a1ac33d66b7adb706846cfc74361143f3b93cbfbb8e00f1d3a
+    bytes: 699
+  - path: raw/scripts/oracle/rxn_index.sql
+    sha256: a83d980efb9b653c2e1b0790c37f9bbd587e11fe892a22730ca16785e63b0089
+    bytes: 460
+
+raw_path: data/external/rxnorm/prescribable-2026-07-06/
+processed_path: ""
+permitted_use: []
+intended_use: [linking]
+
+transformation:
+  script: ""
+  description: Verified extraction only; no semantic modification, normalization, or index build.
+  deterministic: true
+  output_paths: []
+
+extracted_snapshot:
+  local_path: data/external/rxnorm/prescribable-2026-07-06/
+  tree_hash_sha256: fae9a40088f4b4082bfb7d8798e3e5720ee800c0fa11db44f81345eba2c71d4d
+  file_count: 16
+  total_bytes: 507963140
+  content_snapshot_id: rxnorm-local-75a100c0b70b67d0
+  validation_status: OK; existing RxNorm validator reported 0 warnings
+  core_relative_paths:
+    - raw/rrf/RXNCONSO.RRF
+    - raw/rrf/RXNREL.RRF
+    - raw/rrf/RXNSAT.RRF
+
+acquisition:
+  acquired_by: local user
+  acquisition_date: unknown
+  method: Manual local placement/extraction; ZIP absent during Codex intake.
+  notes: >-
+    Archive SHA-256 and local archive MD5 were not available in repository-local
+    manifests/reports at intake time; extracted RRF files were validated
+    independently.
+
+provenance: manual_local_resource_intake
+review_status: pending
+reviewer: ""
+unresolved_legal_questions:
+  - Human terms-of-service/internal-use review remains required.
+  - Redistribution and submission implications remain review-required.
+  - Organizer-exact RxNorm release/distribution remains unresolved.
+  - Original archive SHA-256 is unknown because the ZIP was absent before manifest completion.

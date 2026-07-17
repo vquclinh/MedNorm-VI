@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from mednorm_vi.resources import (
+    ArchiveRecord,
     ChecksumRecord,
+    ExtractedSnapshotRecord,
     LicenseRecord,
     RedistributionPolicy,
     ResourceManifest,
@@ -31,7 +33,7 @@ def _complete_manifest(**overrides) -> ResourceManifest:
         snapshot=SnapshotIdentity(snapshot_id="s1", version="2026-01"),
         license=LicenseRecord(name="UMLS", status="PERMITTED_INTERNAL_USE"),
         redistribution=RedistributionPolicy(permission="restricted"),
-        files=(ChecksumRecord(path="RXNCONSO.RRF", sha256="abc", bytes=10),),
+        files=(ChecksumRecord(path="RXNCONSO.RRF", sha256="a" * 64, bytes=10),),
         intended_use=("linking",), permitted_use=("linking",))
     base.update(overrides)
     return ResourceManifest(**base)  # type: ignore[arg-type]
@@ -83,6 +85,46 @@ def test_template_manifest_loads() -> None:
     m = load_manifest(REPO / "configs" / "resources" / "rxnorm_snapshot.manifest.template.yaml")
     assert m.license.status == "REVIEW_REQUIRED"
     assert not m.is_usable  # a template is never usable as-is
+
+
+def test_deleted_archive_unknown_sha_is_explicitly_represented() -> None:
+    m = _complete_manifest(
+        archive=ArchiveRecord(
+            original_filename="RxNorm_full_prescribe_07062026.zip",
+            package_type="zip",
+            expected_published_md5="767678e3b5b1d6fe358b61c21659f3ef",
+            locally_verified_archive_md5="unknown",
+            archive_present=False,
+            archive_deleted_before_manifest_completion=True,
+        ),
+        extracted_snapshot=ExtractedSnapshotRecord(
+            local_path="data/external/rxnorm/prescribable-2026-07-06",
+            tree_hash_sha256="a" * 64,
+            file_count=16,
+            total_bytes=507963140,
+            content_snapshot_id="rxnorm-local-test",
+            validation_status="OK",
+            core_relative_paths=("raw/rrf/RXNCONSO.RRF",),
+        ),
+    )
+    result = validate_manifest(m)
+    assert result.ok
+    assert any(i.code == "resource.archive_sha256_unknown" for i in result.warnings)
+
+
+def test_present_archive_requires_sha256() -> None:
+    m = _complete_manifest(
+        archive=ArchiveRecord(
+            original_filename="rxnorm.zip",
+            package_type="zip",
+            expected_published_md5="767678e3b5b1d6fe358b61c21659f3ef",
+            locally_calculated_md5="767678e3b5b1d6fe358b61c21659f3ef",
+            locally_verified_archive_md5="true",
+            archive_present=True,
+        )
+    )
+    assert any(i.code == "resource.archive_missing_sha256"
+               for i in validate_manifest(m).errors)
 
 
 def test_ner_manifest_and_label_mapping() -> None:

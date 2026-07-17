@@ -36,6 +36,7 @@ REDISTRIBUTION_PERMISSIONS: frozenset[str] = frozenset(
     {"permitted", "restricted", "forbidden", "unknown"}
 )
 REVIEW_STATES: frozenset[str] = frozenset({"pending", "in_review", "reviewed", "rejected"})
+ARCHIVE_VERIFICATION_STATES: frozenset[str] = frozenset({"true", "false", "unknown"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ class ChecksumRecord:
     path: str  # relative path of the file inside the resource
     sha256: str
     bytes: int | None = None
+    md5: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +104,33 @@ class DerivedArtifactRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchiveRecord:
+    """Original package/archive provenance for a locally acquired resource."""
+
+    original_filename: str = ""
+    package_type: str = ""
+    expected_published_md5: str = ""
+    locally_calculated_md5: str = ""
+    locally_verified_archive_md5: str = "unknown"
+    archive_sha256: str = ""
+    archive_present: bool | None = None
+    archive_deleted_before_manifest_completion: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedSnapshotRecord:
+    """Integrity summary for a verified local extraction tree."""
+
+    local_path: str = ""
+    tree_hash_sha256: str = ""
+    file_count: int | None = None
+    total_bytes: int | None = None
+    content_snapshot_id: str = ""
+    validation_status: str = ""
+    core_relative_paths: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
 class ResourceManifest:
     """A tracked description of one external resource. Raw data stays untracked."""
 
@@ -124,6 +153,8 @@ class ResourceManifest:
     reviewer: str = ""
     unresolved_legal_questions: tuple[str, ...] = field(default_factory=tuple)
     derived_artifacts: tuple[DerivedArtifactRecord, ...] = field(default_factory=tuple)
+    archive: ArchiveRecord | None = None
+    extracted_snapshot: ExtractedSnapshotRecord | None = None
     manifest_version: int = 1
 
     @property
@@ -138,6 +169,7 @@ __all__ = [
     "USAGE_PURPOSES",
     "REDISTRIBUTION_PERMISSIONS",
     "REVIEW_STATES",
+    "ARCHIVE_VERIFICATION_STATES",
     "SourceRecord",
     "LicenseRecord",
     "RedistributionPolicy",
@@ -146,5 +178,7 @@ __all__ = [
     "AcquisitionRecord",
     "TransformationRecord",
     "DerivedArtifactRecord",
+    "ArchiveRecord",
+    "ExtractedSnapshotRecord",
     "ResourceManifest",
 ]

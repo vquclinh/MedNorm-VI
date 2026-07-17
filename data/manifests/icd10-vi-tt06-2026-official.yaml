@@ -1,0 +1,82 @@
+manifest_version: 1
+resource_id: icd10-vi-tt06-2026-official
+title: Vietnamese ICD-10 official source documents - TT06-2026
+
+source:
+  organization: Ministry of Health of Vietnam
+  url: ""
+  description: >-
+    Locally provided Vietnamese ICD-10 source PDF documents named 06-byt.pdf and
+    06-byt-kem.pdf under the TT06-2026 official-source namespace.
+
+snapshot:
+  snapshot_id: icd10-vi-tt06-2026-official-ad13c9db89a65951
+  version: TT06-2026 official source PDFs
+  release_date: unknown
+  acquisition_date: unknown
+
+license:
+  name: Vietnamese Ministry of Health document reuse terms - human review required
+  status: REVIEW_REQUIRED
+  text_reference: ""
+  permits_redistribution: null
+  notes: >-
+    Source PDFs are available locally for internal resource preparation review.
+    Legal/reuse and redistribution implications have not been resolved by this
+    technical intake.
+
+redistribution:
+  permission: unknown
+  organizer_submission_implications: Do not redistribute ICD source documents in a submission.
+  notes: Human legal/reuse review remains required.
+
+files:
+  - path: 06-byt.pdf
+    md5: 8093f034eba61cfcc6be033517bc05c3
+    sha256: 1216d8a2f980c56c5c300a7ab00e8cbb063d0ff0b0cfb404cf195eae6dbc5c92
+    bytes: 598417
+  - path: 06-byt-kem.pdf
+    md5: f019955133d62e939b20e9ad4b42524a
+    sha256: 8639f5eeb77b571363dc841923095895d2498748f9bc6620f50710a6da9159e2
+    bytes: 21988472
+
+raw_path: data/external/icd10_vi/tt06-2026-official/
+processed_path: ""
+permitted_use: []
+intended_use: [linking]
+
+transformation:
+  script: ""
+  description: >-
+    Source documents preserved unchanged. Conversion not started; normalized ICD
+    table/snapshot not prepared; organizer-exact compatibility unresolved.
+  deterministic: true
+  output_paths: []
+
+extracted_snapshot:
+  local_path: data/external/icd10_vi/tt06-2026-official/
+  tree_hash_sha256: ad13c9db89a65951785009e57f3efcda9f826e8868d7f1116d27bc37615dbc4b
+  file_count: 2
+  total_bytes: 22586889
+  content_snapshot_id: icd10-vi-tt06-2026-official-ad13c9db89a65951
+  validation_status: official-source candidate available; normalized snapshot not prepared
+  core_relative_paths:
+    - 06-byt.pdf
+    - 06-byt-kem.pdf
+
+acquisition:
+  acquired_by: local user
+  acquisition_date: unknown
+  method: Manual local placement of source PDFs.
+  notes: >-
+    PDF source artifacts are available; no OCR, text extraction, conversion,
+    normalization, or organizer compatibility assertion was performed.
+
+provenance: manual_local_resource_intake
+review_status: pending
+reviewer: ""
+unresolved_legal_questions:
+  - Human license/reuse review remains required.
+  - Redistribution implications remain review-required.
+  - Organizer-exact ICD source/version compatibility remains unresolved.
+  - Conversion to a normalized ICD table has not started.

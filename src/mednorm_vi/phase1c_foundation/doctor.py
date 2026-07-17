@@ -76,6 +76,16 @@ def _ner_manifests(directory: Path) -> dict[str, Any]:
     return {"count": len(results), "manifests": results}
 
 
+def _relative_names(root: Path, paths: list[Path]) -> list[str]:
+    out: list[str] = []
+    for path in paths:
+        try:
+            out.append(path.relative_to(root).as_posix())
+        except ValueError:
+            out.append(path.as_posix())
+    return sorted(out)
+
+
 def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     p = paths or DoctorPaths()
     missing: list[str] = []
@@ -88,10 +98,19 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     if not rxnorm_available:
         missing.append(f"RxNorm snapshot under {p.rxnorm_dir}/ (RXNCONSO.RRF)")
 
-    icd_files = sorted(str(x.name) for x in p.icd_dir.glob("*.csv")) if p.icd_dir.is_dir() else []
+    icd_tables = sorted(p.icd_dir.rglob("*.csv")) if p.icd_dir.is_dir() else []
+    icd_files = _relative_names(p.icd_dir, icd_tables)
     icd_available = bool(icd_files)
     if not icd_available:
-        missing.append(f"ICD-10 VI table under {p.icd_dir}/ (*.csv)")
+        missing.append(f"ICD-10 VI normalized table under {p.icd_dir}/ (*.csv)")
+
+    icd_pdf_paths = sorted(p.icd_dir.rglob("*.pdf")) if p.icd_dir.is_dir() else []
+    icd_pdf_files = _relative_names(p.icd_dir, icd_pdf_paths)
+    required_icd_pdfs = {"06-byt.pdf", "06-byt-kem.pdf"}
+    present_pdf_names = {path.name for path in icd_pdf_paths}
+    icd_source_available = required_icd_pdfs.issubset(present_pdf_names)
+    if not icd_source_available:
+        missing.append(f"ICD-10 VI official source PDFs under {p.icd_dir}/")
 
     resolver_ready = p.resolver_config.is_file()
     if resolver_ready:
@@ -115,7 +134,20 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
         "resource_templates": _validate_manifests(p.resource_templates_dir, "*.manifest*.yaml"),
         "public_ner_manifests": _ner_manifests(p.ner_manifests_dir),
         "rxnorm_snapshot": {"available": rxnorm_available,
-                            "missing_files": list(rrf.missing())},
+                            "missing_files": list(rrf.missing()),
+                            "root": str(rrf.root) if rrf.root else None},
+        "rxnorm_prescribable_snapshot": {
+            "available": rxnorm_available,
+            "root": str(rrf.root) if rrf.root else None,
+            "rxnconso": str(rrf.conso) if rrf.conso else None,
+            "missing_files": list(rrf.missing()),
+        },
+        "rxnorm_full_snapshot": {
+            "available": False,
+            "status": "MISSING / awaiting UMLS approval",
+        },
+        "icd_source_artifacts": {"available": icd_source_available,
+                                 "files": icd_pdf_files},
         "icd_snapshot": {"available": icd_available, "files": icd_files},
         "resolver": {"ready": resolver_ready,
                      "config": str(p.resolver_config) if resolver_ready else None},
@@ -137,10 +169,17 @@ def render_report(report: DoctorReport) -> str:
     lines.append(f"resource manifests     : {d['resource_manifests']['count']} tracked, "
                  f"{d['resource_templates']['count']} templates")
     lines.append(f"public NER manifests   : {d['public_ner_manifests']['count']}")
+    rxp = d["rxnorm_prescribable_snapshot"]
+    lines.append(f"RxNorm Prescribable    : "
+                 f"{'available' if rxp['available'] else 'MISSING (local)'}")
+    lines.append("RxNorm Full 2026       : MISSING / awaiting UMLS approval")
+    icd_src = d["icd_source_artifacts"]
+    lines.append(f"ICD-10 VI source PDFs  : "
+                 f"{'available' if icd_src['available'] else 'MISSING (local)'}")
+    lines.append(f"ICD-10 VI table        : "
+                 f"{'available' if d['icd_snapshot']['available'] else 'NOT PREPARED / MISSING'}")
     lines.append(f"RxNorm snapshot        : "
                  f"{'available' if d['rxnorm_snapshot']['available'] else 'MISSING (local)'}")
-    lines.append(f"ICD-10 VI snapshot     : "
-                 f"{'available' if d['icd_snapshot']['available'] else 'MISSING (local)'}")
     lines.append(f"resolver               : {'ready' if d['resolver']['ready'] else 'NOT READY'}")
     lines.append("network access         : none")
     if report.missing_local_resources:
