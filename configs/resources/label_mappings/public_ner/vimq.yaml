@@ -1,0 +1,25 @@
+dataset_id: vimq
+version: 1
+status: REVIEW_REQUIRED
+mappings:
+  - source_label: drug
+    canonical_intermediate: medication
+    target: MEDICATION
+    mapping_status: exact
+    note: Drug span label aligns with THUỐC, subject to boundary review.
+  - source_label: SYMPTOM_AND_DISEASE
+    canonical_intermediate: symptom_or_diagnosis
+    target: REVIEW
+    mapping_status: ambiguous
+    note: Conflates TRIỆU_CHỨNG and CHẨN_ĐOÁN.
+  - source_label: medical_procedure
+    canonical_intermediate: procedure
+    target: REVIEW
+    mapping_status: partial
+    note: May overlap diagnostic tests, procedures, or treatment actions.
+  - {source_label: O, canonical_intermediate: outside, target: DROP, mapping_status: auxiliary_only, note: Non-entity tag.}
+  - {source_label: UNK, canonical_intermediate: unknown, target: REVIEW, mapping_status: requires_human_review, note: Unknown source label semantics.}
+  - {source_label: cause, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: method_diagnosis, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: severity, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: treatment, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}

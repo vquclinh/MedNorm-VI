@@ -1,0 +1,55 @@
+manifest_version: 1
+dataset_id: phoner_covid19
+title: PhoNER_COVID19 (Vietnamese COVID-19 named entities)
+source:
+  organization: VinAI Research
+  url: https://github.com/VinAIResearch/PhoNER_COVID19.git
+  description: Local nested git checkout of the public PhoNER_COVID19 dataset.
+license:
+  name: PhoNER_COVID19 dataset terms in local README
+  status: REVIEW_REQUIRED
+  text_reference: data/external/public_ner/phoner_covid19/README.md
+  permits_redistribution: false
+  notes: Local README states research/educational use only, no redistribution of original or modified dataset content, and citation requirement. Human review is still required before MedNorm-VI training use.
+redistribution:
+  permission: forbidden
+  organizer_submission_implications: Do not redistribute dataset content or derived examples in submissions.
+  notes: Local README explicitly forbids redistribution of the dataset or parts in original or modified form.
+local_root: data/external/public_ner/phoner_covid19
+source_revision: 9af190aa76adcfad0a2d14fab9bcab2b252c9c2e
+source_snapshot_id: 9af190aa76adcfad0a2d14fab9bcab2b252c9c2e
+tree_hash_sha256: 0c75f4ed7742b918be3527140841894aa434a901f3aeac08ee36ec292ba407b4
+file_count: 43
+total_bytes: 21923658
+splits: [train, dev, test]
+formats: [conll, jsonl]
+label_inventory_hash: 1ee009e6d5a2116ce057c2b0f457fcea154baa04943b982c7f9ec693ca321994
+schema_version: public_ner_intake_v1
+original_labels: [AGE, DATE, GENDER, JOB, LOCATION, NAME, ORGANIZATION, PATIENT_ID, SYMPTOM_AND_DISEASE, TRANSPORTATION]
+label_mappings:
+  - {source_label: SYMPTOM_AND_DISEASE, canonical_intermediate: symptom_or_diagnosis, target: REVIEW, mapping_status: ambiguous, note: Conflates TRIỆU_CHỨNG and CHẨN_ĐOÁN.}
+  - {source_label: AGE, canonical_intermediate: demographic, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: DATE, canonical_intermediate: temporal, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: GENDER, canonical_intermediate: demographic, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: JOB, canonical_intermediate: occupation, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: LOCATION, canonical_intermediate: location, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: NAME, canonical_intermediate: person_name, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: ORGANIZATION, canonical_intermediate: organization, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: PATIENT_ID, canonical_intermediate: identifier, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: TRANSPORTATION, canonical_intermediate: exposure_context, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+incompatible_labels: [AGE, DATE, GENDER, JOB, LOCATION, NAME, ORGANIZATION, PATIENT_ID, TRANSPORTATION]
+boundary_convention: Word and syllable variants use BIO token tags plus JSONL words/tags records; offsets are token-derived, not original clinical character offsets.
+assertion_availability: none
+normalization_availability: none
+redistribution_constraints: Local README forbids redistribution of original or modified dataset content.
+privacy_considerations: Contains patient/context labels such as PATIENT_ID and NAME; do not reproduce examples in tracked reports.
+split_provenance: Official train/dev/test split present for word and syllable variants.
+leakage_risk: medium
+permitted_use: []
+intended_mednorm_use: [corpus_analysis, label_mapping_review]
+prohibited_uses: [redistribution, training_before_license_review, automatic_label_collapse]
+attribution_requirements: Cite the NAACL 2021 PhoNER_COVID19 paper when used for published results.
+governance_status: REVIEW_REQUIRED
+readiness_status: analysis_only_not_training
+review_status: pending
+reviewer: ""

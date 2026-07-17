@@ -1,0 +1,50 @@
+manifest_version: 1
+dataset_id: vimedner
+title: ViMedNer (Vietnamese medical NER)
+source:
+  organization: Local source identifies GitHub repository tdtrinh11/ViMedNer; publisher requires human verification.
+  url: https://github.com/tdtrinh11/ViMedNer.git
+  description: Local nested git checkout with train/dev/test token-label files and a JSONL-style full annotation file.
+license:
+  name: Dataset license not identified in local README
+  status: REVIEW_REQUIRED
+  text_reference: data/external/public_ner/vimedner/README.md
+  permits_redistribution: null
+  notes: Local README describes setup/training only. Apache header appears in a code utility file, but no local evidence establishes the dataset license.
+redistribution:
+  permission: unknown
+  organizer_submission_implications: Do not redistribute dataset content or derived examples in submissions.
+  notes: Dataset redistribution terms are unresolved.
+local_root: data/external/public_ner/vimedner
+source_revision: ce3deaa13837b5964c1fc8a83098d82418482a41
+source_snapshot_id: ce3deaa13837b5964c1fc8a83098d82418482a41
+tree_hash_sha256: 7ba9ad178b28f80805b2651369ae9fc8d9b1dc49a08dc3c8f1e217f54be10dc3
+file_count: 43
+total_bytes: 7452185
+splits: [train, dev, test]
+formats: [conll_txt, jsonl_annotations, docx_readme]
+label_inventory_hash: 6123432e9cfbabb87c703913d8bebcbdc8f844e29452e06970b1bda128cc32ce
+schema_version: public_ner_intake_v1
+original_labels: [bien_phap_chan_doan, bien_phap_dieu_tri, nguyen_nhan_benh, ten_benh, trieu_chung_benh]
+label_mappings:
+  - {source_label: ten_benh, canonical_intermediate: disease, target: DIAGNOSIS, mapping_status: exact, note: Disease-name label aligns with CHẨN_ĐOÁN subject to boundary review.}
+  - {source_label: trieu_chung_benh, canonical_intermediate: symptom, target: SYMPTOM, mapping_status: exact, note: Symptom label aligns with TRIỆU_CHỨNG subject to boundary review.}
+  - {source_label: bien_phap_chan_doan, canonical_intermediate: diagnostic_method, target: REVIEW, mapping_status: partial, note: May include tests/procedures rather than only TÊN_XÉT_NGHIỆM.}
+  - {source_label: bien_phap_dieu_tri, canonical_intermediate: treatment_method, target: REVIEW, mapping_status: ambiguous, note: May include medication, procedure, or treatment plan.}
+  - {source_label: nguyen_nhan_benh, canonical_intermediate: disease_cause, target: REVIEW, mapping_status: auxiliary_only, note: Etiology/cause is useful context but not one of the five MedNorm-VI entity types.}
+incompatible_labels: []
+boundary_convention: BIO token-label text files; one malformed transition observed in the train split and requires filtering before use.
+assertion_availability: none
+normalization_availability: none
+redistribution_constraints: Unknown until human license/reuse review.
+privacy_considerations: Public medical text; examples must not be copied into tracked reports.
+split_provenance: Local train/dev/test split files present; split provenance needs human confirmation.
+leakage_risk: medium
+permitted_use: []
+intended_mednorm_use: [corpus_analysis, label_mapping_review]
+prohibited_uses: [redistribution_before_review, training_before_license_review, automatic_label_collapse]
+attribution_requirements: Citation/publication requirements not identified locally; human review required.
+governance_status: REVIEW_REQUIRED
+readiness_status: analysis_only_not_training
+review_status: pending
+reviewer: ""

@@ -1,0 +1,54 @@
+manifest_version: 1
+dataset_id: vimq
+title: ViMQ (Vietnamese medical questions)
+source:
+  organization: Local source identifies GitHub repository tadeephuy/ViMQ; publisher requires human verification.
+  url: https://github.com/tadeephuy/ViMQ.git
+  description: Local nested git checkout with JSON train/dev/test question records, sentence labels, and span triples.
+license:
+  name: Dataset license not identified in local README
+  status: REVIEW_REQUIRED
+  text_reference: data/external/public_ner/vimq/README.md
+  permits_redistribution: null
+  notes: Local README references a paper and does not establish dataset license, redistribution, or model-training permissions.
+redistribution:
+  permission: unknown
+  organizer_submission_implications: Do not redistribute dataset content or derived examples in submissions.
+  notes: Dataset redistribution terms are unresolved.
+local_root: data/external/public_ner/vimq
+source_revision: b35341cd506f012a4d868674210c532d5a771063
+source_snapshot_id: b35341cd506f012a4d868674210c532d5a771063
+tree_hash_sha256: d42cf7660adeb38941182bca072f93955c2cd47b5a2c8199dc93e56a40ea61e9
+file_count: 48
+total_bytes: 3583659
+splits: [train, dev, test]
+formats: [json_array, span_triples, sentence_labels]
+label_inventory_hash: f8edcd0465f0e9354d67b5ea5bd9263aa56014cadbfd2f8504681386fb90d9f9
+schema_version: public_ner_intake_v1
+original_labels: [SYMPTOM_AND_DISEASE, drug, medical_procedure, O, UNK, cause, method_diagnosis, severity, treatment]
+label_mappings:
+  - {source_label: drug, canonical_intermediate: medication, target: MEDICATION, mapping_status: exact, note: Drug span label aligns with THUỐC subject to boundary review.}
+  - {source_label: SYMPTOM_AND_DISEASE, canonical_intermediate: symptom_or_diagnosis, target: REVIEW, mapping_status: ambiguous, note: Conflates TRIỆU_CHỨNG and CHẨN_ĐOÁN.}
+  - {source_label: medical_procedure, canonical_intermediate: procedure, target: REVIEW, mapping_status: partial, note: May overlap diagnostic tests, procedures, or treatment actions.}
+  - {source_label: O, canonical_intermediate: outside, target: DROP, mapping_status: auxiliary_only, note: Non-entity tag.}
+  - {source_label: UNK, canonical_intermediate: unknown, target: REVIEW, mapping_status: requires_human_review, note: Unknown source label semantics.}
+  - {source_label: cause, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: method_diagnosis, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: severity, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+  - {source_label: treatment, canonical_intermediate: sentence_intent, target: DROP, mapping_status: auxiliary_only, note: Sentence-level label, not entity span type.}
+incompatible_labels: [O, UNK, cause, method_diagnosis, severity, treatment]
+boundary_convention: JSON sentence strings with inclusive token-index span triples, not BIO and not original character offsets.
+assertion_availability: none
+normalization_availability: none
+redistribution_constraints: Unknown until human license/reuse review.
+privacy_considerations: Public medical question text; examples must not be copied into tracked reports.
+split_provenance: Local train/dev/test split JSON files present; split provenance needs human confirmation.
+leakage_risk: medium
+permitted_use: []
+intended_mednorm_use: [corpus_analysis, label_mapping_review]
+prohibited_uses: [redistribution_before_review, training_before_license_review, automatic_label_collapse]
+attribution_requirements: Paper citation requirement needs human verification from the referenced publication.
+governance_status: REVIEW_REQUIRED
+readiness_status: analysis_only_not_training
+review_status: pending
+reviewer: ""
