@@ -19,8 +19,16 @@ local_root: data/external/public_ner/vimq
 source_revision: b35341cd506f012a4d868674210c532d5a771063
 source_snapshot_id: b35341cd506f012a4d868674210c532d5a771063
 tree_hash_sha256: d42cf7660adeb38941182bca072f93955c2cd47b5a2c8199dc93e56a40ea61e9
+tree_hash_scope: checkout_tree_including_git_and_cache
 file_count: 48
 total_bytes: 3583659
+# Canonical payload fingerprint added in Audit 0013: excludes incidental
+# .git/, .cache/, .DS_Store, and *.lock. Source revision above plus this payload
+# hash preserve provenance independent of VCS/OS metadata.
+canonical_payload_tree_hash_sha256: 26090803cd42bfbfe89a0c2643abe50e6670db15f79a7776627d7c6048cf8090
+payload_file_count: 19
+payload_total_bytes: 3228352
+payload_excludes: [.git, .cache, .DS_Store, "*.lock"]
 splits: [train, dev, test]
 formats: [json_array, span_triples, sentence_labels]
 label_inventory_hash: f8edcd0465f0e9354d67b5ea5bd9263aa56014cadbfd2f8504681386fb90d9f9

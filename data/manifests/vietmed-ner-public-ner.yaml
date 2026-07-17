@@ -19,17 +19,49 @@ local_root: data/external/public_ner/vietmed_ner
 source_revision: e3d0393c733858402a7c04228f45d351d2ce6d8f
 source_snapshot_id: e3d0393c733858402a7c04228f45d351d2ce6d8f
 tree_hash_sha256: 8c073f68b03a05738374b614c3e5314d9ac4a33fae94e866c16b1c9ab13f57aa
+tree_hash_scope: checkout_tree_including_cache
 file_count: 18
 total_bytes: 893515036
+# Canonical payload fingerprint added in Audit 0013: excludes incidental
+# .cache/ Hugging Face download metadata and *.lock. The 5 payload files
+# (README.md, .gitattributes, 3 Parquet splits) fully define the dataset.
+canonical_payload_tree_hash_sha256: c4d07b72e3237adb5da9be0a5ed3acbea3af42c8523e3fef1066f33de701f6a6
+payload_file_count: 5
+payload_total_bytes: 893513070
+payload_excludes: [.cache, "*.lock"]
 splits: [train, validation, test]
 formats: [parquet, huggingface_cache_metadata]
-label_inventory_hash: ""
+# Row-level review completed in Audit 0013 with an isolated review-only pyarrow
+# venv (outside the repo, not a runtime dependency). Values below are supported
+# by the actual Parquet files.
+row_counts: {train: 4616, validation: 1154, test: 3497, total: 9267}
+row_level_integrity: {words_tags_length_mismatches: 0, empty_texts: 0, missing_word_or_tag: 0}
+cross_split_exact_text_leakage: {train_validation: 2, train_test: 0, validation_test: 0}
+label_inventory_hash: f1f48484fbe3addcfd79f341b9b0e4996fa035cda67ce2117081449be9c7ee06
 schema_version: public_ner_intake_v1
-original_labels: [labels_column_present_vocabulary_unread]
+original_labels: [AGE, DATETIME, DIAGNOSTICS, DISEASESYMTOM, DRUGCHEMICAL, FOODDRINK, GENDER, LOCATION, MEDDEVICETECHNIQUE, OCCUPATION, ORGAN, ORGANIZATION, PERSONALCARE, PREVENTIVEMED, SURGERY, TRANSPORTATION, TREATMENT, UNITCALIBRATOR]
+original_label_scheme: BIO (37 tags = O plus B-/I- for 18 entity types)
 label_mappings:
-  - {source_label: labels_column_present_vocabulary_unread, canonical_intermediate: parquet_labels_sequence, target: REVIEW, mapping_status: requires_human_review, note: Local Parquet footer proves a labels sequence column exists, but label names are unavailable without a row-level Parquet reader.}
-incompatible_labels: []
-boundary_convention: Hugging Face Parquet files expose words, tags, labels, text, audio, and duration columns. Row-level offsets and label vocabulary were not read because no Parquet row reader is installed locally.
+  - {source_label: DRUGCHEMICAL, canonical_intermediate: medication, target: REVIEW, mapping_status: partial, note: Drug/chemical spans may map to THUỐC but also cover non-drug chemicals; boundary and scope review required.}
+  - {source_label: DISEASESYMTOM, canonical_intermediate: symptom_or_diagnosis, target: REVIEW, mapping_status: ambiguous, note: Conflates TRIỆU_CHỨNG and CHẨN_ĐOÁN.}
+  - {source_label: DIAGNOSTICS, canonical_intermediate: diagnostic_test_or_procedure, target: REVIEW, mapping_status: partial, note: May overlap TÊN_XÉT_NGHIỆM or procedures.}
+  - {source_label: SURGERY, canonical_intermediate: procedure, target: REVIEW, mapping_status: partial, note: Procedure/surgery; not a direct MedNorm-VI entity type.}
+  - {source_label: TREATMENT, canonical_intermediate: treatment, target: REVIEW, mapping_status: ambiguous, note: May include medication, procedure, or plan.}
+  - {source_label: UNITCALIBRATOR, canonical_intermediate: measurement_unit, target: REVIEW, mapping_status: auxiliary_only, note: Units support laboratory parsing but are not a standalone MedNorm-VI type.}
+  - {source_label: MEDDEVICETECHNIQUE, canonical_intermediate: device_or_technique, target: REVIEW, mapping_status: auxiliary_only, note: Devices/techniques are context, not one of the five MedNorm-VI entity types.}
+  - {source_label: ORGAN, canonical_intermediate: anatomy, target: REVIEW, mapping_status: auxiliary_only, note: Anatomical site context.}
+  - {source_label: PREVENTIVEMED, canonical_intermediate: preventive_measure, target: REVIEW, mapping_status: auxiliary_only, note: Preventive-medicine context.}
+  - {source_label: FOODDRINK, canonical_intermediate: food_or_drink, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: PERSONALCARE, canonical_intermediate: personal_care, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: AGE, canonical_intermediate: demographic, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: DATETIME, canonical_intermediate: temporal, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: GENDER, canonical_intermediate: demographic, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: LOCATION, canonical_intermediate: location, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: OCCUPATION, canonical_intermediate: occupation, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: ORGANIZATION, canonical_intermediate: organization, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+  - {source_label: TRANSPORTATION, canonical_intermediate: exposure_context, target: DROP, mapping_status: auxiliary_only, note: Not a MedNorm-VI entity type.}
+incompatible_labels: [AGE, DATETIME, GENDER, LOCATION, OCCUPATION, ORGANIZATION, TRANSPORTATION, FOODDRINK, PERSONALCARE]
+boundary_convention: Hugging Face Parquet files expose words, tags (int ids), labels (BIO strings), text, audio, and duration columns. Token-derived offsets, not original clinical character offsets. Label vocabulary read row-level in Audit 0013.
 assertion_availability: none
 normalization_availability: none
 redistribution_constraints: Unknown until human license/reuse review.

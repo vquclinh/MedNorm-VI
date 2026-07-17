@@ -55,3 +55,4 @@ Each audit should record, at minimum:
 - `0010-local-medical-resource-intake.md`
 - `0011-data-kb-and-full-pipeline-v1.md`
 - `0012-public-medical-dataset-intake.md`
+- `0013-repository-wide-review-and-cleanup.md`

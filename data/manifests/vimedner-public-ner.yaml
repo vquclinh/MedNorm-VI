@@ -19,8 +19,16 @@ local_root: data/external/public_ner/vimedner
 source_revision: ce3deaa13837b5964c1fc8a83098d82418482a41
 source_snapshot_id: ce3deaa13837b5964c1fc8a83098d82418482a41
 tree_hash_sha256: 7ba9ad178b28f80805b2651369ae9fc8d9b1dc49a08dc3c8f1e217f54be10dc3
+tree_hash_scope: checkout_tree_including_git_and_cache
 file_count: 43
 total_bytes: 7452185
+# Canonical payload fingerprint added in Audit 0013: excludes incidental
+# .git/, .cache/, .DS_Store, and *.lock. Source revision above plus this payload
+# hash preserve provenance independent of VCS/OS metadata.
+canonical_payload_tree_hash_sha256: abce130a919d143bfe452d2c348cde4585f0f2f98b6587d606baf1554757ff6a
+payload_file_count: 12
+payload_total_bytes: 5946942
+payload_excludes: [.git, .cache, .DS_Store, "*.lock"]
 splits: [train, dev, test]
 formats: [conll_txt, jsonl_annotations, docx_readme]
 label_inventory_hash: 6123432e9cfbabb87c703913d8bebcbdc8f844e29452e06970b1bda128cc32ce

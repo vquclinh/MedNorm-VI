@@ -19,8 +19,17 @@ local_root: data/external/public_ner/phoner_covid19
 source_revision: 9af190aa76adcfad0a2d14fab9bcab2b252c9c2e
 source_snapshot_id: 9af190aa76adcfad0a2d14fab9bcab2b252c9c2e
 tree_hash_sha256: 0c75f4ed7742b918be3527140841894aa434a901f3aeac08ee36ec292ba407b4
+tree_hash_scope: checkout_tree_including_git_and_cache
 file_count: 43
 total_bytes: 21923658
+# Canonical payload fingerprint added in Audit 0013: excludes incidental
+# .git/, .cache/, .DS_Store, and *.lock so the dataset identity does not depend
+# on VCS/cache metadata (which may be removed for hygiene). Source revision above
+# and this payload hash together preserve provenance.
+canonical_payload_tree_hash_sha256: eeae88fd0d8f73fc73e18bb8510cbd18a25f8448abc8a6fbc148633021a9a4d9
+payload_file_count: 14
+payload_total_bytes: 18111809
+payload_excludes: [.git, .cache, .DS_Store, "*.lock"]
 splits: [train, dev, test]
 formats: [conll, jsonl]
 label_inventory_hash: 1ee009e6d5a2116ce057c2b0f457fcea154baa04943b982c7f9ec693ca321994
