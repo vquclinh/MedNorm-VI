@@ -32,6 +32,7 @@ class DoctorPaths:
     ner_manifests_dir: Path = Path("configs/resources/ner")
     rxnorm_dir: Path = Path("data/external/rxnorm")
     icd_dir: Path = Path("data/external/icd10_vi")
+    icd_derived_dir: Path = Path("data/derived/icd10_vi")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,10 @@ def _relative_names(root: Path, paths: list[Path]) -> list[str]:
 
 def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     p = paths or DoctorPaths()
+    defaults = DoctorPaths()
+    icd_derived_dir = p.icd_derived_dir
+    if p.icd_derived_dir == defaults.icd_derived_dir and p.icd_dir != defaults.icd_dir:
+        icd_derived_dir = p.icd_dir.parent / "derived_icd10_vi"
     missing: list[str] = []
 
     registry = load_organizer_registry(p.organizer_dir)
@@ -98,11 +103,11 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     if not rxnorm_available:
         missing.append(f"RxNorm snapshot under {p.rxnorm_dir}/ (RXNCONSO.RRF)")
 
-    icd_tables = sorted(p.icd_dir.rglob("*.csv")) if p.icd_dir.is_dir() else []
-    icd_files = _relative_names(p.icd_dir, icd_tables)
+    icd_tables = sorted(icd_derived_dir.rglob("*.csv")) if icd_derived_dir.is_dir() else []
+    icd_files = _relative_names(icd_derived_dir, icd_tables)
     icd_available = bool(icd_files)
     if not icd_available:
-        missing.append(f"ICD-10 VI normalized table under {p.icd_dir}/ (*.csv)")
+        missing.append(f"ICD-10 VI normalized table under {icd_derived_dir}/ (*.csv)")
 
     icd_pdf_paths = sorted(p.icd_dir.rglob("*.pdf")) if p.icd_dir.is_dir() else []
     icd_pdf_files = _relative_names(p.icd_dir, icd_pdf_paths)
@@ -148,7 +153,11 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
         },
         "icd_source_artifacts": {"available": icd_source_available,
                                  "files": icd_pdf_files},
-        "icd_snapshot": {"available": icd_available, "files": icd_files},
+        "icd_snapshot": {
+            "available": icd_available,
+            "root": str(icd_derived_dir) if icd_derived_dir.is_dir() else None,
+            "files": icd_files,
+        },
         "resolver": {"ready": resolver_ready,
                      "config": str(p.resolver_config) if resolver_ready else None},
         "no_network": True,

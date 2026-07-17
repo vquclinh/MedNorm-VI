@@ -41,17 +41,46 @@ files:
     bytes: 21988472
 
 raw_path: data/external/icd10_vi/tt06-2026-official/
-processed_path: ""
+processed_path: data/derived/icd10_vi/tt06-2026/
 permitted_use: []
 intended_use: [linking]
 
 transformation:
-  script: ""
+  script: src/mednorm_vi/kb/icd10/conversion/cli.py
   description: >-
-    Source documents preserved unchanged. Conversion not started; normalized ICD
-    table/snapshot not prepared; organizer-exact compatibility unresolved.
+    Source documents preserved unchanged. The embedded text layer of
+    06-byt-kem.pdf was converted into a normalized local ICD snapshot with a
+    conservative deterministic row parser; no OCR was used. Organizer-exact
+    compatibility remains unresolved.
   deterministic: true
-  output_paths: []
+  output_paths:
+    - data/derived/icd10_vi/tt06-2026/icd10_vi_normalized.csv
+    - data/derived/icd10_vi/tt06-2026/icd10_vi_aliases.csv
+    - data/derived/icd10_vi/tt06-2026/icd10_vi_hierarchy.csv
+    - data/derived/icd10_vi/tt06-2026/conversion_manifest.yaml
+    - data/derived/icd10_vi/tt06-2026/conversion_report.json
+
+derived_artifacts:
+  - artifact_id: icd10-vi-tt06-2026-normalized-csv
+    description: Normalized local Vietnamese ICD-10 snapshot from embedded PDF text.
+    path: data/derived/icd10_vi/tt06-2026/icd10_vi_normalized.csv
+    sha256: 7d975de0f8b9bd16ded36e8abd29a3f5b4c4c1864183ec7593943a8fd59dc7d4
+    source_resource_ids: [icd10-vi-tt06-2026-official]
+  - artifact_id: icd10-vi-tt06-2026-aliases
+    description: Alias table emitted by the conversion pipeline.
+    path: data/derived/icd10_vi/tt06-2026/icd10_vi_aliases.csv
+    sha256: 669b52c20b2416c34083bd36a71a3aa2c9ac6f99ddd2844eeb0682132298c833
+    source_resource_ids: [icd10-vi-tt06-2026-official]
+  - artifact_id: icd10-vi-tt06-2026-hierarchy
+    description: Inferred parent-child hierarchy from reversible ICD code forms.
+    path: data/derived/icd10_vi/tt06-2026/icd10_vi_hierarchy.csv
+    sha256: 9e26cabad4aff6c5f7717ba31f938e6895ac36cc8ace4d26bd75baf777e32062
+    source_resource_ids: [icd10-vi-tt06-2026-official]
+  - artifact_id: icd10-vi-tt06-2026-index
+    description: Local exact/accent-insensitive/character-ngram/sparse ICD index.
+    path: indices/icd10_vi/tt06-2026/index.json
+    sha256: 94a1378b0f355afc6da23bb0da4d1e015dbbd4f51a1f2c0508f06e7b1727a768
+    source_resource_ids: [icd10-vi-tt06-2026-official]
 
 extracted_snapshot:
   local_path: data/external/icd10_vi/tt06-2026-official/
@@ -59,7 +88,7 @@ extracted_snapshot:
   file_count: 2
   total_bytes: 22586889
   content_snapshot_id: icd10-vi-tt06-2026-official-ad13c9db89a65951
-  validation_status: official-source candidate available; normalized snapshot not prepared
+  validation_status: official-source candidate available; normalized local snapshot prepared
   core_relative_paths:
     - 06-byt.pdf
     - 06-byt-kem.pdf
@@ -79,4 +108,4 @@ unresolved_legal_questions:
   - Human license/reuse review remains required.
   - Redistribution implications remain review-required.
   - Organizer-exact ICD source/version compatibility remains unresolved.
-  - Conversion to a normalized ICD table has not started.
+  - Organizer-exact ICD source/version compatibility remains unresolved after conversion.

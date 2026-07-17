@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Only proposal types Phase 1B actually generates are resolved here.
+# All five organizer-facing types are now resolvable when proposal evidence is
+# present. Earlier deterministic experts still emit only medication/lab types.
 RESOLVABLE_TYPES: frozenset[str] = frozenset(
-    {"THUỐC", "TÊN_XÉT_NGHIỆM", "KẾT_QUẢ_XÉT_NGHIỆM"}
+    {"THUỐC", "CHẨN_ĐOÁN", "TRIỆU_CHỨNG", "TÊN_XÉT_NGHIỆM", "KẾT_QUẢ_XÉT_NGHIỆM"}
 )
 
 # Resolution outcome for one hypothesis.

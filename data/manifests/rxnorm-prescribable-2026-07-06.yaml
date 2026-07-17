@@ -96,10 +96,20 @@ permitted_use: []
 intended_use: [linking]
 
 transformation:
-  script: ""
-  description: Verified extraction only; no semantic modification, normalization, or index build.
+  script: src/mednorm_vi/kb/indexing/cli.py
+  description: >-
+    Verified extraction plus deterministic local index build. RRF files were not
+    semantically modified or normalized in place.
   deterministic: true
-  output_paths: []
+  output_paths:
+    - indices/rxnorm/prescribable-2026-07-06/index.json
+
+derived_artifacts:
+  - artifact_id: rxnorm-prescribable-2026-07-06-index
+    description: Local exact/character-ngram/sparse/structured RxNorm index.
+    path: indices/rxnorm/prescribable-2026-07-06/index.json
+    sha256: 4e02ecbfc61e586e041a424177fa682f048618e8e0431e8204f6d2afc2692aec
+    source_resource_ids: [rxnorm-prescribable-2026-07-06]
 
 extracted_snapshot:
   local_path: data/external/rxnorm/prescribable-2026-07-06/

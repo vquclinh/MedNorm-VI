@@ -37,6 +37,9 @@ data/**
 # RxNorm/ICD/NER payloads they describe stay ignored above.
 !data/manifests/*.yaml
 !data/manifests/*.yml
+# Public NER corpora may be acquired locally for review, but raw payloads and
+# nested downloaded repositories remain untracked.
+data/external/public_ner/**
 
 # --- Generated evaluation / experiment reports ---
 reports/**

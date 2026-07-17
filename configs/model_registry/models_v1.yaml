@@ -1,0 +1,81 @@
+version: 1
+parameter_limit: 9000000000
+models:
+  - model_id: deterministic_experts
+    role: l1_l2_l3_rule_experts
+    base_parameter_count: 0
+    adapter_parameter_count: 0
+    shared_backbone_id: deterministic
+    quantization: none
+    checkpoint_hash: none
+    tokenizer_hash: none
+    license: repository
+    local_path: ""
+    vram_gb: 0.0
+    load_order: 1
+    enabled_profiles: [deterministic, specialist, Safe, Lean, No-LLM, full]
+  - model_id: vihealthbert_span_type
+    role: mention_span_type
+    base_parameter_count: 135000000
+    adapter_parameter_count: 2000000
+    shared_backbone_id: vihealthbert
+    quantization: fp16
+    checkpoint_hash: missing
+    tokenizer_hash: missing
+    license: REVIEW_REQUIRED
+    local_path: models/checkpoints/full_v1/mention/vihealthbert
+    vram_gb: 1.5
+    load_order: 10
+    enabled_profiles: [specialist, Safe, full]
+  - model_id: phobert_w2ner
+    role: mention_w2ner
+    base_parameter_count: 135000000
+    adapter_parameter_count: 3000000
+    shared_backbone_id: phobert
+    quantization: fp16
+    checkpoint_hash: missing
+    tokenizer_hash: missing
+    license: REVIEW_REQUIRED
+    local_path: models/checkpoints/full_v1/mention/phobert_w2ner
+    vram_gb: 1.5
+    load_order: 20
+    enabled_profiles: [full]
+  - model_id: xlmr_mrc_ner
+    role: mrc_ner
+    base_parameter_count: 270000000
+    adapter_parameter_count: 3000000
+    shared_backbone_id: xlmr_base
+    quantization: fp16
+    checkpoint_hash: missing
+    tokenizer_hash: missing
+    license: REVIEW_REQUIRED
+    local_path: models/checkpoints/full_v1/mention/xlmr_mrc
+    vram_gb: 2.0
+    load_order: 30
+    enabled_profiles: [Safe, full]
+  - model_id: gliner_small
+    role: open_label_ner
+    base_parameter_count: 180000000
+    adapter_parameter_count: 1000000
+    shared_backbone_id: gliner_small
+    quantization: fp16
+    checkpoint_hash: missing
+    tokenizer_hash: missing
+    license: REVIEW_REQUIRED
+    local_path: models/checkpoints/full_v1/mention/gliner
+    vram_gb: 1.5
+    load_order: 40
+    enabled_profiles: [full]
+  - model_id: qwen2_5_7b_lora
+    role: critic_adjudicator
+    base_parameter_count: 7615616512
+    adapter_parameter_count: 64000000
+    shared_backbone_id: qwen2_5_7b
+    quantization: 4bit
+    checkpoint_hash: missing
+    tokenizer_hash: missing
+    license: REVIEW_REQUIRED
+    local_path: models/checkpoints/full_v1/qwen_lora
+    vram_gb: 6.0
+    load_order: 80
+    enabled_profiles: [full]
