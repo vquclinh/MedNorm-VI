@@ -1,0 +1,165 @@
+manifest_version: 1
+resource_id: rxnorm-full-2026-07-06
+title: RxNorm Full Monthly Release (2026-07-06)
+
+source:
+  organization: U.S. National Library of Medicine
+  url: https://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html
+  description: >-
+    RxNorm Full Monthly Release RRF package. Unlike the Current Prescribable
+    subset, the Full release includes all source vocabularies, semantic types
+    (RXNSTY), suppressed/obsolete atoms, and historical/remap files.
+
+snapshot:
+  snapshot_id: rxnorm-full-local-f77a33c352817f36
+  version: "2026-07-06"
+  release_date: "2026-07-06"
+  acquisition_date: "2026-07-22"
+
+license:
+  name: UMLS Metathesaurus License (RxNorm distributed within UMLS)
+  status: REDISTRIBUTION_RESTRICTED
+  text_reference: https://www.nlm.nih.gov/research/umls/knowledge_sources/metathesaurus/release/license_agreement.html
+  permits_redistribution: false
+  notes: >-
+    UMLS license approval was confirmed by the user for licensed local/internal
+    MedNorm-VI project use. Redistribution is restricted under UMLS terms.
+    No UTS credentials, tokens, usernames, passwords, API keys, or private
+    account metadata are stored in this repository. This is not public-domain
+    and is not freely redistributable.
+
+redistribution:
+  permission: restricted
+  organizer_submission_implications: >-
+    Do not redistribute RxNorm content in a submission; describe the local KB
+    acquisition and transformation process instead.
+  notes: Redistribution restricted under the UMLS Metathesaurus License.
+
+archive:
+  original_filename: RxNorm_full_07062026.zip
+  package_type: zip
+  expected_published_md5: 33acdc0176af35808f91b3fc74ff2bb4
+  locally_calculated_md5: 33acdc0176af35808f91b3fc74ff2bb4
+  locally_verified_archive_md5: true
+  archive_sha256: 53523ee9f1fcd7ee426698edf566aedebe548a6ec8cc372c41271fc5b28e784c
+  archive_present: true
+  archive_deleted_before_manifest_completion: false
+  archive_bytes: 259313098
+  archive_path: data/external/rxnorm/full-2026-07-06/archive/RxNorm_full_07062026.zip
+
+# Core Full RRF files (relative to raw_path). sha256/md5/bytes locally computed
+# in Audit 0014. The bundled prescribe/ subset is preserved but not listed as a
+# core file here (the standalone Prescribable snapshot remains authoritative).
+files:
+  - path: raw/rrf/RXNCONSO.RRF
+    md5: e6039e7c6667ae4221e3d7ce80d2bf38
+    sha256: 093e26be3a173770aa6d44ab10fe7b3e8c02fce88a0dc94ca7816fab1e3ffece
+    bytes: 131620308
+  - path: raw/rrf/RXNREL.RRF
+    md5: 25f28a2416ac7ae583ea3f06a0dbe8a5
+    sha256: 56fd9fe8cfbac95afb445608a0b6f2377b5c3a18b1585a9dfbdd5e1ec64dffaf
+    bytes: 527774099
+  - path: raw/rrf/RXNSAT.RRF
+    md5: 15bef729b2fd309f74a2e7970fc853be
+    sha256: 55485391eb89921253c4a61e56def13b63ba4e243cfbf0a9370f3be9c5ba730c
+    bytes: 556998743
+  - path: raw/rrf/RXNSTY.RRF
+    md5: 47bdbd55eba79ddc81fbd9454b45d914
+    sha256: 9e63c135f6fb71ce952dde95281df378a36ccaee8fba0b1424dc62c23ae4f2b7
+    bytes: 20362133
+  - path: raw/rrf/RXNSAB.RRF
+    md5: 1ec888eae0c242239d2d5a847de77e15
+    sha256: e7af2e08df1e17e15756b3d69a9ed4eba8ece5129bafc19f753d251c58a450bb
+    bytes: 10192
+  - path: raw/rrf/RXNDOC.RRF
+    md5: dd6a28217f77c350a637307e5890d6c6
+    sha256: e373dcc741f2c870d05112dcb6621bbd5c43c4382ce62ee27fb6edc3b6c67859
+    bytes: 219293
+  - path: raw/rrf/RXNCUI.RRF
+    md5: 77cd2fc0ef33984fa76ee7413fbef264
+    sha256: 0062288b882797d18d8846259f8570be7957f0f94cfec6d835c60d2361b54962
+    bytes: 1745274
+  - path: raw/rrf/RXNATOMARCHIVE.RRF
+    md5: 54691123b1513ff88ddc0daaf7131c31
+    sha256: 0d24b62c4efc0f9dcf69ae0414bea1eddeb208d9bf3221827299da1263e64d9a
+    bytes: 81488158
+  - path: raw/rrf/RXNCUICHANGES.RRF
+    md5: 69e8f845573169618cbaecb7c6c2d01a
+    sha256: e4fb57898f425572aba6bd090a00484a71ecfab428a54de0883ae51e38a890d3
+    bytes: 14136
+
+raw_path: data/external/rxnorm/full-2026-07-06/
+processed_path: ""
+permitted_use: [linking]
+intended_use: [linking]
+
+transformation:
+  script: src/mednorm_vi/kb/indexing/cli.py
+  description: >-
+    Verified MD5 of the official ZIP, moved it to the canonical archive path,
+    extracted to a staging directory, validated staging, promoted to raw/, and
+    built a deterministic local Full RxNorm index. RRF files were not modified.
+  deterministic: true
+  output_paths:
+    - indices/rxnorm/full-2026-07-06/index.json
+
+derived_artifacts:
+  - artifact_id: rxnorm-full-2026-07-06-index
+    description: >-
+      Local exact/accent-insensitive/character-ngram/sparse/structured RxNorm
+      index built from the Full RRF root (RXNCONSO/RXNREL/RXNSAT).
+    path: indices/rxnorm/full-2026-07-06/index.json
+    sha256: 9ec49f060683d5af9078c6df58fa95792cc3ca841866ad8de1c743684084c80d
+    source_resource_ids: [rxnorm-full-2026-07-06]
+
+extracted_snapshot:
+  local_path: data/external/rxnorm/full-2026-07-06/
+  tree_hash_sha256: f77a33c352817f366bd62227d3ff47d75199968a4d46d8404288f0d774648141
+  file_count: 44
+  total_bytes: 1828225005
+  content_snapshot_id: rxnorm-full-local-f77a33c352817f36
+  validation_status: >-
+    COMPLETE_AND_VALID; 44/44 archive members extracted; testzip OK; no
+    traversal/absolute/encrypted/symlink/zero-byte issues; RXNSTY present.
+  core_relative_paths:
+    - raw/rrf/RXNCONSO.RRF
+    - raw/rrf/RXNREL.RRF
+    - raw/rrf/RXNSAT.RRF
+    - raw/rrf/RXNSTY.RRF
+
+# --- Full-specific metadata (informational; ignored by the core loader) ---
+extracted_layout:
+  rrf_root: data/external/rxnorm/full-2026-07-06/raw/rrf
+  canonical_payload_tree_hash_sha256: f77a33c352817f366bd62227d3ff47d75199968a4d46d8404288f0d774648141
+  bundled_prescribable_subset: data/external/rxnorm/full-2026-07-06/raw/prescribe/rrf
+  full_rrf_inventory: [RXNCONSO.RRF, RXNREL.RRF, RXNSAT.RRF, RXNSTY.RRF, RXNSAB.RRF, RXNDOC.RRF, RXNCUI.RRF, RXNATOMARCHIVE.RRF, RXNCUICHANGES.RRF]
+
+full_statistics:
+  atoms: 1202603
+  concepts: 412701
+  attributes: 7687120
+  relations: 7423180
+  semantic_type_rows: 488937
+  distinct_tui: 57
+  suppressed_atoms: 394623
+  distinct_sab: 13
+  distinct_tty: 45
+  semantic_types_available: true
+  historical_remap_available: true
+  historical_files: [RXNATOMARCHIVE.RRF, RXNCUICHANGES.RRF, RXNCUI.RRF]
+
+acquisition:
+  acquired_by: local user
+  acquisition_date: "2026-07-22"
+  method: >-
+    Manual local download of the official NLM RxNorm Full Monthly Release ZIP,
+    placed at repository root, MD5-verified against the published value, moved to
+    the canonical archive path, and extracted locally during Audit 0014.
+  notes: UMLS license approval confirmed by the user; credentials not stored.
+
+provenance: manual_local_resource_intake
+review_status: reviewed
+reviewer: local user (UMLS license approval confirmed)
+unresolved_legal_questions:
+  - Redistribution is restricted under the UMLS Metathesaurus License.
+  - Organizer-exact RxNorm release/distribution compatibility remains to be confirmed after the BTC task update.

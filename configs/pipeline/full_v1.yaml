@@ -6,7 +6,26 @@ medication_config: configs/medication/grammar_v1.yaml
 laboratory_config: configs/laboratory/parser_v1.yaml
 resolver_config: configs/resolution/resolver_v1.yaml
 icd_index: indices/icd10_vi/tt06-2026/index.json
+# Active RxNorm index consumed by the linker. Audit 0014 kept the CONSERVATIVE
+# default (Prescribable) until BTC publishes the upgraded task and clarifies the
+# candidate/membership policy. To switch snapshots, point this at the Full index
+# below (config-only change; the linker is snapshot-agnostic).
 rxnorm_index: indices/rxnorm/prescribable-2026-07-06/index.json
+# Registry of available RxNorm snapshots and the selection policy. See
+# configs/linking/rxnorm_snapshots_v1.yaml for the full contract.
+rxnorm_snapshots:
+  prescribable:
+    index: indices/rxnorm/prescribable-2026-07-06/index.json
+    snapshot_id: rxnorm-local-75a100c0b70b67d0
+    manifest: data/manifests/rxnorm-prescribable-2026-07-06.yaml
+  full:
+    index: indices/rxnorm/full-2026-07-06/index.json
+    snapshot_id: rxnorm-full-local-f77a33c352817f36
+    manifest: data/manifests/rxnorm-full-2026-07-06.yaml
+rxnorm_selection:
+  active: prescribable
+  modes: [prescribable_only, full_only, full_prefer_prescribable, ablation_full_vs_prescribable]
+  current_prescribable_preference: true
 checkpoint_root: models/checkpoints/full_v1
 expected_documents: 100
 allow_specialist_fallback: true

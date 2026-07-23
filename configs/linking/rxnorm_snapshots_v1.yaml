@@ -1,0 +1,51 @@
+version: 1
+name: rxnorm_snapshots_v1
+# RxNorm snapshot selection contract (introduced in Audit 0014).
+#
+# Two local snapshots coexist. The Prescribable subset is the current default;
+# the Full Monthly Release adds semantic types, external-vocabulary aliases,
+# suppressed/obsolete atoms, and historical/remap files. This file documents the
+# selectable modes; the linker itself stays snapshot-agnostic (it links against
+# whatever index the pipeline provides), so switching is a config-only change.
+#
+# The default is intentionally CONSERVATIVE (Prescribable) until BTC publishes the
+# upgraded task and clarifies candidate/membership policy. Do not change every
+# profile to Full without that clarification.
+
+snapshots:
+  prescribable:
+    resource_id: rxnorm-prescribable-2026-07-06
+    snapshot_id: rxnorm-local-75a100c0b70b67d0
+    index: indices/rxnorm/prescribable-2026-07-06/index.json
+    manifest: data/manifests/rxnorm-prescribable-2026-07-06.yaml
+    semantic_types: false        # RXNSTY absent in the Prescribable package
+    governance: REVIEW_REQUIRED
+  full:
+    resource_id: rxnorm-full-2026-07-06
+    snapshot_id: rxnorm-full-local-f77a33c352817f36
+    index: indices/rxnorm/full-2026-07-06/index.json
+    manifest: data/manifests/rxnorm-full-2026-07-06.yaml
+    semantic_types: true         # RXNSTY present (57 TUIs)
+    governance: REDISTRIBUTION_RESTRICTED   # UMLS-licensed local use
+
+# Selection modes (choose one via `active`):
+#   prescribable_only              - link only against the Prescribable index.
+#   full_only                      - link only against the Full index.
+#   full_prefer_prescribable       - link against Full, but boost candidates that
+#                                    are members of the current Prescribable set
+#                                    (recall of Full + precision anchor of RPS).
+#   ablation_full_vs_prescribable  - build candidates from both for comparison.
+active: prescribable
+default_mode: prescribable_only
+current_prescribable_preference: true
+
+# Documented trade-offs (Full vs Prescribable), not a claim that Full is better:
+tradeoffs:
+  recall: Full is higher (external-vocabulary aliases, synonyms, brand/generic).
+  precision: Full adds candidate noise (394k suppressed/obsolete atoms) — needs
+    current-prescribable preference or suppress filtering.
+  index_size: Full index ~578 MB vs Prescribable ~103 MB.
+  memory_runtime: Full index build peaked ~6.7 GB RAM; larger startup/memory.
+  licensing: Full is UMLS-licensed (redistribution restricted); Prescribable is a
+    no-login download (still REVIEW_REQUIRED in this repo).
+  budget: the 9B model-parameter budget is unaffected by KB data size.

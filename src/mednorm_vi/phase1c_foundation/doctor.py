@@ -31,6 +31,7 @@ class DoctorPaths:
     resource_templates_dir: Path = Path("configs/resources")
     ner_manifests_dir: Path = Path("configs/resources/ner")
     rxnorm_dir: Path = Path("data/external/rxnorm")
+    rxnorm_indices_dir: Path = Path("indices/rxnorm")
     icd_dir: Path = Path("data/external/icd10_vi")
     icd_derived_dir: Path = Path("data/derived/icd10_vi")
 
@@ -77,6 +78,41 @@ def _ner_manifests(directory: Path) -> dict[str, Any]:
     return {"count": len(results), "manifests": results}
 
 
+def _rxnorm_snapshot_status(
+    base_dir: Path, subdir_glob: str, indices_dir: Path, *, fallback_to_base: bool = False
+) -> dict[str, Any]:
+    """Discover one RxNorm snapshot (Prescribable or Full) by its namespaced
+    subdirectory. ``fallback_to_base`` allows a legacy whole-directory scan (used
+    only for Prescribable, to support old layouts and synthetic tests that place
+    RRF directly under ``base_dir``); Full is only recognized inside a ``full-*``
+    subdirectory so it is never confused with a Prescribable checkout."""
+    matches = (
+        sorted(d for d in base_dir.glob(subdir_glob) if d.is_dir())
+        if base_dir.is_dir()
+        else []
+    )
+    snap_dir = matches[0] if matches else None
+    if snap_dir is not None:
+        rrf = discover_rrf(snap_dir)
+    elif fallback_to_base:
+        rrf = discover_rrf(base_dir)
+    else:
+        rrf = discover_rrf(base_dir / "__absent__")
+    index_available = False
+    if snap_dir is not None:
+        index_available = (indices_dir / snap_dir.name / "index.json").is_file()
+    return {
+        "available": rrf.has_conso,
+        "snapshot_dir": snap_dir.name if snap_dir else None,
+        "root": str(rrf.root) if rrf.root else None,
+        "rxnconso": str(rrf.conso) if rrf.conso else None,
+        "missing_files": list(rrf.missing()),
+        "rxnsty_available": rrf.sty is not None,
+        "semantic_types_available": rrf.sty is not None,
+        "index_available": index_available,
+    }
+
+
 def _relative_names(root: Path, paths: list[Path]) -> list[str]:
     out: list[str] = []
     for path in paths:
@@ -98,8 +134,12 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     registry = load_organizer_registry(p.organizer_dir)
     pos = load_position_registry(p.position_config)
 
-    rrf = discover_rrf(p.rxnorm_dir)
-    rxnorm_available = rrf.has_conso
+    prescribable = _rxnorm_snapshot_status(
+        p.rxnorm_dir, "prescribable-*", p.rxnorm_indices_dir, fallback_to_base=True)
+    full = _rxnorm_snapshot_status(p.rxnorm_dir, "full-*", p.rxnorm_indices_dir)
+    rxnorm_available = prescribable["available"] or full["available"]
+    active_snapshot = "prescribable" if prescribable["available"] else (
+        "full" if full["available"] else "none")
     if not rxnorm_available:
         missing.append(f"RxNorm snapshot under {p.rxnorm_dir}/ (RXNCONSO.RRF)")
 
@@ -139,18 +179,16 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
         "resource_templates": _validate_manifests(p.resource_templates_dir, "*.manifest*.yaml"),
         "public_ner_manifests": _ner_manifests(p.ner_manifests_dir),
         "rxnorm_snapshot": {"available": rxnorm_available,
-                            "missing_files": list(rrf.missing()),
-                            "root": str(rrf.root) if rrf.root else None},
-        "rxnorm_prescribable_snapshot": {
-            "available": rxnorm_available,
-            "root": str(rrf.root) if rrf.root else None,
-            "rxnconso": str(rrf.conso) if rrf.conso else None,
-            "missing_files": list(rrf.missing()),
-        },
-        "rxnorm_full_snapshot": {
-            "available": False,
-            "status": "MISSING / awaiting UMLS approval",
-        },
+                            "missing_files": prescribable["missing_files"]
+                            if prescribable["available"] else full["missing_files"],
+                            "root": prescribable["root"] or full["root"],
+                            "active": active_snapshot},
+        "rxnorm_prescribable_snapshot": prescribable,
+        "rxnorm_full_snapshot": (
+            {**full, "status": "available (UMLS-licensed local use)"}
+            if full["available"]
+            else {**full, "status": "MISSING / awaiting UMLS approval"}
+        ),
         "icd_source_artifacts": {"available": icd_source_available,
                                  "files": icd_pdf_files},
         "icd_snapshot": {
@@ -180,8 +218,14 @@ def render_report(report: DoctorReport) -> str:
     lines.append(f"public NER manifests   : {d['public_ner_manifests']['count']}")
     rxp = d["rxnorm_prescribable_snapshot"]
     lines.append(f"RxNorm Prescribable    : "
-                 f"{'available' if rxp['available'] else 'MISSING (local)'}")
-    lines.append("RxNorm Full 2026       : MISSING / awaiting UMLS approval")
+                 f"{'available' if rxp['available'] else 'MISSING (local)'}"
+                 f"{' [index]' if rxp.get('index_available') else ''}")
+    rxf = d["rxnorm_full_snapshot"]
+    lines.append(f"RxNorm Full 2026       : {rxf['status']}"
+                 f"{' [RXNSTY]' if rxf.get('rxnsty_available') else ''}"
+                 f"{' [index]' if rxf.get('index_available') else ''}")
+    lines.append(f"active RxNorm snapshot  : {d['rxnorm_snapshot'].get('active', 'none')}"
+                 " (conservative default; see configs/pipeline/full_v1.yaml)")
     icd_src = d["icd_source_artifacts"]
     lines.append(f"ICD-10 VI source PDFs  : "
                  f"{'available' if icd_src['available'] else 'MISSING (local)'}")
