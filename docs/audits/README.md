@@ -56,3 +56,5 @@ Each audit should record, at minimum:
 - `0011-data-kb-and-full-pipeline-v1.md`
 - `0012-public-medical-dataset-intake.md`
 - `0013-repository-wide-review-and-cleanup.md`
+- `0014-rxnorm-full-intake-and-integration.md`
+- `0015-btc-input-turn2-vong1-update.md`
