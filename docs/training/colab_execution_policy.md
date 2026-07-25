@@ -51,6 +51,17 @@ locally and emit, for the user to run in Colab:
 8. how to return artifacts to the repository (`models/checkpoints/...` + manifest);
 9. the local validation commands to run after return.
 
+## Notebook readiness is evidence-based (Audit 0019)
+
+A notebook counts as runnable only with **behavioral execution evidence**, never because it
+has the expected section headings. Commented-out required commands (`# !git clone`,
+`# !pip install`) and `<fill: …>` values make a notebook unrunnable in a fresh Colab runtime.
+Current per-notebook statuses live in `docs/notebooks/notebook_execution_integrity.md`; today
+only `MedNorm_Data_VietMed_Preprocess.ipynb` is `SYNTHETIC_SMOKE_VERIFIED`, and every S0–S6
+notebook is `DESIGN_DRAFT`. Repository checkout inside a notebook must use the tested helper
+`mednorm_vi.reproducibility.repository_checkout`, which records the **resolved commit SHA**
+for artifact provenance.
+
 ## Return-to-repo contract
 
 Checkpoints return under `models/checkpoints/full_v1/<role>/...` with a checkpoint

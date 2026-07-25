@@ -19,18 +19,28 @@ notebooks/MedNorm_Data_VietMed_Preprocess.ipynb
   then rebuild locally: `python -m mednorm_vi.data_engine.cli build-governed-corpus`
   and re-run leakage/offset validation.
 
-## SECOND Colab action — S1 mention smoke (GPU; infrastructure only)
+## SECOND Colab action — S1 mention smoke (BLOCKED: notebooks are DESIGN_DRAFT)
 
 ```text
-notebooks/MedNorm_S1_Mention_FirstRun_Smoke.ipynb   (focused smoke)
-notebooks/MedNorm_S1_MentionExtraction.ipynb        (full S1 stage; full mode OFF by default)
+notebooks/MedNorm_S1_Mention_FirstRun_Smoke.ipynb   (status: DESIGN_DRAFT)
+notebooks/MedNorm_S1_MentionExtraction.ipynb        (status: DESIGN_DRAFT)
 ```
+
+> **Not runnable yet (Audit 0019).** Both S1 notebooks still contain placeholder cells
+> (`<fill: …>`, commented `# !pip install`, commented model loading, describe-only prints),
+> so a fresh Colab runtime cannot execute them end-to-end. They must first be repaired the
+> same way the VietMed notebook was — real executable checkout via
+> `mednorm_vi.reproducibility.repository_checkout`, real pinned install, real training call,
+> real artifact export — and then behaviorally verified. See
+> `docs/notebooks/notebook_execution_integrity.md`.
+
+Intended design once repaired (unchanged):
 
 - **Runtime:** GPU (T4 sufficient for smoke; ~4–8 GB VRAM; < 2 GB Drive; ~10–20 min).
 - **Primary backbone:** ViHealthBERT (~0.135B) — smallest capable specialist. Does not
   change the architecture.
-- **Scope:** ≤ 3 batches through the full training path. **No** leaderboard/full-model
-  claim; **no** automatic transition to full training (`CONFIRM_FULL="YES"` required).
+- **Scope:** ≤ 3 batches through the training path. **No** leaderboard/full-model claim;
+  **no** automatic transition to full training (`CONFIRM_FULL="YES"` required).
 - **Return:** smoke checkpoint + manifest to `models/checkpoints/full_v1/mention/vihealthbert/`;
   run the local validation commands below.
 

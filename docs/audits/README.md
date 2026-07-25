@@ -61,3 +61,4 @@ Each audit should record, at minimum:
 - `0016-organizer-data-layout-contract-and-hygiene.md`
 - `0017-training-readiness-and-governed-corpus.md`
 - `0018-vietmed-adapter-and-preprocessing-correctness.md`
+- `0019-colab-notebook-execution-integrity.md`

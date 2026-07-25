@@ -1,0 +1,64 @@
+# Notebook Execution Integrity
+
+Honest, evidence-based status of every tracked notebook. **File names, section
+headings, and keyword presence are not proof.** A notebook is only promoted when
+behavioral execution evidence exists.
+
+## Status vocabulary
+
+| Status | Meaning |
+| --- | --- |
+| `DESIGN_DRAFT` | Headings + configuration, but placeholder or describe-only operations. Not runnable end-to-end. |
+| `IMPLEMENTED_UNEXECUTED` | Executable orchestration exists, but it has never been behaviorally run/verified. |
+| `SYNTHETIC_SMOKE_VERIFIED` | The repository's test suite **executes** the notebook on synthetic input and verifies real artifacts/hashes. |
+| `REAL_DATA_EXECUTED` | The user ran it on real data in Colab. |
+| `ARTIFACTS_VERIFIED` | Real-data artifacts were returned and verified in the repository. |
+| `RETAINED_INFERENCE_NOTEBOOK` | Kept from an earlier milestone; not part of the current training path. |
+| `PLACEHOLDER_FOUND` | Contains placeholders in required executable cells. |
+
+## Current inventory (10 notebooks)
+
+| Notebook | Status | Evidence / gap |
+| --- | --- | --- |
+| `MedNorm_Data_VietMed_Preprocess.ipynb` | **SYNTHETIC_SMOKE_VERIFIED** | Executed cell-by-cell by `tests/unit/test_notebook_execution.py` in `SYNTHETIC_SMOKE` mode against a local `file://` checkout: real clone → resolved 40-hex SHA → adapter import → 7 real artifact files → manifest hash re-verified → audio-absence asserted. **Real VietMed data still pending** (needs a Colab CPU rerun in `REAL` mode). |
+| `MedNorm_S0_DomainAdaptation.ipynb` | `DESIGN_DRAFT` | Code cells contain `<fill:` placeholders, a commented `# !pip install`, commented model-loading calls, and describe-only prints. Not runnable. |
+| `MedNorm_S1_MentionExtraction.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_S1_Mention_FirstRun_Smoke.ipynb` | `DESIGN_DRAFT` | Placeholders + describe-only prints (`print('smoke would run …')`). Not an executed smoke run. |
+| `MedNorm_S2_Assertion.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_S3_Retrieval.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_S4_Reranker.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_S5_QwenLoRA.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_S6_Calibration.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
+| `MedNorm_Full_Offline_Inference_and_Packaging.ipynb` | `RETAINED_INFERENCE_NOTEBOOK` | Retained from an earlier milestone; no placeholders detected, but not behaviorally verified. |
+
+**No S0–S6 notebook is a "complete workflow."** Each needs its own focused milestone
+(real executable checkout, real dependency install, real training call, artifact export)
+plus behavioral verification before any promotion.
+
+## What made the earlier claim wrong
+
+Audit 0018 described the VietMed notebook as ready while its committed cells still had:
+
+```text
+# !git clone <repo-url> {REPO_DIR}      # commented -> no checkout ever happened
+EXPECTED_COMMIT = '<fill: reviewed repo HEAD>'
+# !pip -q install {PYARROW_PIN}         # commented -> pyarrow never installed
+```
+
+A fresh Colab runtime therefore had no `/content/MedNorm-VI/src/mednorm_vi` and failed
+with `ModuleNotFoundError: No module named 'mednorm_vi'`. The tests of that milestone were
+**static**: they asserted section headings and keyword presence, which a commented command
+still satisfies. Audit 0019 replaces that with behavioral execution plus placeholder rules
+that specifically reject commented-out required commands.
+
+## Guards now in place
+
+- `tests/unit/test_notebook_execution.py` — executes the VietMed notebook's code cells in a
+  fresh namespace, verifies artifacts, hashes, resolved SHA, and audio exclusion; asserts
+  REAL mode fails fast without Parquet and never falls back to synthetic rows.
+- `tests/unit/test_notebook_placeholders.py` — rejects `<...>`/`TODO`/`REPLACE_ME`
+  placeholders and **commented-out `!pip`/`!git` commands** in the VietMed notebook; asserts
+  the checkout helper and pinned install are actually invoked, the adapter import follows
+  checkout verification, and this report never claims an unverified notebook is verified.
+- `tests/unit/test_repository_checkout.py` — the checkout helper against local `file://`
+  repositories (placeholder rejection, resolved SHA, layout verification, failure modes).

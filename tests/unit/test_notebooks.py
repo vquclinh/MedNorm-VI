@@ -37,10 +37,11 @@ def test_notebook_valid_json_and_safe(name: str) -> None:
     assert not _SECRET.search(src), f"{name}: secret-like token"
     assert not _PERSONAL.search(src), f"{name}: personal path"
     assert "RUN_FULL_TRAINING = True" not in src, f"{name}: auto full training"
-    # editable single Drive root (stage notebooks use PROJECT_ROOT; the VietMed
-    # preprocessing notebook uses the clearer DRIVE_ROOT). No other hard-coded path.
+    # A single editable Drive root. Stage notebooks hard-code PROJECT_ROOT; the VietMed
+    # notebook derives DRIVE_ROOT from an env-overridable default (Audit 0019) so the
+    # behavioral test can redirect it. No other hard-coded user path is allowed.
     assert ("PROJECT_ROOT = '/content/drive/MyDrive/mednorm-vi'" in src
-            or "DRIVE_ROOT = '/content/drive/MyDrive/MedNorm-VI'" in src
+            or "'/content/drive/MyDrive/MedNorm-VI'" in src
             or "packaging" in name.lower() or "Folds" in name)
 
 
