@@ -1,0 +1,103 @@
+version: 1
+name: s1_mention_colab_dependencies
+dependency_contract_version: s1-colab-deps-v1
+
+# S1 Colab dependency contract (Audit 0023).
+#
+# The S1 smoke previously installed packages in THREE separate cells and imported
+# torch/transformers in the SAME cell as an install, with no kernel restart. Any
+# dependency resolution that rewrote NumPy on disk therefore produced a C-ABI
+# mismatch at the first compiled NumPy import:
+#
+#   ValueError: numpy.dtype size changed, may indicate binary incompatibility.
+#               Expected 96 from C header, got 88 from PyObject
+#
+# Policy: PRESERVE Colab's coherent preinstalled NumPy/Torch stack. Never pin
+# NumPy blindly; instead pin it to whatever the runtime already provides, so pip
+# cannot silently move it and instead fails loudly when a request is incompatible.
+
+# Packages inherited from the Colab image. These are pinned at their DETECTED
+# baseline version through a generated pip constraints file; they are never
+# installed, upgraded, downgraded, or force-reinstalled by this notebook.
+inherited_from_runtime:
+  - numpy
+  - torch
+  - torchvision
+  - torchaudio
+  - scipy
+  - pandas
+  - scikit-learn
+
+# Modifying any of these is a contract violation (enforced by the notebook and tests).
+forbidden_operations:
+  - "--force-reinstall numpy"
+  - "--force-reinstall torch"
+  - "blind numpy<2 pin"
+  - "unconstrained --upgrade of the scientific stack"
+  - "installing CPU torch over the Colab CUDA build"
+  - "reinstalling torch/torchvision/torchaudio"
+
+# Installed in ONE consolidated transaction, constrained by the generated
+# constraints file so NumPy/Torch cannot move. Version ranges (not brittle exact
+# pins) let pip find a build compatible with the runtime's NumPy 2.x / Python 3.12;
+# if none exists, pip fails loudly instead of downgrading NumPy.
+install:
+  - name: transformers
+    specifier: "transformers>=4.44,<5"
+    reason: "AutoTokenizer/AutoModel for the ViHealthBERT backbone"
+  - name: accelerate
+    specifier: "accelerate>=0.33,<2"
+    reason: "device placement helpers used by transformers"
+  - name: sentencepiece
+    specifier: "sentencepiece>=0.2,<1"
+    reason: "PhobertTokenizer (slow) vocabulary backend"
+  - name: py_vncorenlp
+    specifier: "py_vncorenlp==0.1.4"
+    reason: "VnCoreNLP RDRSegmenter word segmentation (production S1 path)"
+  - name: PyYAML
+    specifier: "PyYAML>=6.0"
+    reason: "tracked smoke/registry config loading"
+
+# Deliberately NOT installed for the S1 smoke.
+not_installed:
+  - name: pyarrow
+    reason: "S1 reads governed-corpus JSONL; no Parquet path is exercised"
+
+restart:
+  # Exactly one real kernel restart after the single installation transaction.
+  required: true
+  mechanism: "terminate the kernel process after writing the marker; Colab auto-restarts"
+  marker_path: /content/.mednorm_s1_bootstrap.json
+  marker_on_drive: false
+  expected_passes: 2
+  pass_1: "install -> write marker -> force kernel restart"
+  pass_2: "marker found -> skip install -> ABI preflight -> continue smoke"
+  restart_loop_guard: "marker records dependency_contract_version; a matching marker never reinstalls"
+
+# Fail-fast ABI health, executed AFTER restart and BEFORE any resource, tokenizer,
+# model, or corpus-batch acquisition.
+abi_preflight:
+  required: true
+  must_import:
+    - numpy
+    - numpy.random.RandomState
+    - torch
+  must_construct:
+    - "numpy.random.RandomState(42).rand(4)"
+    - "torch.optim.AdamW([torch.nn.Parameter(torch.zeros(1))], lr=1e-3)"
+    - "dummy_optimizer.zero_grad(set_to_none=True)"
+  must_report:
+    - numpy_version
+    - numpy_path
+    - numpy_core_path
+    - numpy_mtrand_path
+    - torch_version
+    - torch_path
+    - cuda_available
+    - python_version
+    - pip_check_passed
+  must_verify:
+    - "exactly one numpy distribution"
+    - "numpy is not imported from Drive or the Git checkout"
+    - "PYTHONPATH does not shadow numpy"
+  on_failure: "stop before model/tokenizer/resource acquisition; print diagnostics; no in-process repair"

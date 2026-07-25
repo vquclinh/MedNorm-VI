@@ -140,15 +140,22 @@ def test_s1_smoke_notebook_uses_required_colab_paths() -> None:
 
 
 def test_s1_smoke_notebook_orders_corpus_gate_before_model_acquisition() -> None:
+    """Audit 0023 order: clone -> install/restart -> ABI -> corpus gate -> tokenizer -> model.
+
+    (The old single `PIP_PACKAGES` cell was replaced by one consolidated,
+    constraint-protected transaction driven by the tracked dependency contract.)
+    """
     code = _code(S1_SMOKE)
     clone_idx = code.index('"git",\n    "clone"')
+    install_idx = code.index("subprocess.run(install_command")
+    abi_idx = code.index("import numpy as np")
     import_idx = code.index("from mednorm_vi.training.s1_mention_smoke import")
     verify_idx = code.index("corpus_report = verify_governed_corpus")
-    pip_idx = code.index("PIP_PACKAGES = [")
     tokenizer_idx = code.index("AutoTokenizer.from_pretrained")
     model_idx = code.index("AutoModel.from_pretrained")
-    assert clone_idx < import_idx < verify_idx < pip_idx < tokenizer_idx < model_idx
-    assert "assert IN_COLAB" in code
+    assert clone_idx < install_idx < abi_idx < import_idx < verify_idx
+    assert verify_idx < tokenizer_idx < model_idx
+    assert "assert IN_COLAB_BOOTSTRAP" in code
     assert "assert torch.cuda.is_available()" in code
 
 
@@ -181,6 +188,110 @@ def test_s1_smoke_notebook_runs_alignment_preflight_before_model_download() -> N
     # unalignable examples are counted, never silently mislabeled
     assert "except AlignmentError:" in code
     assert 'alignment_preflight["unalignable_example_count"] += 1' in code
+
+
+def _s1_index(needle: str) -> int:
+    code = _code(S1_SMOKE)
+    idx = code.find(needle)
+    assert idx >= 0, f"S1 notebook missing required code: {needle!r}"
+    return idx
+
+
+def test_s1_smoke_notebook_never_imports_numpy_or_torch_before_abi_preflight() -> None:
+    """Audit 0023: importing the scientific stack before the restart is what
+    corrupted the NumPy C-ABI."""
+    code = _code(S1_SMOKE)
+    abi_idx = _s1_index("import numpy as np")
+    head = code[:abi_idx]
+    pattern = (r"^\s*(?:import|from)\s+"
+               r"(numpy|torch|transformers|pandas|scipy|sklearn|pyarrow)\b")
+    bad = re.findall(pattern, head, re.M)
+    bad += re.findall(r'import_module\(["\'](torch|transformers|numpy)', head)
+    assert not bad, f"scientific imports before the ABI preflight: {bad}"
+
+
+def test_s1_smoke_notebook_installs_once_and_forces_one_restart() -> None:
+    code = _code(S1_SMOKE)
+    assert code.count("subprocess.run(install_command") == 1     # consolidated
+    assert code.count("os.kill(os.getpid(), 9)") == 1            # exactly one restart
+    assert "validate_install_command(install_command)" in code
+    assert "build_pip_constraints(baseline_versions)" in code
+    # the marker guards against a restart loop, and is bound to the full fingerprint
+    assert "decide_bootstrap_action(bootstrap_marker, MARKER_FINGERPRINT)" in code
+    assert "DEPENDENCY_RESTART_COMPLETED = BOOTSTRAP_ACTION == PROCEED" in code
+
+
+def test_s1_smoke_notebook_marker_is_bound_to_the_full_fingerprint() -> None:
+    """The marker must never be accepted on the contract version alone."""
+    code = _code(S1_SMOKE)
+    assert "build_marker_fingerprint(" in code
+    assert "**MARKER_FINGERPRINT.as_dict()" in code                # persisted in full
+    assert "marker_mismatches(bootstrap_marker, MARKER_FINGERPRINT)" in code
+    # the fingerprint is re-validated inside the restarted kernel
+    assert "assert not POST_RESTART_MARKER_MISMATCHES" in code
+    assert _s1_index("build_marker_fingerprint(") < _s1_index("MARKER_FINGERPRINT)")
+
+
+def test_s1_smoke_notebook_forbids_dangerous_pip_operations() -> None:
+    code = _code(S1_SMOKE)
+    assert "--force-reinstall" not in code
+    assert "--upgrade" not in code
+    assert "numpy<2" not in code                                  # no blind pin
+    for protected in ("torch==", "torchvision==", "torchaudio=="):
+        assert protected not in code, f"must not reinstall {protected}"
+
+
+def test_s1_smoke_notebook_abi_preflight_precedes_all_acquisition() -> None:
+    order = [
+        _s1_index("subprocess.run(install_command"),
+        _s1_index("os.kill(os.getpid(), 9)"),
+        _s1_index("assert DEPENDENCY_RESTART_COMPLETED"),
+        _s1_index("import numpy as np"),
+        _s1_index("from numpy.random import RandomState"),
+        _s1_index("torch.optim.AdamW([dummy_parameter]"),
+        _s1_index("drive_module.mount"),
+        _s1_index("verify_governed_corpus"),
+        _s1_index("py_vncorenlp.VnCoreNLP"),
+        _s1_index("AutoTokenizer.from_pretrained"),
+        _s1_index("AutoModel.from_pretrained"),
+    ]
+    assert order == sorted(order), "ABI preflight must precede every acquisition step"
+
+
+def test_s1_smoke_notebook_abi_preflight_is_fail_fast() -> None:
+    code = _code(S1_SMOKE)
+    assert "rng = RandomState(42)" in code
+    assert "dummy_optimizer.zero_grad(set_to_none=True)" in code
+    assert "abi_problems = validate_abi_report(abi_report)" in code
+    assert "assert not abi_problems" in code                      # blocks later cells
+    assert "NUMPY_ABI_PREFLIGHT_PASSED = True" in code
+
+
+def test_s1_smoke_notebook_keeps_adamw_as_the_real_optimizer() -> None:
+    code = _code(S1_SMOKE)
+    assert "optimizer = torch.optim.AdamW(model.parameters()" in code
+
+
+def test_s1_smoke_notebook_manifest_records_environment_fields() -> None:
+    code = _code(S1_SMOKE)
+    for field in ("dependency_contract_version", "dependency_restart_completed",
+                  "numpy_abi_preflight_passed", "python_version", "numpy_version",
+                  "numpy_path", "numpy_mtrand_path", "torch_version", "torch_path",
+                  "transformers_version", "tokenizers_version", "py_vncorenlp_version",
+                  "pip_check_passed", "dependency_contract_sha256",
+                  "install_requirement_hash", "python_major_minor",
+                  "protected_baseline_versions", "bootstrap_action",
+                  "bootstrap_marker_mismatches"):
+        assert field in code, f"manifest env field {field!r} missing"
+    assert "evaluate_full_training_readiness({" in code
+
+
+def test_s1_smoke_notebook_documents_two_pass_execution() -> None:
+    doc = json.loads((NB / S1_SMOKE).read_text(encoding="utf-8"))
+    markdown = "\n".join("".join(c.get("source", []))
+                         for c in doc["cells"] if c["cell_type"] == "markdown")
+    assert "PASS 1" in markdown and "PASS 2" in markdown
+    assert "restart" in markdown.lower()
 
 
 def test_s1_smoke_notebook_defaults_to_vncorenlp_segmenter() -> None:
