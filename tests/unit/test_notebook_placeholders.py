@@ -152,6 +152,73 @@ def test_s1_smoke_notebook_orders_corpus_gate_before_model_acquisition() -> None
     assert "assert torch.cuda.is_available()" in code
 
 
+def test_s1_smoke_notebook_supports_slow_phobert_tokenizer() -> None:
+    """Audit 0022: ViHealthBERT-Word has no fast tokenizer; the notebook must not
+    assert `is_fast` nor rely on fast-only offset APIs."""
+    code = _code(S1_SMOKE)
+    assert 'assert getattr(tokenizer, "is_fast", False)' not in code
+    assert "use_fast=False" in code                     # loaded honestly as slow
+    assert "use_fast=True" not in code
+    assert "return_offsets_mapping" not in code         # fast-only API
+    assert "word_ids(" not in code
+    assert "token_to_chars" not in code and "char_to_token" not in code
+    # the tracked alignment backend is what supplies character spans
+    assert "encode_mention_example_slow(" in code
+    assert "describe_backend(tokenizer)" in code
+    assert "ALIGNMENT_BACKEND" in code
+    assert 'tokenizer_report["tokenizer_is_fast"] is False' in code
+
+
+def test_s1_smoke_notebook_runs_alignment_preflight_before_model_download() -> None:
+    code = _code(S1_SMOKE)
+    seg_idx = code.index("segment_example_text")
+    preflight_idx = code.index("alignment_preflight = {")
+    model_idx = code.index("AutoModel.from_pretrained")
+    assert seg_idx < preflight_idx < model_idx
+    # segmentation resources are verified/recorded, with a fail-fast assertion
+    assert "word_segmenter_resource_hashes" in code
+    assert "VnCoreNLP resources missing after acquisition" in code
+    # unalignable examples are counted, never silently mislabeled
+    assert "except AlignmentError:" in code
+    assert 'alignment_preflight["unalignable_example_count"] += 1' in code
+
+
+def test_s1_smoke_notebook_defaults_to_vncorenlp_segmenter() -> None:
+    """Production S1 smoke requires VnCoreNLP; degraded mode is opt-in only."""
+    code = _code(S1_SMOKE)
+    assert 'os.environ.get("MEDNORM_SEGMENTER_MODE", "vncorenlp")' in code
+    assert 'DEGRADED_FALLBACK = SEGMENTER_MODE == "whitespace_fallback"' in code
+    # fail fast on missing/broken resources
+    assert "VnCoreNLP resources missing after acquisition" in code
+    assert "VnCoreNLP resource hashes are empty" in code
+    # degraded mode warns prominently and blocks production classification
+    assert "DEGRADED MODE" in code
+    assert "cannot be classified as a successful production-path S1 smoke" in code
+    assert "PRODUCTION_SEGMENTATION = (" in code
+    assert '"degraded_fallback": segmenter_report["degraded_fallback"]' in code
+
+
+def test_s1_smoke_notebook_checks_tokenizer_equivalence_before_model() -> None:
+    code = _code(S1_SMOKE)
+    eq_idx = code.index("verify_tokenizer_equivalence(")
+    model_idx = code.index("AutoModel.from_pretrained")
+    tok_idx = code.index("AutoTokenizer.from_pretrained")
+    assert tok_idx < eq_idx < model_idx           # after tokenizer, before weights
+    assert 'tokenizer_equivalence["tokenizer_equivalence_failures"] == 0' in code
+    assert "tokenizer_equivalence_checked" in code
+    assert "tokenizer_equivalence_examples" in code
+
+
+def test_s1_smoke_notebook_records_truncation_and_readiness_fields() -> None:
+    code = _code(S1_SMOKE)
+    for field in ("fully_dropped_entity_count", "partially_truncated_entity_count",
+                  "partial_truncation_policy", "full_training_readiness",
+                  "segmenter_mode"):
+        assert field in code, f"manifest field {field!r} missing"
+    # readiness must depend on production segmentation and equivalence
+    assert "PRODUCTION_SEGMENTATION" in code
+
+
 def test_s1_smoke_notebook_is_strictly_bounded_and_smoke_only() -> None:
     code = _code(S1_SMOKE)
     assert "FULL_TRAINING_ENABLED = False" in code

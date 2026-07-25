@@ -64,3 +64,4 @@ Each audit should record, at minimum:
 - `0019-colab-notebook-execution-integrity.md`
 - `0020-vietmed-real-artifact-intake-and-corpus-rebuild.md`
 - `0021-s1-mention-first-run-smoke-readiness.md`
+- `0022-s1-slow-tokenizer-alignment-fix.md`

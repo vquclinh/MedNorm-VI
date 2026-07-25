@@ -18,6 +18,14 @@ import yaml  # type: ignore[import-untyped]
 
 from ..data_engine.annotation_coverage import SourceCoverage, example_loss_mask
 from ..schemas.constants import ENTITY_TYPES
+from .phobert_alignment import (
+    AlignmentError,
+    align_subtokens,
+    classify_truncated_entities,
+    find_boundary_violations,
+    map_segmented_words,
+    segmented_text_to_words,
+)
 
 ENTITY_TYPE_ORDER: tuple[str, ...] = tuple(sorted(ENTITY_TYPES))
 ENTITY_TYPE_TO_ID: dict[str, int] = {name: i for i, name in enumerate(ENTITY_TYPE_ORDER)}
@@ -302,6 +310,72 @@ def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
 
+def encode_mention_example_slow(
+    example: Mapping[str, Any], tokenizer: Any, *,
+    coverage_by_source: Mapping[str, SourceCoverage],
+    max_length: int,
+    segmented_text: str | None = None,
+) -> dict[str, Any]:
+    """Encode one example with a SLOW tokenizer (PhoBERT/ViHealthBERT-Word).
+
+    ``PhobertTokenizer`` has no fast implementation, so ``offset_mapping`` is
+    unavailable. Character spans are reconstructed by
+    :mod:`mednorm_vi.training.phobert_alignment`: segmented words are mapped back
+    to original half-open spans, then every BPE piece inherits its word's span.
+    Labels are then assigned by the SAME character-overlap rule used by the fast
+    path, so supervision semantics are unchanged.
+
+    ``segmented_text`` is the RDRSegmenter output (underscore-joined syllables).
+    When omitted, the original text is treated as already whitespace-segmented.
+    Raises :class:`~mednorm_vi.training.phobert_alignment.AlignmentError` when a
+    segmented word straddles a gold entity boundary (counted, never mislabeled).
+    """
+    text = str(example.get("text", ""))
+    entities = [
+        (int(e["start"]), int(e["end"])) for e in example.get("entities", []) or []
+    ]
+    words = map_segmented_words(text, segmented_text_to_words(segmented_text or text))
+    violations = find_boundary_violations(words, entities)
+    if violations:
+        raise AlignmentError(
+            f"{len(violations)} segmented word(s) straddle a gold entity boundary")
+    aligned = align_subtokens(
+        words, tokenizer, max_length=max_length,
+        cls_token_id=getattr(tokenizer, "cls_token_id", None),
+        sep_token_id=getattr(tokenizer, "sep_token_id", None))
+    offsets: list[tuple[int, int]] = [
+        (0, 0) if piece.is_special else (piece.original_start, piece.original_end)
+        for piece in aligned.subtokens
+    ]
+    input_ids = [piece.token_id for piece in aligned.subtokens]
+    encoded = {
+        "input_ids": input_ids,
+        "attention_mask": [1] * len(input_ids),
+        "offset_mapping": offsets,
+    }
+    feature = _labels_from_offsets(example, encoded, text=text,
+                                   coverage_by_source=coverage_by_source)
+
+    # Partial-truncation policy: an entity whose supervised subtokens only
+    # partially survived must NOT keep partial labels. Mask every retained
+    # subtoken of that entity (labels zeroed, label_mask 0) and count it.
+    report = classify_truncated_entities(words, aligned, entities)
+    for entity_index in report.partially_truncated:
+        ent_start, ent_end = entities[entity_index]
+        for position, piece in enumerate(aligned.subtokens):
+            if piece.is_special:
+                continue
+            if piece.original_start < ent_end and ent_start < piece.original_end:
+                feature["labels"][position] = [0 for _ in ENTITY_TYPE_ORDER]
+                feature["label_mask"][position] = 0
+
+    feature["truncated"] = aligned.truncated
+    feature["fully_dropped_entity_count"] = report.fully_dropped_count
+    feature["partially_truncated_entity_count"] = report.partially_truncated_count
+    feature["truncated_entity_count"] = report.truncated_entity_count
+    return feature
+
+
 def encode_mention_example(
     example: Mapping[str, Any], tokenizer: Any, *,
     coverage_by_source: Mapping[str, SourceCoverage],
@@ -309,8 +383,9 @@ def encode_mention_example(
 ) -> dict[str, Any]:
     """Tokenize one example and build token-level multi-type labels.
 
-    The tokenizer must be a fast tokenizer or test double returning
-    ``input_ids``, ``attention_mask``, and ``offset_mapping``.
+    Requires a tokenizer that returns ``offset_mapping`` (a fast tokenizer or a
+    test double). For the slow PhoBERT/ViHealthBERT-Word path used by S1 on
+    Colab, call :func:`encode_mention_example_slow` instead.
     """
     text = str(example.get("text", ""))
     encoded = tokenizer(
@@ -320,6 +395,15 @@ def encode_mention_example(
         max_length=max_length,
         add_special_tokens=True,
     )
+    return _labels_from_offsets(example, encoded, text=text,
+                                coverage_by_source=coverage_by_source)
+
+
+def _labels_from_offsets(
+    example: Mapping[str, Any], encoded: Mapping[str, Any], *, text: str,
+    coverage_by_source: Mapping[str, SourceCoverage],
+) -> dict[str, Any]:
+    """Shared label construction from (start, end) offsets — one rule for both paths."""
     offsets = [tuple(v) for v in encoded["offset_mapping"]]
     labels = [[0 for _ in ENTITY_TYPE_ORDER] for _ in offsets]
     label_mask = [0 for _ in offsets]
