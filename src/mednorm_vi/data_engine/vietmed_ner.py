@@ -18,7 +18,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
 
@@ -30,6 +30,14 @@ SCHEMA_VERSION = "canonical_example_v1"
 DATASET_ID = "vietmed_ner"
 SOURCE_REVISION = "e3d0393c733858402a7c04228f45d351d2ce6d8f"
 DEFAULT_MAPPING = "configs/resources/label_mappings/public_ner/vietmed_ner_v1.yaml"
+RUN_MODE_REAL = "REAL"
+RUN_MODE_SYNTHETIC_SMOKE = "SYNTHETIC_SMOKE"
+VALID_RUN_MODES = frozenset({RUN_MODE_REAL, RUN_MODE_SYNTHETIC_SMOKE})
+APPROVED_LEGACY_REAL_ARTIFACT = (
+    Path(__file__).resolve().parents[3]
+    / "configs" / "resources" / "legacy_intake"
+    / "vietmed_ner_audit0020_real_equivalent.json"
+)
 
 # Row repair classification.
 ACCEPT_AS_IS = "ACCEPT_AS_IS"
@@ -237,10 +245,63 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def load_approved_legacy_real_artifact_record(
+    path: str | Path = APPROVED_LEGACY_REAL_ARTIFACT,
+) -> dict[str, Any]:
+    return cast(dict[str, Any], json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def _matches_approved_legacy_real_manifest(
+    manifest: dict[str, Any], artifact_hashes: dict[str, str] | None,
+) -> bool:
+    if artifact_hashes is None:
+        return False
+    record = load_approved_legacy_real_artifact_record()
+    expected_manifest = record["manifest_fields"]
+    expected_source_files = record["source_files"]
+    expected_artifact_hashes = record["artifact_hashes"]
+    return (
+        "run_mode" not in manifest
+        and manifest.get("source_files") == expected_source_files
+        and artifact_hashes == expected_artifact_hashes
+        and all(manifest.get(k) == v for k, v in expected_manifest.items())
+    )
+
+
+def validate_artifact_run_mode(
+    manifest: dict[str, Any], *, allow_human_approved_legacy_real: bool = False,
+    legacy_artifact_hashes: dict[str, str] | None = None,
+) -> str:
+    """Return the manifest run mode, or fail fast if it is absent/invalid.
+
+    Audit 0020 accepts one historical Colab artifact whose manifest omitted
+    ``run_mode``. That exception is exact-match and opt-in; normal future intake
+    must record ``REAL`` or ``SYNTHETIC_SMOKE`` explicitly.
+    """
+    run_mode = manifest.get("run_mode")
+    if isinstance(run_mode, str) and run_mode in VALID_RUN_MODES:
+        return run_mode
+    if run_mode is None:
+        if allow_human_approved_legacy_real and _matches_approved_legacy_real_manifest(
+            manifest, legacy_artifact_hashes,
+        ):
+            return RUN_MODE_REAL
+        raise ValueError(
+            "vietmed artifact manifest missing required run_mode and does not match "
+            "the Audit 0020 approved legacy artifact")
+    raise ValueError(
+        f"vietmed artifact manifest has invalid run_mode {run_mode!r}; "
+        f"expected one of {sorted(VALID_RUN_MODES)}")
+
+
 def write_artifacts(
     out_dir: str | Path, examples: list[dict[str, Any]], summary: dict[str, Any], *,
-    mapping: VietMedMapping, source_hashes: dict[str, str], repo_commit: str = "",
-    resolved_columns: dict[str, str] | None = None,
+    mapping: VietMedMapping, source_hashes: dict[str, str], run_mode: str,
+    repo_commit: str = "", resolved_columns: dict[str, str] | None = None,
     notebook: str = "notebooks/MedNorm_Data_VietMed_Preprocess.ipynb",
 ) -> dict[str, Any]:
     """Write the clearly-named derived artifact tree.
@@ -249,6 +310,7 @@ def write_artifacts(
     classified HUMAN_REVIEW_REQUIRED (words/tags length mismatch) — a valid artifact
     must never be produced while such a mismatch exists.
     """
+    validated_run_mode = validate_artifact_run_mode({"run_mode": run_mode})
     if summary["offset_invalid"] != 0:
         raise ValueError(f"offset_invalid must be 0, got {summary['offset_invalid']}")
     if summary.get("human_review_required", 0) != 0:
@@ -278,6 +340,7 @@ def write_artifacts(
     manifest = {
         "schema_version": SCHEMA_VERSION, "adapter_version": ADAPTER_VERSION,
         "dataset_id": DATASET_ID, "source_revision": SOURCE_REVISION,
+        "run_mode": validated_run_mode,
         "mapping_version": mapping.version, "mapping_config_hash": mapping.config_hash,
         "source_files": source_hashes,
         "row_count": summary["rows_in"], "accepted": summary["accepted"],
@@ -312,7 +375,10 @@ def write_artifacts(
     return manifest
 
 
-def load_vietmed_artifacts(artifact_dir: str | Path) -> list[dict[str, Any]] | None:
+def load_vietmed_artifacts(
+    artifact_dir: str | Path, *, allow_human_approved_legacy_real: bool = False,
+    require_real: bool = False,
+) -> list[dict[str, Any]] | None:
     """Load returned VietMed canonical examples if present AND hash-valid; else None.
 
     Fails fast (ValueError) if the manifest is present but its recorded
@@ -322,10 +388,26 @@ def load_vietmed_artifacts(artifact_dir: str | Path) -> list[dict[str, Any]] | N
     base = Path(artifact_dir)
     jsonl_path = base / "canonical_examples" / "vietmed_ner_examples.jsonl"
     manifest_path = base / "manifests" / "vietmed_ner_preprocessing_manifest.json"
+    source_hashes_path = base / "manifests" / "vietmed_ner_source_hashes.json"
     if not (jsonl_path.is_file() and manifest_path.is_file()):
         return None
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    text = jsonl_path.read_text(encoding="utf-8")
+    jsonl_bytes = jsonl_path.read_bytes()
+    manifest_bytes = manifest_path.read_bytes()
+    source_hashes_bytes = source_hashes_path.read_bytes() if source_hashes_path.is_file() else b""
+    legacy_hashes = {
+        "canonical_jsonl_sha256": _sha256_bytes(jsonl_bytes),
+        "preprocessing_manifest_sha256": _sha256_bytes(manifest_bytes),
+        "source_hashes_json_sha256": _sha256_bytes(source_hashes_bytes),
+    }
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
+    run_mode = validate_artifact_run_mode(
+        manifest,
+        allow_human_approved_legacy_real=allow_human_approved_legacy_real,
+        legacy_artifact_hashes=legacy_hashes,
+    )
+    if require_real and run_mode != RUN_MODE_REAL:
+        raise ValueError(f"vietmed artifact run_mode must be REAL, got {run_mode!r}")
+    text = jsonl_bytes.decode("utf-8")
     if _sha256_text(text) != manifest.get("examples_jsonl_sha256"):
         raise ValueError("vietmed artifact corrupted: JSONL sha256 != manifest")
     if manifest.get("offset_invalid", 1) != 0:
@@ -376,8 +458,10 @@ def read_vietmed_parquet(data_dir: str | Path) -> list[dict[str, Any]]:  # pragm
 
 __all__ = [
     "ADAPTER_VERSION", "DATASET_ID", "VietMedMapping", "VietMedSchemaError",
+    "RUN_MODE_REAL", "RUN_MODE_SYNTHETIC_SMOKE", "VALID_RUN_MODES",
     "load_vietmed_mapping", "resolve_bio_columns",
     "classify_row", "convert_rows", "write_artifacts", "load_vietmed_artifacts",
+    "validate_artifact_run_mode", "load_approved_legacy_real_artifact_record",
     "read_vietmed_parquet",
     "WORD_COLUMN_CANDIDATES", "BIO_TAG_COLUMN_CANDIDATES",
     "ACCEPT_AS_IS", "DETERMINISTIC_REPAIR", "EXCLUDE", "HUMAN_REVIEW_REQUIRED",

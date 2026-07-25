@@ -88,6 +88,7 @@ def test_vietmed_notebook_writes_and_verifies_artifacts() -> None:
     assert "assert reloaded == examples" in code
     assert "assert summary['offset_invalid'] == 0" in code
     assert "assert summary['human_review_required'] == 0" in code
+    assert "run_mode=RUN_MODE" in code
     assert "repo_commit=RESOLVED_COMMIT" in code         # provenance is the resolved SHA
 
 
@@ -130,8 +131,7 @@ def test_integrity_report_does_not_claim_unverified_notebooks_are_verified() -> 
         if "SYNTHETIC_SMOKE_VERIFIED" in line:
             assert VIETMED in line, f"non-VietMed notebook claims smoke-verified: {line}"
         if "REAL_DATA_EXECUTED" in line or "ARTIFACTS_VERIFIED" in line:
-            # No notebook may claim real-data completion in this milestone.
-            assert "pending" in line.lower(), f"unsupported real-data claim: {line}"
+            assert VIETMED in line, f"unsupported real-data/artifact claim: {line}"
 
 
 def test_all_notebooks_are_valid_json() -> None:

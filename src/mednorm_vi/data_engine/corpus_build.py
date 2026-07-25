@@ -321,7 +321,10 @@ def build_governed_corpus(
     # Resolve VietMed inclusion up-front (fail fast; no silent fallback).
     vietmed_examples = None
     if include_vietmed is not False:
-        vietmed_examples = load_vietmed_artifacts(vietmed_artifact_dir)  # None if absent
+        vietmed_examples = load_vietmed_artifacts(
+            vietmed_artifact_dir,
+            allow_human_approved_legacy_real=True,
+            require_real=True)  # None if absent; exact Audit 0020 exception
     if include_vietmed is True and vietmed_examples is None:
         raise FileNotFoundError(
             f"include_vietmed=True but no valid VietMed artifacts under {vietmed_artifact_dir}")

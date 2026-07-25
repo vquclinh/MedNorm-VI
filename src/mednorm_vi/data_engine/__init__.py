@@ -9,8 +9,10 @@ from .vietmed_ner import (
     convert_rows as vietmed_convert_rows,
 )
 from .vietmed_ner import (
+    load_approved_legacy_real_artifact_record,
     load_vietmed_artifacts,
     load_vietmed_mapping,
+    validate_artifact_run_mode,
 )
 
 __all__ = [
@@ -24,6 +26,8 @@ __all__ = [
     "require_training_allowed",
     "validate_annotations",
     "vietmed_convert_rows",
+    "load_approved_legacy_real_artifact_record",
     "load_vietmed_artifacts",
     "load_vietmed_mapping",
+    "validate_artifact_run_mode",
 ]

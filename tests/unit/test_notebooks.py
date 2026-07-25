@@ -91,3 +91,4 @@ def test_vietmed_preprocess_is_cpu_dataprep_not_training() -> None:
     assert "pyarrow==" in src                      # pinned parquet reader
     assert "RUN_FULL_TRAINING" not in src          # not a training notebook
     assert "audio" in src.lower()                  # explicitly handles/excludes audio
+    assert "run_mode=RUN_MODE" in src              # future manifests persist execution mode

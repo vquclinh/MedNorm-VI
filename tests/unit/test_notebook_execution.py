@@ -102,6 +102,7 @@ def test_notebook_resolved_real_commit_sha(smoke_run) -> None:
     assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha)
     manifest = smoke_run["manifest"]
     assert isinstance(manifest, dict)
+    assert manifest["run_mode"] == "SYNTHETIC_SMOKE"
     assert manifest["repo_commit"] == sha            # provenance is the resolved SHA
     assert manifest["repo_commit"] not in ("main", "HEAD", "")
 
@@ -116,6 +117,7 @@ def test_notebook_manifest_hash_matches_generated_jsonl(smoke_run) -> None:
     jsonl = produced["canonical_examples/vietmed_ner_examples.jsonl"]
     manifest = json.loads(produced["manifests/vietmed_ner_preprocessing_manifest.json"])
     assert manifest["examples_jsonl_sha256"] == hashlib.sha256(jsonl.encode()).hexdigest()
+    assert manifest["run_mode"] == "SYNTHETIC_SMOKE"
     assert manifest["offset_invalid"] == 0
     assert manifest["resolved_columns"] == {"word_col": "words", "tag_col": "labels"}
 

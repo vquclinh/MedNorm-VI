@@ -62,3 +62,4 @@ Each audit should record, at minimum:
 - `0017-training-readiness-and-governed-corpus.md`
 - `0018-vietmed-adapter-and-preprocessing-correctness.md`
 - `0019-colab-notebook-execution-integrity.md`
+- `0020-vietmed-real-artifact-intake-and-corpus-rebuild.md`

@@ -20,7 +20,7 @@ behavioral execution evidence exists.
 
 | Notebook | Status | Evidence / gap |
 | --- | --- | --- |
-| `MedNorm_Data_VietMed_Preprocess.ipynb` | **SYNTHETIC_SMOKE_VERIFIED** | Executed cell-by-cell by `tests/unit/test_notebook_execution.py` in `SYNTHETIC_SMOKE` mode against a local `file://` checkout: real clone → resolved 40-hex SHA → adapter import → 7 real artifact files → manifest hash re-verified → audio-absence asserted. **Real VietMed data still pending** (needs a Colab CPU rerun in `REAL` mode). |
+| `MedNorm_Data_VietMed_Preprocess.ipynb` | **SYNTHETIC_SMOKE_VERIFIED + ARTIFACTS_VERIFIED** | Executed cell-by-cell by `tests/unit/test_notebook_execution.py` in `SYNTHETIC_SMOKE` mode against a local `file://` checkout: real clone -> resolved 40-hex SHA -> adapter import -> 7 real artifact files -> manifest hash re-verified -> audio-absence asserted. Audit 0020 verified the returned real artifact at `data/derived/training_corpora/vietmed_ner_v1/` using human-approved REAL-equivalent provenance. The original generated manifest did not contain `run_mode`; future manifests must contain `run_mode: REAL`. |
 | `MedNorm_S0_DomainAdaptation.ipynb` | `DESIGN_DRAFT` | Code cells contain `<fill:` placeholders, a commented `# !pip install`, commented model-loading calls, and describe-only prints. Not runnable. |
 | `MedNorm_S1_MentionExtraction.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
 | `MedNorm_S1_Mention_FirstRun_Smoke.ipynb` | `DESIGN_DRAFT` | Placeholders + describe-only prints (`print('smoke would run …')`). Not an executed smoke run. |
@@ -62,3 +62,7 @@ that specifically reject commented-out required commands.
   checkout verification, and this report never claims an unverified notebook is verified.
 - `tests/unit/test_repository_checkout.py` — the checkout helper against local `file://`
   repositories (placeholder rejection, resolved SHA, layout verification, failure modes).
+- `tests/unit/test_vietmed_adapter.py` - requires future generated manifests to record
+  `run_mode`, rejects missing/invalid values by default, rejects `SYNTHETIC_SMOKE`
+  artifacts for governed-corpus inclusion, and allows the Audit 0020 missing-field artifact
+  only through exact human-approved REAL-equivalent provenance.
