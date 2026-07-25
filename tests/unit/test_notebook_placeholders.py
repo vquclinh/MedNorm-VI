@@ -16,15 +16,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 NB = REPO / "notebooks"
 VIETMED = "MedNorm_Data_VietMed_Preprocess.ipynb"
+S1_SMOKE = "MedNorm_S1_Mention_FirstRun_Smoke.ipynb"
 ALL_NOTEBOOKS = sorted(p.name for p in NB.glob("*.ipynb"))
 
-# Notebooks honestly classified as DESIGN_DRAFT in
-# docs/notebooks/notebook_execution_integrity.md. They may still contain
-# placeholders, but must never be described as executable/complete.
+# Notebooks honestly classified as DESIGN_DRAFT in the integrity report. They may
+# still contain placeholders, but must never be described as executable/complete.
 DESIGN_DRAFTS = {
     "MedNorm_S0_DomainAdaptation.ipynb",
     "MedNorm_S1_MentionExtraction.ipynb",
-    "MedNorm_S1_Mention_FirstRun_Smoke.ipynb",
     "MedNorm_S2_Assertion.ipynb",
     "MedNorm_S3_Retrieval.ipynb",
     "MedNorm_S4_Reranker.ipynb",
@@ -109,6 +108,78 @@ def test_vietmed_notebook_success_prints_follow_assertions() -> None:
         assert non_print, f"cell {i} only prints; it performs no operation"
         assert ("assert " in src or "vm." in src or "checkout" in src), (
             f"cell {i} reports verification without an assertion or real call")
+
+
+# --- strict rules for the S1 first-run smoke notebook -------------------------
+
+def test_s1_smoke_notebook_has_no_placeholder_tokens() -> None:
+    code = _code(S1_SMOKE)
+    for token in _PLACEHOLDER_TOKENS:
+        assert token not in code, f"S1 smoke notebook contains placeholder {token!r}"
+    assert "smoke would run" not in code
+    assert not _ONCE_WIRED.search(code)
+    assert not re.search(r"\bpass\b", code)
+
+
+def test_s1_smoke_notebook_has_no_commented_required_commands() -> None:
+    code = _code(S1_SMOKE)
+    found = _COMMENTED_REQUIRED.findall(code)
+    assert not found, f"S1 smoke notebook has commented-out required command(s): {found}"
+
+
+def test_s1_smoke_notebook_uses_required_colab_paths() -> None:
+    code = _code(S1_SMOKE)
+    assert 'DRIVE_ROOT = Path("/content/drive/MyDrive/MedNorm-VI")' in code
+    assert 'REPO_DIR = Path("/content/MedNorm-VI")' in code
+    assert 'REPO_URL = "https://github.com/vquclinh/MedNorm-VI.git"' in code
+    assert 'REPO_REF = "main"' in code
+    assert 'OUTPUT_DIR = DRIVE_ROOT / "artifacts" / "s1_mention_first_run_smoke"' in code
+    assert 'MODEL_CACHE_DIR = DRIVE_ROOT / "model_cache" / "huggingface"' in code
+    assert "CORPUS_DIR = (\n    DRIVE_ROOT" in code
+    assert "REPO_DIR / \"data\"" not in code
+
+
+def test_s1_smoke_notebook_orders_corpus_gate_before_model_acquisition() -> None:
+    code = _code(S1_SMOKE)
+    clone_idx = code.index('"git",\n    "clone"')
+    import_idx = code.index("from mednorm_vi.training.s1_mention_smoke import")
+    verify_idx = code.index("corpus_report = verify_governed_corpus")
+    pip_idx = code.index("PIP_PACKAGES = [")
+    tokenizer_idx = code.index("AutoTokenizer.from_pretrained")
+    model_idx = code.index("AutoModel.from_pretrained")
+    assert clone_idx < import_idx < verify_idx < pip_idx < tokenizer_idx < model_idx
+    assert "assert IN_COLAB" in code
+    assert "assert torch.cuda.is_available()" in code
+
+
+def test_s1_smoke_notebook_is_strictly_bounded_and_smoke_only() -> None:
+    code = _code(S1_SMOKE)
+    assert "FULL_TRAINING_ENABLED = False" in code
+    assert "CONFIRM_FULL_TRAINING = \"\"" in code
+    assert "SMOKE_ONLY" in code
+    assert "max_optimizer_steps" in code
+    assert "limits.max_optimizer_steps" in code
+    assert "limits.max_train_batches" in code
+    assert "output.zip" not in code
+    assert "organizer" not in code.lower()
+
+
+def test_s1_smoke_notebook_writes_required_manifest_fields() -> None:
+    code = _code(S1_SMOKE)
+    for key in (
+        '"runtime": runtime_report',
+        '"resolved_commit": RESOLVED_COMMIT',
+        '"corpus": corpus_report',
+        '"actual_base_parameters": base_parameter_count_actual',
+        '"trainable_parameter_count": trainable_parameter_count',
+        '"loss_values": loss_values',
+        '"validation_metrics": validation_metrics',
+        '"checkpoint_sha256": checkpoint_sha256',
+        '"smoke_only_not_full_training": True',
+    ):
+        assert key in code
+    assert "training_manifest = {" in code
+    assert "TRAINING_MANIFEST_PATH.write_text" in code
 
 
 # --- honest classification for every other notebook --------------------------

@@ -42,6 +42,7 @@ def test_notebook_valid_json_and_safe(name: str) -> None:
     # behavioral test can redirect it. No other hard-coded user path is allowed.
     assert ("PROJECT_ROOT = '/content/drive/MyDrive/mednorm-vi'" in src
             or "'/content/drive/MyDrive/MedNorm-VI'" in src
+            or '"/content/drive/MyDrive/MedNorm-VI"' in src
             or "packaging" in name.lower() or "Folds" in name)
 
 
@@ -92,3 +93,30 @@ def test_vietmed_preprocess_is_cpu_dataprep_not_training() -> None:
     assert "RUN_FULL_TRAINING" not in src          # not a training notebook
     assert "audio" in src.lower()                  # explicitly handles/excludes audio
     assert "run_mode=RUN_MODE" in src              # future manifests persist execution mode
+
+
+def test_s1_first_run_smoke_uses_governed_config_and_drive_artifacts() -> None:
+    src = _src("MedNorm_S1_Mention_FirstRun_Smoke.ipynb")
+    assert 'Path("/content/drive/MyDrive/MedNorm-VI")' in src
+    assert 'Path("/content/MedNorm-VI")' in src
+    assert "configs/training/s1_mention_first_run_smoke.yaml" in src
+    assert "verify_governed_corpus(CORPUS_DIR, expected_corpus)" in src
+    assert 'OUTPUT_DIR = DRIVE_ROOT / "artifacts" / "s1_mention_first_run_smoke"' in src
+    assert "MODEL_CACHE_DIR = DRIVE_ROOT" in src
+    assert "AutoTokenizer.from_pretrained" in src
+    assert "AutoModel.from_pretrained" in src
+    assert "checkpoint_reload_succeeded" in src
+    assert "SMOKE_ONLY" in src
+    assert "output.zip" not in src
+
+
+def test_s1_first_run_smoke_notebook_status_is_implemented_unexecuted() -> None:
+    report = (REPO / "docs" / "notebooks" / "notebook_execution_integrity.md").read_text(
+        encoding="utf-8")
+    line = next(
+        line for line in report.splitlines()
+        if "MedNorm_S1_Mention_FirstRun_Smoke.ipynb" in line
+    )
+    assert "IMPLEMENTED_UNEXECUTED" in line
+    assert "SYNTHETIC_SMOKE_VERIFIED" not in line
+    assert "ARTIFACTS_VERIFIED" not in line

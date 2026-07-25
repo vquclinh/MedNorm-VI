@@ -51,16 +51,20 @@ locally and emit, for the user to run in Colab:
 8. how to return artifacts to the repository (`models/checkpoints/...` + manifest);
 9. the local validation commands to run after return.
 
-## Notebook readiness is evidence-based (Audit 0019)
+## Notebook readiness is evidence-based (Audits 0019, 0021)
 
 A notebook counts as runnable only with **behavioral execution evidence**, never because it
 has the expected section headings. Commented-out required commands (`# !git clone`,
 `# !pip install`) and `<fill: …>` values make a notebook unrunnable in a fresh Colab runtime.
 Current per-notebook statuses live in `docs/notebooks/notebook_execution_integrity.md`; today
-only `MedNorm_Data_VietMed_Preprocess.ipynb` is `SYNTHETIC_SMOKE_VERIFIED`, and every S0–S6
-notebook is `DESIGN_DRAFT`. Repository checkout inside a notebook must use the tested helper
-`mednorm_vi.reproducibility.repository_checkout`, which records the **resolved commit SHA**
-for artifact provenance.
+only `MedNorm_Data_VietMed_Preprocess.ipynb` is `SYNTHETIC_SMOKE_VERIFIED`. Audit 0021
+promotes `MedNorm_S1_Mention_FirstRun_Smoke.ipynb` to `IMPLEMENTED_UNEXECUTED`; it still
+requires a successful Colab Pro GPU return before any smoke-verified claim. The full S0–S6
+training notebooks remain `DESIGN_DRAFT`.
+
+Every Colab training notebook must clone the real repository, verify `src/mednorm_vi`,
+record the **resolved commit SHA**, use Drive for persistent corpora/model caches/artifacts,
+and fail fast before model acquisition if required governed data is absent or hash-mismatched.
 
 ## Return-to-repo contract
 

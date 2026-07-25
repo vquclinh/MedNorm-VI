@@ -1,5 +1,47 @@
 """Training stage planning and dry-run manifests."""
 
+from .s1_mention_smoke import (
+    ENTITY_TYPE_ORDER,
+    ENTITY_TYPE_TO_ID,
+    ExpectedCorpus,
+    SmokeLimits,
+    count_jsonl,
+    encode_mention_example,
+    expected_corpus_from_config,
+    iter_jsonl,
+    load_coverage,
+    load_smoke_config,
+    loss_mask_for_example,
+    pad_encoded_features,
+    preparation_digest,
+    select_deterministic_examples,
+    sha256_file,
+    smoke_limits_from_config,
+    verify_governed_corpus,
+    verify_vietmed_train_only_masks,
+)
 from .stages import TrainingPlan, TrainingStage, build_training_plan
 
-__all__ = ["TrainingPlan", "TrainingStage", "build_training_plan"]
+__all__ = [
+    "ENTITY_TYPE_ORDER",
+    "ENTITY_TYPE_TO_ID",
+    "ExpectedCorpus",
+    "SmokeLimits",
+    "TrainingPlan",
+    "TrainingStage",
+    "build_training_plan",
+    "count_jsonl",
+    "encode_mention_example",
+    "expected_corpus_from_config",
+    "iter_jsonl",
+    "load_coverage",
+    "load_smoke_config",
+    "loss_mask_for_example",
+    "pad_encoded_features",
+    "preparation_digest",
+    "select_deterministic_examples",
+    "sha256_file",
+    "smoke_limits_from_config",
+    "verify_governed_corpus",
+    "verify_vietmed_train_only_masks",
+]

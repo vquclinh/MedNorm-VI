@@ -23,7 +23,7 @@ behavioral execution evidence exists.
 | `MedNorm_Data_VietMed_Preprocess.ipynb` | **SYNTHETIC_SMOKE_VERIFIED + ARTIFACTS_VERIFIED** | Executed cell-by-cell by `tests/unit/test_notebook_execution.py` in `SYNTHETIC_SMOKE` mode against a local `file://` checkout: real clone -> resolved 40-hex SHA -> adapter import -> 7 real artifact files -> manifest hash re-verified -> audio-absence asserted. Audit 0020 verified the returned real artifact at `data/derived/training_corpora/vietmed_ner_v1/` using human-approved REAL-equivalent provenance. The original generated manifest did not contain `run_mode`; future manifests must contain `run_mode: REAL`. |
 | `MedNorm_S0_DomainAdaptation.ipynb` | `DESIGN_DRAFT` | Code cells contain `<fill:` placeholders, a commented `# !pip install`, commented model-loading calls, and describe-only prints. Not runnable. |
 | `MedNorm_S1_MentionExtraction.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
-| `MedNorm_S1_Mention_FirstRun_Smoke.ipynb` | `DESIGN_DRAFT` | Placeholders + describe-only prints (`print('smoke would run …')`). Not an executed smoke run. |
+| `MedNorm_S1_Mention_FirstRun_Smoke.ipynb` | `IMPLEMENTED_UNEXECUTED` | Audit 0021 replaced the design draft with a bounded Colab Pro GPU smoke wrapper: real Git clone, resolved commit SHA, Drive corpus gate, tracked smoke config, registry-selected ViHealthBERT source, Drive model cache, one optimizer step, tiny validation inference, checkpoint save/reload, and `training_manifest.json`. Local tests validate structure and pure helpers without model downloads. It has not yet been run on Colab, so it is not smoke-verified. |
 | `MedNorm_S2_Assertion.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
 | `MedNorm_S3_Retrieval.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
 | `MedNorm_S4_Reranker.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
@@ -31,9 +31,10 @@ behavioral execution evidence exists.
 | `MedNorm_S6_Calibration.ipynb` | `DESIGN_DRAFT` | Same placeholder pattern as S0. |
 | `MedNorm_Full_Offline_Inference_and_Packaging.ipynb` | `RETAINED_INFERENCE_NOTEBOOK` | Retained from an earlier milestone; no placeholders detected, but not behaviorally verified. |
 
-**No S0–S6 notebook is a "complete workflow."** Each needs its own focused milestone
-(real executable checkout, real dependency install, real training call, artifact export)
-plus behavioral verification before any promotion.
+**No S0–S6 notebook is a "complete workflow."** The S1 first-run smoke notebook is
+implemented but awaits a real Colab execution result; the other S0–S6 notebooks still
+need focused repair milestones. Full training remains blocked until smoke artifacts are
+returned and validated.
 
 ## What made the earlier claim wrong
 
@@ -57,12 +58,16 @@ that specifically reject commented-out required commands.
   fresh namespace, verifies artifacts, hashes, resolved SHA, and audio exclusion; asserts
   REAL mode fails fast without Parquet and never falls back to synthetic rows.
 - `tests/unit/test_notebook_placeholders.py` — rejects `<...>`/`TODO`/`REPLACE_ME`
-  placeholders and **commented-out `!pip`/`!git` commands** in the VietMed notebook; asserts
-  the checkout helper and pinned install are actually invoked, the adapter import follows
-  checkout verification, and this report never claims an unverified notebook is verified.
+  placeholders and **commented-out `!pip`/`!git` commands** in executable notebooks; asserts
+  the VietMed checkout helper and pinned install are actually invoked; asserts the S1 smoke
+  notebook uses the required Colab/Drive paths, verifies the corpus before model acquisition,
+  remains strictly bounded, and writes manifest/checkpoint evidence fields.
 - `tests/unit/test_repository_checkout.py` — the checkout helper against local `file://`
   repositories (placeholder rejection, resolved SHA, layout verification, failure modes).
 - `tests/unit/test_vietmed_adapter.py` - requires future generated manifests to record
   `run_mode`, rejects missing/invalid values by default, rejects `SYNTHETIC_SMOKE`
   artifacts for governed-corpus inclusion, and allows the Audit 0020 missing-field artifact
   only through exact human-approved REAL-equivalent provenance.
+- `tests/unit/test_s1_mention_smoke.py` - validates the S1 smoke config, corpus gate,
+  deterministic subset selection, VietMed approximate-label loss masks, token-label encoding,
+  and batch collation using synthetic fixtures plus the ignored governed corpus when present.
