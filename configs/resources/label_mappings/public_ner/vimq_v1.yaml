@@ -1,0 +1,39 @@
+version: 1
+dataset_id: vimq
+description: >-
+  Source label -> MedNorm-VI target mapping for ViMQ (inclusive token-index span
+  triples). Only `drug` yields a concrete typed target; ambiguous/merged labels are
+  held for review, never split across two targets.
+target_types: [TRIỆU_CHỨNG, TÊN_XÉT_NGHIỆM, KẾT_QUẢ_XÉT_NGHIỆM, CHẨN_ĐOÁN, THUỐC]
+mappings:
+  - source_label: drug
+    target: THUỐC
+    classification: MAP_EXACT
+    rationale: Drug spans align with THUỐC.
+    known_ambiguity: Occasional chemical/substance overlap.
+    allowed_for_span_training: true
+    allowed_for_type_training: true
+    requires_disambiguation: false
+    exclude_from_validation: false
+  - source_label: SYMPTOM_AND_DISEASE
+    target: REVIEW_REQUIRED
+    classification: REVIEW_REQUIRED
+    rationale: Merged symptom+disease label; must not be split into TRIỆU_CHỨNG and CHẨN_ĐOÁN silently.
+    allowed_for_span_training: true          # boundary supervision only
+    allowed_for_type_training: false
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - source_label: medical_procedure
+    target: CONTEXT_ONLY
+    classification: CONTEXT_ONLY
+    rationale: May overlap diagnostic tests, procedures, or treatment actions.
+    allowed_for_span_training: false
+    allowed_for_type_training: false
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - {source_label: O, target: DROP, classification: DROP, rationale: Non-entity tag.}
+  - {source_label: UNK, target: REVIEW_REQUIRED, classification: REVIEW_REQUIRED, rationale: Unknown source semantics.}
+  - {source_label: cause, target: DROP, classification: DROP, rationale: Sentence-level intent, not an entity span.}
+  - {source_label: method_diagnosis, target: DROP, classification: DROP, rationale: Sentence-level intent.}
+  - {source_label: severity, target: DROP, classification: DROP, rationale: Sentence-level intent.}
+  - {source_label: treatment, target: DROP, classification: DROP, rationale: Sentence-level intent.}

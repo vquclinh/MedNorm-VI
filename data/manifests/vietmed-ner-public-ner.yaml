@@ -68,11 +68,30 @@ redistribution_constraints: Unknown until human license/reuse review.
 privacy_considerations: Contains spoken medical text/audio metadata; do not reproduce examples or audio-derived text in tracked reports.
 split_provenance: Local train/validation/test Parquet files present; Hugging Face cache records snapshot e3d0393c733858402a7c04228f45d351d2ce6d8f.
 leakage_risk: unknown
-permitted_use: []
+permitted_use: [ner_training, domain_adaptation, evaluation]
 intended_mednorm_use: [metadata_inspection, label_mapping_review]
-prohibited_uses: [redistribution_before_review, training_before_license_review, row_conversion_without_parquet_reader]
+prohibited_uses: [raw_redistribution, automatic_label_collapse]
 attribution_requirements: Local README requests citation of arXiv:2406.13337 when used.
-governance_status: REVIEW_REQUIRED
-readiness_status: metadata_only_not_training
+training_use:
+  # SEPARATE from the source `license` block above (which preserves the original
+  # source-license fact). User-attested internal-training permission only.
+  status: USER_ATTESTED_PERMISSION
+  permission_attested_by_user: true
+  evidence_storage: external_not_tracked
+  internal_training_allowed: true
+  development_evaluation_allowed: true
+  raw_redistribution_allowed: false
+  intended_use: [internal_model_training, development_evaluation, ablation, domain_adaptation]
+governance_status: USER_ATTESTED_PERMISSION
+readiness_status: analysis_and_training_ready
 review_status: pending
-reviewer: ""
+reviewer: local user (author permission attested; evidence external, not tracked)
+# Honest corpus-inclusion status (Audit 0017): training is governance-allowed, but
+# the Parquet->canonical adapter needs pyarrow, so VietMed is NOT in governed corpus
+# v1 (built from the three text-readable datasets). Convert it via the Colab CPU
+# preprocessing notebook, then rebuild the corpus to include it.
+corpus_inclusion:
+  governance: GOVERNANCE_TRAINING_ALLOWED
+  technical_status: TECHNICALLY_PENDING_PREPROCESSING
+  governed_corpus_v1: NOT_INCLUDED_IN_GOVERNED_CORPUS_V1
+  preprocess_notebook: notebooks/MedNorm_Data_VietMed_Preprocess.ipynb

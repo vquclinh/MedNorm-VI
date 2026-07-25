@@ -59,6 +59,41 @@ def test_invalid_span_rejected() -> None:
         Span(-1, 2)
 
 
+def test_confirmed_organizer_example_end_exclusive() -> None:
+    # BTC-confirmed: a 25-char span "amlodipine 10 mg po daily" at [58, 83) with
+    # original_text[58:83] == the span text. Synthetic equivalent (no real sample).
+    prefix = "x" * 58
+    span_text = "amlodipine 10 mg po daily"          # 25 chars
+    doc = prefix + span_text + " tiếp tục"
+    assert len(span_text) == 25
+    p = _pred(span_text, 58, 83, "MEDICATION")
+    assert p.position == (58, 83)
+    assert doc[58:83] == span_text                    # end-exclusive invariant
+
+
+def test_span_ending_at_len_text() -> None:
+    doc = "Bệnh nhân ho"
+    p = _pred("ho", len(doc) - 2, len(doc), "SYMPTOM")
+    assert doc[p.position[0]:p.position[1]] == "ho"
+
+
+def test_repeated_surface_forms_at_different_positions() -> None:
+    doc = "ho nhiều, sau đó ho khan"
+    first = _pred("ho", 0, 2, "SYMPTOM")
+    second = _pred("ho", 17, 19, "SYMPTOM")
+    assert doc[0:2] == "ho" and doc[17:19] == "ho"
+    assert first.position != second.position          # distinct positions preserved
+
+
+def test_inclusive_end_output_would_be_wrong() -> None:
+    # An inclusive-end emitter would output end-1; assert we do NOT do that.
+    doc = "paracetamol"
+    p = _pred("paracetamol", 0, 11, "MEDICATION")
+    assert p.position == (0, 11)                       # end-exclusive == len
+    assert p.position != (0, 10)                       # inclusive-end would be wrong
+    assert doc[0:11] == "paracetamol"
+
+
 # --- per-type organizer field contract ---
 
 def test_medication_and_diagnosis_carry_candidates_and_assertions() -> None:

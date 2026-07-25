@@ -59,3 +59,4 @@ Each audit should record, at minimum:
 - `0014-rxnorm-full-intake-and-integration.md`
 - `0015-btc-input-turn2-vong1-update.md`
 - `0016-organizer-data-layout-contract-and-hygiene.md`
+- `0017-training-readiness-and-governed-corpus.md`

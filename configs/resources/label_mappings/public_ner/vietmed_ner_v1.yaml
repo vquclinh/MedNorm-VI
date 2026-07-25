@@ -1,0 +1,38 @@
+version: 1
+dataset_id: vietmed_ner
+description: >-
+  Source label -> MedNorm-VI target mapping for VietMed-NER (37 BIO tags = O + B/I
+  for 18 entity types; Parquet source). Only DRUGCHEMICAL yields a concrete typed
+  target (approximate). The canonical adapter for this dataset requires a Parquet
+  reader (pyarrow) — see docs/training/governed_corpus_v1.md; v1 governed corpus is
+  built from the three text-readable datasets and VietMed is added as a documented
+  pyarrow preprocessing step.
+target_types: [TRIỆU_CHỨNG, TÊN_XÉT_NGHIỆM, KẾT_QUẢ_XÉT_NGHIỆM, CHẨN_ĐOÁN, THUỐC]
+requires_parquet_reader: true
+mappings:
+  - source_label: DRUGCHEMICAL
+    target: THUỐC
+    classification: MAP_APPROXIMATE
+    rationale: Drug/chemical spans map to THUỐC but also cover non-drug chemicals.
+    known_ambiguity: Non-drug chemicals; boundary/scope review required.
+    allowed_for_span_training: true
+    allowed_for_type_training: true
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - {source_label: DISEASESYMTOM, target: REVIEW_REQUIRED, classification: REVIEW_REQUIRED, rationale: Merged disease+symptom; do not split.}
+  - {source_label: DIAGNOSTICS, target: REVIEW_REQUIRED, classification: REVIEW_REQUIRED, rationale: May overlap TÊN_XÉT_NGHIỆM or procedures.}
+  - {source_label: SURGERY, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Procedure/surgery; not a MedNorm-VI type.}
+  - {source_label: TREATMENT, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Medication/procedure/plan mix.}
+  - {source_label: UNITCALIBRATOR, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Units support lab parsing; not standalone.}
+  - {source_label: MEDDEVICETECHNIQUE, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Devices/techniques are context.}
+  - {source_label: ORGAN, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Anatomy context.}
+  - {source_label: PREVENTIVEMED, target: CONTEXT_ONLY, classification: CONTEXT_ONLY, rationale: Preventive-medicine context.}
+  - {source_label: FOODDRINK, target: DROP, classification: DROP, rationale: Not a MedNorm-VI type.}
+  - {source_label: PERSONALCARE, target: DROP, classification: DROP, rationale: Not a MedNorm-VI type.}
+  - {source_label: AGE, target: DROP, classification: DROP, rationale: Demographic.}
+  - {source_label: DATETIME, target: DROP, classification: DROP, rationale: Temporal.}
+  - {source_label: GENDER, target: DROP, classification: DROP, rationale: Demographic.}
+  - {source_label: LOCATION, target: DROP, classification: DROP, rationale: Location.}
+  - {source_label: OCCUPATION, target: DROP, classification: DROP, rationale: Occupation.}
+  - {source_label: ORGANIZATION, target: DROP, classification: DROP, rationale: Organization.}
+  - {source_label: TRANSPORTATION, target: DROP, classification: DROP, rationale: Exposure context.}

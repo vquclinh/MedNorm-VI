@@ -1,0 +1,51 @@
+version: 1
+dataset_id: vimedner
+description: >-
+  Source label -> MedNorm-VI target mapping for ViMedNER, with per-label training
+  permissions. Targets limited to the five MedNorm-VI entity types. Merged/ambiguous
+  source categories are never silently split across two targets.
+target_types: [TRIỆU_CHỨNG, TÊN_XÉT_NGHIỆM, KẾT_QUẢ_XÉT_NGHIỆM, CHẨN_ĐOÁN, THUỐC]
+# classification ∈ {MAP_EXACT, MAP_APPROXIMATE, CONTEXT_ONLY, DROP, REVIEW_REQUIRED}
+mappings:
+  - source_label: ten_benh
+    target: CHẨN_ĐOÁN
+    classification: MAP_EXACT          # TYPE is unambiguous (disease-name == diagnosis)
+    boundary_review: true              # source boundaries may include modifiers
+    rationale: Disease-name label maps type-exactly to CHẨN_ĐOÁN; boundary review flagged separately.
+    known_ambiguity: Boundaries may include modifiers.
+    allowed_for_span_training: true
+    allowed_for_type_training: true
+    requires_disambiguation: false
+    exclude_from_validation: false
+  - source_label: trieu_chung_benh
+    target: TRIỆU_CHỨNG
+    classification: MAP_EXACT          # TYPE is unambiguous (symptom == triệu chứng)
+    boundary_review: true
+    rationale: Symptom label maps type-exactly to TRIỆU_CHỨNG; boundary review flagged separately.
+    known_ambiguity: Symptom/finding boundary variance.
+    allowed_for_span_training: true
+    allowed_for_type_training: true
+    requires_disambiguation: false
+    exclude_from_validation: false
+  - source_label: bien_phap_chan_doan
+    target: REVIEW_REQUIRED
+    classification: REVIEW_REQUIRED
+    rationale: Diagnostic method may be a test name (TÊN_XÉT_NGHIỆM) or a procedure; not safely typed.
+    allowed_for_span_training: false
+    allowed_for_type_training: false
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - source_label: bien_phap_dieu_tri
+    target: CONTEXT_ONLY
+    classification: CONTEXT_ONLY
+    rationale: Treatment method mixes medication, procedure, and plan; usable only as context/evidence.
+    allowed_for_span_training: false
+    allowed_for_type_training: false
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - source_label: nguyen_nhan_benh
+    target: DROP
+    classification: DROP
+    rationale: Etiology/cause is not a MedNorm-VI entity type.
+    allowed_for_span_training: false
+    allowed_for_type_training: false

@@ -52,11 +52,21 @@ redistribution_constraints: Unknown until human license/reuse review.
 privacy_considerations: Public medical question text; examples must not be copied into tracked reports.
 split_provenance: Local train/dev/test split JSON files present; split provenance needs human confirmation.
 leakage_risk: medium
-permitted_use: []
+permitted_use: [ner_training, domain_adaptation, evaluation]
 intended_mednorm_use: [corpus_analysis, label_mapping_review]
-prohibited_uses: [redistribution_before_review, training_before_license_review, automatic_label_collapse]
+prohibited_uses: [raw_redistribution, automatic_label_collapse]
 attribution_requirements: Paper citation requirement needs human verification from the referenced publication.
-governance_status: REVIEW_REQUIRED
-readiness_status: analysis_only_not_training
+training_use:
+  # SEPARATE from the source `license` block above (which preserves the original
+  # source-license fact). User-attested internal-training permission only.
+  status: USER_ATTESTED_PERMISSION
+  permission_attested_by_user: true
+  evidence_storage: external_not_tracked
+  internal_training_allowed: true
+  development_evaluation_allowed: true
+  raw_redistribution_allowed: false
+  intended_use: [internal_model_training, development_evaluation, ablation, domain_adaptation]
+governance_status: USER_ATTESTED_PERMISSION
+readiness_status: analysis_and_training_ready
 review_status: pending
-reviewer: ""
+reviewer: local user (author permission attested; evidence external, not tracked)

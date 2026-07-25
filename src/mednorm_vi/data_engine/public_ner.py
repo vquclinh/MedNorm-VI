@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..resources.models import USABLE_STATUSES
 from ..resources.ner import NerDatasetManifest
 from ..schemas.constants import ENTITY_TYPES
 from ..schemas.spans import Span
@@ -583,10 +582,18 @@ def duplicate_groups_by_hash(
 
 
 def require_training_allowed(manifest: NerDatasetManifest) -> None:
-    if manifest.license.status not in USABLE_STATUSES:
+    """Gate training use on the SEPARATE user-attested `training_use` block, NOT on
+    the source `license` status (which is preserved as the original source fact).
+
+    A dataset may be REVIEW_REQUIRED as a source license yet still be internally
+    training-eligible under a user attestation; raw redistribution stays forbidden.
+    """
+    tu = manifest.training_use
+    if str(tu.get("status", "")) != "USER_ATTESTED_PERMISSION" or not tu.get(
+        "internal_training_allowed", tu.get("permission_attested_by_user", False)
+    ):
         raise PublicDatasetGovernanceError(
-            f"{manifest.dataset_id}: license status {manifest.license.status} "
-            "does not permit training use"
+            f"{manifest.dataset_id}: training_use does not attest internal training permission"
         )
     if "ner_training" not in manifest.permitted_use:
         raise PublicDatasetGovernanceError(

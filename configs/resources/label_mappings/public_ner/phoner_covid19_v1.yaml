@@ -1,0 +1,27 @@
+version: 1
+dataset_id: phoner_covid19
+description: >-
+  Source label -> MedNorm-VI target mapping for PhoNER_COVID19. Its only clinical
+  label (SYMPTOM_AND_DISEASE) is a merged symptom+disease category and is held for
+  review — never split across TRIỆU_CHỨNG and CHẨN_ĐOÁN. Remaining labels are
+  demographic/context and are dropped. This dataset contributes domain text and
+  boundary signal, not concrete typed entities, in v1.
+target_types: [TRIỆU_CHỨNG, TÊN_XÉT_NGHIỆM, KẾT_QUẢ_XÉT_NGHIỆM, CHẨN_ĐOÁN, THUỐC]
+mappings:
+  - source_label: SYMPTOM_AND_DISEASE
+    target: REVIEW_REQUIRED
+    classification: REVIEW_REQUIRED
+    rationale: Merged symptom+disease; must not be silently mapped to both diagnosis and symptom.
+    allowed_for_span_training: true          # boundary supervision only (domain adaptation)
+    allowed_for_type_training: false
+    requires_disambiguation: true
+    exclude_from_validation: true
+  - {source_label: AGE, target: DROP, classification: DROP, rationale: Demographic; not a MedNorm-VI type (patient info is context only).}
+  - {source_label: DATE, target: DROP, classification: DROP, rationale: Temporal.}
+  - {source_label: GENDER, target: DROP, classification: DROP, rationale: Demographic.}
+  - {source_label: JOB, target: DROP, classification: DROP, rationale: Occupation.}
+  - {source_label: LOCATION, target: DROP, classification: DROP, rationale: Location.}
+  - {source_label: NAME, target: DROP, classification: DROP, rationale: Person name.}
+  - {source_label: ORGANIZATION, target: DROP, classification: DROP, rationale: Organization.}
+  - {source_label: PATIENT_ID, target: DROP, classification: DROP, rationale: Identifier.}
+  - {source_label: TRANSPORTATION, target: DROP, classification: DROP, rationale: Exposure context.}

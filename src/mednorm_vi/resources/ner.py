@@ -102,6 +102,9 @@ class NerDatasetManifest:
     readiness_status: str = "not_ready"
     review_status: str = "pending"
     reviewer: str = ""
+    # User-attested training permission, kept SEPARATE from the source license.
+    # The source `license` field is never rewritten to reflect user permission.
+    training_use: dict[str, Any] = field(default_factory=dict)
     manifest_version: int = 1
 
 
@@ -175,6 +178,7 @@ def ner_manifest_from_mapping(d: dict[str, Any]) -> NerDatasetManifest:
         readiness_status=str(d.get("readiness_status", "not_ready")),
         review_status=str(d.get("review_status", "pending")),
         reviewer=str(d.get("reviewer", "")),
+        training_use=dict(d.get("training_use", {}) or {}),
         manifest_version=int(d.get("manifest_version", 1)))
 
 

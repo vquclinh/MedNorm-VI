@@ -81,8 +81,14 @@ def test_four_public_ner_manifests_validate() -> None:
         manifest = load_ner_manifest(REPO / "data" / "manifests" / name)
         result = validate_ner_manifest(manifest)
         assert result.ok, (name, result.errors)
+        # Governance separation (Audit 0017): the SOURCE license fact is preserved
+        # (REVIEW_REQUIRED), and training permission lives in a SEPARATE training_use
+        # block — the source license is never rewritten to reflect user permission.
         assert manifest.license.status == "REVIEW_REQUIRED"
-        assert not manifest.permitted_use
+        assert manifest.training_use.get("status") == "USER_ATTESTED_PERMISSION"
+        assert manifest.training_use.get("internal_training_allowed") is True
+        assert manifest.training_use.get("raw_redistribution_allowed") is False
+        assert "ner_training" in manifest.permitted_use
 
 
 def test_source_revision_parsing_and_tree_hash_determinism(tmp_path: Path) -> None:

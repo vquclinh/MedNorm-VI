@@ -1,0 +1,45 @@
+# Checkpoint manifest TEMPLATE (Audit 0017).
+# One manifest accompanies every returned Colab checkpoint. Weights/optimizer
+# states are git-ignored; this metadata file is tracked/reviewable. Restricted
+# base-model weights are never committed.
+#
+# Copy to: models/checkpoints/full_v1/<role_path>/checkpoint_manifest.yaml
+# Fill <PLACEHOLDER> values from the Colab run. Counts marked "unverified" until a
+# parameter-count script confirms them.
+
+manifest_version: 1
+role: <mention/vihealthbert | assertion/assertion_hydra | retrieval/icd_dense | ...>
+expected_local_path: models/checkpoints/full_v1/<role_path>/
+
+base_model:
+  name: <e.g. ViHealthBERT>
+  revision: <pinned model revision / commit>
+  tokenizer_revision: <pinned tokenizer revision>
+  parameter_count: <int>            # base params
+  parameter_count_verified: false
+  license: <base model license>
+  redistribution_policy: <restricted | permitted | forbidden>
+
+adapters_or_heads:
+  count: <int>
+  adapter_parameter_count: <int>    # excluded from the 9B base budget, still recorded
+
+training:
+  dataset_manifest_hash: <sha256 of corpus_manifest.json>
+  split_manifest_hash: <sha256 of split_manifest.json>
+  config_hash: <sha256 of training config>
+  git_commit: <repo commit used>
+  seed: <int>
+  colab_runtime: <GPU type>
+  mode: <smoke | full>
+
+metrics:
+  # smoke runs record path-verification only; full runs record eval metrics.
+  notes: <e.g. "smoke: 3 batches, loss finite; not a trained model">
+
+artifacts:
+  weights_sha256: <sha256 or "unavailable (git-ignored)">
+  config_sha256: <sha256>
+  tokenizer_sha256: <sha256>
+
+status: <SMOKE_ONLY | TRAINED | AWAITING_RETURN>
