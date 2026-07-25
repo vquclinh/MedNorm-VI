@@ -6,6 +6,8 @@ from .input_update import (
     SnapshotFingerprint,
     classify_input_change,
     fingerprint,
+    fingerprint_archive,
+    temporary_input_extraction,
     unsafe_zip_members,
 )
 
@@ -16,5 +18,7 @@ __all__ = [
     "SnapshotFingerprint",
     "classify_input_change",
     "fingerprint",
+    "fingerprint_archive",
+    "temporary_input_extraction",
     "unsafe_zip_members",
 ]

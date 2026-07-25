@@ -10,8 +10,12 @@ hashes.
 from __future__ import annotations
 
 import hashlib
+import shutil
 import stat
+import tempfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,6 +69,38 @@ def unsafe_zip_members(zip_path: str | Path) -> tuple[str, ...]:
                     or stat.S_ISLNK((info.external_attr >> 16) & 0xFFFF)):
                 unsafe.append(name)
     return tuple(unsafe)
+
+
+def _input_root(extract_dir: Path) -> Path:
+    """The organizer input root inside an extraction (``input/`` if present)."""
+    nested = extract_dir / "input"
+    return nested if nested.is_dir() else extract_dir
+
+
+@contextmanager
+def temporary_input_extraction(zip_path: str | Path) -> Iterator[Path]:
+    """Safely extract an organizer input ZIP into a temporary directory and yield
+    its input root, cleaning up on exit. Refuses unsafe archives.
+
+    Enables comparing an archived historical release without keeping it
+    permanently extracted (the active input is the only persistent extraction).
+    """
+    unsafe = unsafe_zip_members(zip_path)
+    if unsafe:
+        raise ValueError(f"refusing to extract unsafe archive members: {unsafe}")
+    tmp = Path(tempfile.mkdtemp(prefix="mednorm-input-verify-"))
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp)
+        yield _input_root(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def fingerprint_archive(zip_path: str | Path) -> SnapshotFingerprint:
+    """Fingerprint the input payload of a ZIP archive without a persistent extract."""
+    with temporary_input_extraction(zip_path) as root:
+        return fingerprint(root)
 
 
 def fingerprint(root: str | Path) -> SnapshotFingerprint:
@@ -158,7 +194,7 @@ def classify_input_change(old_root: str | Path, new_root: str | Path) -> InputCh
 
 __all__ = [
     "SnapshotFingerprint", "InputChangeReport", "fingerprint", "classify_input_change",
-    "unsafe_zip_members",
+    "unsafe_zip_members", "temporary_input_extraction", "fingerprint_archive",
     "EXACTLY_IDENTICAL", "REPACKAGED_ONLY", "CONTENT_CHANGED",
     "SCHEMA_OR_LAYOUT_CHANGED", "INVALID_OR_INCOMPLETE",
 ]

@@ -1,30 +1,33 @@
 version: 1
 name: organizer_active_input
-# Canonical descriptor of the ACTIVE organizer test input (Audit 0015).
-# Single source of truth for which snapshot the stable active path currently holds.
+# Canonical descriptor of the ACTIVE organizer test input.
+# Single source of truth for which release the stable active path holds.
 # Repository commands read the active path directly (it is intentionally stable);
-# this file records provenance and hashes. No raw clinical text is stored here.
+# this file records provenance and hashes only. No raw clinical text is stored.
+#
+# Layout (Audit 0015): the ONLY persistent extracted dataset is the active
+# input/. Historical releases are retained solely as verified ZIP archives under
+# archives/<release>/ and are recoverable on demand — there is no persistent
+# snapshots/ directory and no hash-named path. Payload hashes live here as
+# metadata, never in filesystem paths.
 #
 # NOTE: deliberately NOT placed under data/manifests/ — that directory is
 # auto-validated by the external-resource governance validator, which would
 # misclassify input-only organizer data. Organizer input is INPUT ONLY and must
 # never be used as training/label data.
 
-active:
-  snapshot_id: btc-input-turn2-vong1
-  input_path: data/organizer_test/input          # stable path used by all commands
-  snapshot_path: data/organizer_test/snapshots/btc-input-turn2-vong1/input
-  file_count: 100
-  total_bytes: 265147
-  tree_hash_sha256: d7ace1838a3433ba40ca3a9df5a8fc3a86be5a2a7ca989c8361e2175dd58620d
+active_input:
+  id: turn2_vong1
+  path: data/organizer_test/input                 # stable path used by all commands
+  archive_path: data/organizer_test/archives/turn2_vong1/input_turn2_vong1.zip
+  organizer_filename: input_turn2_vong1.zip
+  payload_tree_hash: d7ace1838a3433ba40ca3a9df5a8fc3a86be5a2a7ca989c8361e2175dd58620d
+  document_count: 100
   document_extension: .txt
   encoding: utf-8 (no BOM; LF newlines)
-  archive:
-    path: data/organizer_test/archives/input_turn2_vong1.zip
-    organizer_filename: input_turn2_vong1.zip
-    md5: 59a776041d004d625e1a9ad22d49f817
-    sha256: 989d82404a9c1f3739e15d68a1e69d0f1f90d35c93c04ab0988e071fc1525545
-    official_checksum: unavailable       # BTC did not publish a checksum
+  archive_md5: 59a776041d004d625e1a9ad22d49f817
+  archive_sha256: 989d82404a9c1f3739e15d68a1e69d0f1f90d35c93c04ab0988e071fc1525545
+  official_checksum: unavailable                  # BTC did not publish a checksum
   corpus:
     documents: 100
     characters: 203817
@@ -33,15 +36,14 @@ active:
     empty_documents: 0
     duplicate_documents: 0
 
-prior:
-  snapshot_id: btc-input-prior-56244aa3e772dd67
-  snapshot_path: data/organizer_test/snapshots/btc-input-prior-56244aa3e772dd67/input
-  file_count: 100
-  total_bytes: 170948
-  tree_hash_sha256: 56244aa3e772dd67bcdd80a5e02b50bb4c1b12818edd1b69adce6582377af23e
-  archive:
-    path: data/organizer_test/archives/input.zip
-    md5: 4148360722506d51532d0f6837581912
+previous_input:
+  id: initial_release
+  extracted_path: null                            # not kept extracted; archive-only
+  archive_path: data/organizer_test/archives/initial_release/input.zip
+  payload_tree_hash: 56244aa3e772dd67bcdd80a5e02b50bb4c1b12818edd1b69adce6582377af23e
+  archive_md5: 4148360722506d51532d0f6837581912
+  document_count: 100
+  recoverable_from_archive: true
 
 update:
   round: "vong1 (Round 1) — unverified BTC naming; neutral id used"
@@ -49,9 +51,9 @@ update:
   classification: CONTENT_CHANGED
   added_documents: 0
   removed_documents: 0
-  modified_documents: 100          # all 100 documents textually changed
+  modified_documents: 100                         # all 100 documents textually changed
   content_identical_documents: 0
-  layout_changed: false            # same 100 flat .txt files, same names
+  layout_changed: false                           # same 100 flat .txt files, same names
   labels_or_ground_truth_changed: unknown_not_present   # input-only; no labels present
   activated: true
   activation_date: "2026-07-22"

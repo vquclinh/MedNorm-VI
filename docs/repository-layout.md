@@ -29,9 +29,8 @@ only documents where things live and what is tracked vs ignored.
 | `data/external/rxnorm/prescribable-2026-07-06/` | RxNorm Current Prescribable RRF package (`RXNCONSO/RXNREL/RXNSAT.RRF`; **no `RXNSTY.RRF`**; **no ZIP**). `REVIEW_REQUIRED`. | Ignored |
 | `data/external/rxnorm/full-2026-07-06/` | RxNorm Full Monthly Release: `archive/` (verified ZIP, preserved) + `raw/` (Full `rrf/` incl. `RXNSTY.RRF`, historical files; bundled `prescribe/rrf/` subset). UMLS-licensed, `REDISTRIBUTION_RESTRICTED`. Added in Audit 0014. | Ignored |
 | `data/external/public_ner/{phoner_covid19,vimedner,vimq,vietmed_ner}/` | Four public Vietnamese medical NER datasets. All `REVIEW_REQUIRED` (not training-eligible). | Ignored |
-| `data/organizer_test/input/` | **Active** organizer input documents (**input only, never labeled**). Stable path used by all commands; currently holds snapshot `btc-input-turn2-vong1` (Audit 0015). | Ignored |
-| `data/organizer_test/snapshots/<id>/input/` | Versioned organizer input snapshots for rollback (`btc-input-turn2-vong1` active; `btc-input-prior-…` preserved). Descriptor: `configs/organizer/active_input.yaml`. | Ignored |
-| `data/organizer_test/archives/*.zip` | Original organizer input ZIP archives (provenance). | Ignored |
+| `data/organizer_test/input/` | **Active** organizer input documents (**input only, never labeled**). The ONLY persistent extraction; stable path used by all commands; currently holds the `turn2_vong1` release. Descriptor: `configs/organizer/active_input.yaml`. | Ignored |
+| `data/organizer_test/archives/<release>/*.zip` | Verified organizer input ZIP archives per release (`initial_release/input.zip`, `turn2_vong1/input_turn2_vong1.zip`). Historical releases are retained **archive-only** (recoverable on demand); there is no persistent `snapshots/` directory and no hash-named path. | Ignored |
 | `data/external_permitted/`, `data/dev_gold/`, `data/dev_silver/`, `data/synthetic/` | Reserved data roots (`.gitkeep` placeholders). | Ignored |
 
 ## Derived / generated roots (ignored, reproducible)

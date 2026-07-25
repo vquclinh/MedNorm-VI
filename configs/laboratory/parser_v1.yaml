@@ -27,6 +27,10 @@ qualitative_terms:
   - {term: dương tính, lang: vi}
   - {term: không phát hiện, lang: vi}
   - {term: có, lang: vi}
+  # Normal/abnormal descriptors (Audit 0015 lab-boundary review; lexicon
+  # coverage, not threshold tuning). Multi-word terms are matched verbatim.
+  - {term: bình thường, lang: vi}
+  - {term: tăng nhẹ, lang: vi}
 
 reference_range:
   - '\(\s*\d+(?:[.,]\d+)?\s?[-–]\s?\d+(?:[.,]\d+)?\s*\)'

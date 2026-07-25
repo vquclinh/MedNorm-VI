@@ -8,11 +8,14 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 from mednorm_vi.round2 import (
     classify_input_change,
     fingerprint,
+    fingerprint_archive,
+    temporary_input_extraction,
     unsafe_zip_members,
 )
 from mednorm_vi.round2.input_update import (
@@ -102,19 +105,72 @@ def test_zip_traversal_is_detected(tmp_path: Path) -> None:
     assert "../evil.txt" in unsafe
 
 
+def test_temporary_extraction_yields_input_root_and_cleans_up(tmp_path: Path) -> None:
+    z = tmp_path / "release.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("input/1.txt", "alpha\n")
+        zf.writestr("input/2.txt", "beta\n")
+    seen: Path | None = None
+    with temporary_input_extraction(z) as root:
+        seen = root
+        assert root.name == "input"
+        assert {p.name for p in root.iterdir()} == {"1.txt", "2.txt"}
+    assert seen is not None and not seen.exists()   # cleaned up on exit
+
+
+def test_temporary_extraction_refuses_unsafe_archive(tmp_path: Path) -> None:
+    z = tmp_path / "evil.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("../evil.txt", "pwn")
+    with pytest.raises(ValueError):
+        with temporary_input_extraction(z):
+            pass
+
+
+def test_fingerprint_archive_matches_extracted(tmp_path: Path) -> None:
+    src = _write(tmp_path / "input", {"1.txt": b"a\n", "2.txt": b"bb\n"})
+    z = tmp_path / "r.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        for p in sorted(src.iterdir()):
+            zf.write(p, arcname=f"input/{p.name}")
+    assert fingerprint_archive(z).tree_hash == fingerprint(src).tree_hash
+
+
 # --- active-input descriptor --------------------------------------------------
 
 def test_active_input_descriptor_is_consistent() -> None:
     cfg = yaml.safe_load(ACTIVE_INPUT_CFG.read_text(encoding="utf-8"))
-    active = cfg["active"]
-    assert active["snapshot_id"] == "btc-input-turn2-vong1"
-    assert active["input_path"] == "data/organizer_test/input"
-    assert len(active["tree_hash_sha256"]) == 64
+    active = cfg["active_input"]
+    assert active["id"] == "turn2_vong1"
+    assert active["path"] == "data/organizer_test/input"
+    assert active["archive_path"] == \
+        "data/organizer_test/archives/turn2_vong1/input_turn2_vong1.zip"
+    assert len(active["payload_tree_hash"]) == 64
+    assert active["document_count"] == 100
+    prev = cfg["previous_input"]
+    assert prev["id"] == "initial_release"
+    assert prev["extracted_path"] is None                 # archive-only, not extracted
+    assert prev["archive_path"] == \
+        "data/organizer_test/archives/initial_release/input.zip"
+    assert prev["recoverable_from_archive"] is True
     assert cfg["update"]["classification"] == "CONTENT_CHANGED"
     assert cfg["update"]["activated"] is True
-    assert cfg["prior"]["snapshot_id"].startswith("btc-input-prior-")
-    # descriptor must not leak raw clinical text (only metadata/hashes)
     assert cfg["raw_data_tracking"] == "prohibited"
+
+
+def test_active_descriptor_paths_are_not_hash_or_snapshot_based() -> None:
+    # The descriptor's PATH values must be human-readable — no snapshots/ dir and
+    # no hash-named path. (Hashes are fine as metadata VALUES, not as paths.)
+    cfg = yaml.safe_load(ACTIVE_INPUT_CFG.read_text(encoding="utf-8"))
+    paths = [
+        cfg["active_input"]["path"],
+        cfg["active_input"]["archive_path"],
+        cfg["previous_input"]["archive_path"],
+    ]
+    for p in paths:
+        assert "snapshots/" not in p
+        assert "btc-input-prior" not in p and "btc-input-turn2-vong1" not in p
+        assert "56244aa3e772dd67" not in p and "d7ace1838a3433ba" not in p
 
 
 def test_active_descriptor_has_no_raw_text() -> None:
