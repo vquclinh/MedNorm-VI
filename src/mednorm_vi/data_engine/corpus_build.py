@@ -303,10 +303,29 @@ def _example_dict(doc: Any, spec: SourceSpec, split: str,
 def build_governed_corpus(
     base_dir: str | Path = "data/external/public_ner",
     out_dir: str | Path = "data/derived/training_corpora/mednorm_vi_training_v1",
-    *, seed: int = DEFAULT_SEED,
+    *, seed: int = DEFAULT_SEED, include_vietmed: bool | None = None,
+    vietmed_artifact_dir: str | Path = "data/derived/training_corpora/vietmed_ner_v1",
 ) -> dict[str, Any]:
+    """Build the governed corpus from the text-readable public datasets.
+
+    VietMed-NER inclusion: ``include_vietmed=None`` (auto) includes it only if valid
+    preprocessing artifacts have been returned to ``vietmed_artifact_dir``; ``True``
+    requires them (fail-fast if absent/corrupt); ``False`` excludes them. There is no
+    silent fallback — a present-but-corrupt artifact raises.
+    """
+    from .vietmed_ner import load_vietmed_artifacts
+
     base = Path(base_dir)
     out = Path(out_dir)
+
+    # Resolve VietMed inclusion up-front (fail fast; no silent fallback).
+    vietmed_examples = None
+    if include_vietmed is not False:
+        vietmed_examples = load_vietmed_artifacts(vietmed_artifact_dir)  # None if absent
+    if include_vietmed is True and vietmed_examples is None:
+        raise FileNotFoundError(
+            f"include_vietmed=True but no valid VietMed artifacts under {vietmed_artifact_dir}")
+
     for sub in ("canonical_examples", "splits", "manifests", "quality"):
         (out / sub).mkdir(parents=True, exist_ok=True)
 
@@ -353,6 +372,22 @@ def build_governed_corpus(
             "rxnorm_candidates": manifest.normalization_availability in ("rxnorm", "both"),
             "test_result_pairing": False, "patient_context": False, "relations": False,
         }
+
+    # --- optional VietMed-NER inclusion from returned Colab artifacts (resolved above) ---
+    vietmed_status = "not_included_pending"
+    if vietmed_examples is not None:
+        ent = sum(len(e["entities"]) for e in vietmed_examples)
+        examples.extend(vietmed_examples)
+        source_contrib["vietmed_ner"] = {
+            "documents": len(vietmed_examples), "entities": ent, "type_counts": {},
+            "concrete_mapping": {"DRUGCHEMICAL": "MEDICATION"},
+        }
+        coverage["vietmed_ner"] = {
+            "boundary": True, "entity_type": True, "assertions": False,
+            "icd_candidates": False, "rxnorm_candidates": False,
+            "test_result_pairing": False, "patient_context": False, "relations": False,
+        }
+        vietmed_status = "included_from_artifacts"
 
     # --- offset validation (already asserted per-entity; recount) ---
     off_total = off_bad = 0
@@ -464,7 +499,10 @@ def build_governed_corpus(
         "sources": {k: v["concrete_mapping"] for k, v in source_contrib.items()},
         "target_types_covered": sorted(type_dist),
         "target_types_missing": sorted(set(ENTITY_TYPES) - set(type_dist)),
-        "notes": "VietMed-NER requires a Parquet (pyarrow) adapter; not in v1 text build.",
+        "vietmed_status": vietmed_status,
+        "notes": ("VietMed-NER included from returned Colab artifacts."
+                  if vietmed_status == "included_from_artifacts"
+                  else "VietMed-NER not included (pending Colab pyarrow preprocessing)."),
     }
     eval_approx = (per_split_mapping["validation"]["MAP_APPROXIMATE"]
                    + per_split_mapping["internal_test"]["MAP_APPROXIMATE"])
@@ -509,6 +547,7 @@ def build_governed_corpus(
     return {
         "total_examples": len(examples), "total_entities": off_total,
         "offset_invalid": off_bad, "type_distribution": type_dist,
+        "vietmed_status": vietmed_status,
         "split_counts": split_manifest["counts"], "split_sha256": split_hashes,
         "cross_split_family_leakage": cross,
         "eval_map_approximate_entities": eval_approx,

@@ -66,6 +66,10 @@ for the concrete typed sources.
 - **MEDICATION**: thin (905) → synthetic medication lists + RxNorm alias
   self-supervision.
 - **Assertions / candidates**: no gold → synthetic + weak rules + ontology aliases.
-- **VietMed-NER**: Parquet source; its adapter requires `pyarrow`. It is **not** in
-  the v1 text build; add it via a documented pyarrow preprocessing step (or Colab),
-  contributing `DRUGCHEMICAL→MEDICATION` (approximate) once converted.
+- **VietMed-NER**: Parquet source. A real deterministic adapter now exists
+  (`src/mednorm_vi/data_engine/vietmed_ner.py`); its Parquet **read** step needs `pyarrow`
+  (Colab CPU), so it runs in `notebooks/MedNorm_Data_VietMed_Preprocess.ipynb`. It is **not
+  yet** in the corpus: it is included only after that notebook is run and its verified
+  artifacts are returned to `data/derived/training_corpora/vietmed_ner_v1/`, after which
+  `build-governed-corpus` auto-detects them, includes `DRUGCHEMICAL→MEDICATION` (approximate,
+  train-only), and reports `vietmed_status: included_from_artifacts`.

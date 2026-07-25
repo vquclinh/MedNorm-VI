@@ -92,6 +92,11 @@ reviewer: local user (author permission attested; evidence external, not tracked
 # preprocessing notebook, then rebuild the corpus to include it.
 corpus_inclusion:
   governance: GOVERNANCE_TRAINING_ALLOWED
-  technical_status: TECHNICALLY_PENDING_PREPROCESSING
+  # Audit 0018: a real adapter now exists (src/mednorm_vi/data_engine/vietmed_ner.py);
+  # only the Parquet READ needs pyarrow (Colab). Artifacts have not yet been returned.
+  adapter_status: ADAPTER_IMPLEMENTED
+  technical_status: TECHNICALLY_PENDING_PREPROCESSING_ARTIFACTS
   governed_corpus_v1: NOT_INCLUDED_IN_GOVERNED_CORPUS_V1
   preprocess_notebook: notebooks/MedNorm_Data_VietMed_Preprocess.ipynb
+  adapter_module: src/mednorm_vi/data_engine/vietmed_ner.py
+  artifact_dir: data/derived/training_corpora/vietmed_ner_v1
