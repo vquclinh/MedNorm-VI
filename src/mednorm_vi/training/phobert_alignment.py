@@ -30,7 +30,43 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v1"
+ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v2"
+
+# The character RDRSegmenter uses to join the syllables of one word. Some governed
+# sources (ViMQ, PhoNER-COVID19) are distributed ALREADY word-segmented, so this
+# character also occurs literally in ``original_text``. The two cases are not
+# distinguishable from the segmenter output alone, so both are accepted when
+# locating a word's syllables (Audit 0026).
+SEGMENTER_JOIN_CHARACTER = "_"
+
+# Reason codes for an example that could not be encoded. UNEXPECTED codes are
+# implementation/segmentation failures and MUST block full-training readiness.
+# EXPECTED codes are deterministic, tracked governance decisions and must not.
+REASON_EMPTY_SEGMENTED_WORD = "EMPTY_SEGMENTED_WORD"
+REASON_SEGMENTED_SYLLABLE_NOT_FOUND = "SEGMENTED_SYLLABLE_NOT_FOUND"
+REASON_NON_SEPARATOR_GAP_INSIDE_WORD = "NON_SEPARATOR_GAP_INSIDE_WORD"
+REASON_TOKENIZER_PIECE_ID_MISMATCH = "TOKENIZER_PIECE_ID_MISMATCH"
+REASON_TOKENIZER_NOT_DECOMPOSABLE = "TOKENIZER_NOT_DECOMPOSABLE"
+REASON_ENTITY_OFFSET_INVARIANT_VIOLATED = "ENTITY_OFFSET_INVARIANT_VIOLATED"
+REASON_MAX_LENGTH_TOO_SMALL = "MAX_LENGTH_TOO_SMALL"
+REASON_GOVERNED_EXCLUSION = "GOVERNED_EXCLUSION"
+
+UNEXPECTED_REASON_CODES = (
+    REASON_EMPTY_SEGMENTED_WORD,
+    REASON_SEGMENTED_SYLLABLE_NOT_FOUND,
+    REASON_NON_SEPARATOR_GAP_INSIDE_WORD,
+    REASON_TOKENIZER_PIECE_ID_MISMATCH,
+    REASON_TOKENIZER_NOT_DECOMPOSABLE,
+    REASON_ENTITY_OFFSET_INVARIANT_VIOLATED,
+    REASON_MAX_LENGTH_TOO_SMALL,
+)
+EXPECTED_REASON_CODES = (REASON_GOVERNED_EXCLUSION,)
+
+# Pipeline stage at which an example failed; kept coarse so it never leaks text.
+STAGE_WORD_MAPPING = "word_mapping"
+STAGE_TOKENIZER_EQUIVALENCE = "tokenizer_equivalence"
+STAGE_SUBTOKEN_ENCODING = "subtoken_encoding"
+STAGE_GOVERNED_EXCLUSION = "governed_exclusion"
 
 # Subtoken supervision policy (see module docstring / Audit 0022): every
 # non-special subtoken inherits the ORIGINAL character span of its segmented
@@ -40,7 +76,12 @@ ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v1"
 SUBTOKEN_SUPERVISION_POLICY = "all_subtokens_inherit_word_span_overlap_labels"
 
 # Policy applied when word segmentation merges across a gold entity boundary.
-BOUNDARY_MERGE_POLICY = "unalignable_example_counted_and_skipped"
+# Audit 0026: previously the whole example was discarded, which threw away every
+# other entity in it over a single ambiguous word. The straddling word and every
+# subtoken of the entities it touches are now masked instead (labels zeroed,
+# label_mask 0) and counted — the same rule PARTIAL_TRUNCATION_POLICY already
+# applies to truncation. No token is ever given an incompatible label.
+BOUNDARY_MERGE_POLICY = "mask_straddling_word_and_affected_entity_subtokens"
 
 # Policy applied when truncation cuts an entity. An entity whose supervised
 # subtokens only PARTIALLY survive must never keep partial labels: every retained
@@ -58,7 +99,16 @@ class SlowTokenizerLike(Protocol):
 
 
 class AlignmentError(ValueError):
-    """Raised when segmented words cannot be mapped unambiguously."""
+    """Raised when segmented words cannot be mapped unambiguously.
+
+    ``reason_code`` is a stable, text-free classifier (see the REASON_* constants)
+    so callers can record *why* an example failed without ever touching its
+    content, and can separate unexpected failures from governed exclusions.
+    """
+
+    def __init__(self, message: str, reason_code: str = "") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code or REASON_SEGMENTED_SYLLABLE_NOT_FOUND
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +154,17 @@ def segmented_text_to_words(segmented_text: str) -> list[str]:
     return [w for w in segmented_text.split() if w]
 
 
+def is_legal_syllable_gap(gap: str) -> bool:
+    """May ``gap`` separate two syllables of one segmented word?
+
+    Legal separators are whitespace (the segmenter joined two whitespace-separated
+    syllables) and :data:`SEGMENTER_JOIN_CHARACTER` (the source text was already
+    word-segmented, so the underscore is a literal character of
+    ``original_text``). Anything else means the mapping has drifted.
+    """
+    return all(char.isspace() or char == SEGMENTER_JOIN_CHARACTER for char in gap)
+
+
 def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[SegmentedWord]:
     """Map each segmented word back to a half-open span of ``original_text``.
 
@@ -118,7 +179,8 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
     for index, word in enumerate(segmented_words):
         syllables = [s for s in word.split("_") if s]
         if not syllables:
-            raise AlignmentError(f"empty segmented word at index {index}")
+            raise AlignmentError(
+                f"empty segmented word at index {index}", REASON_EMPTY_SEGMENTED_WORD)
         start: int | None = None
         end = cursor
         for position, syllable in enumerate(syllables):
@@ -126,13 +188,13 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
             if found < 0:
                 raise AlignmentError(
                     f"segmented syllable #{position} of word {index} not found "
-                    "in the original text after the current cursor")
-            if position > 0:
-                gap = text[end:found]
-                if gap.strip():
-                    # Only whitespace may separate syllables of one segmented word.
-                    raise AlignmentError(
-                        f"non-whitespace gap inside segmented word {index}")
+                    "in the original text after the current cursor",
+                    REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
+            if position > 0 and not is_legal_syllable_gap(text[end:found]):
+                raise AlignmentError(
+                    f"illegal separator inside segmented word {index}: only "
+                    "whitespace or the segmenter join character may separate syllables",
+                    REASON_NON_SEPARATOR_GAP_INSIDE_WORD)
             if start is None:
                 start = found
             end = found + len(syllable)
@@ -164,6 +226,34 @@ def find_boundary_violations(
     return violations
 
 
+def entities_touched_by_boundary_merge(
+    words: list[SegmentedWord], entities: list[tuple[int, int]],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Straddling word indices and the entity indices they make ambiguous.
+
+    Applies :data:`BOUNDARY_MERGE_POLICY`: a word that overlaps an entity without
+    being contained in it would need two incompatible labels, so that word and
+    every entity it touches lose supervision instead of being guessed at.
+    """
+    straddling: list[int] = []
+    affected: set[int] = set()
+    for word_index, word in enumerate(words):
+        straddles = False
+        for entity_index, (ent_start, ent_end) in enumerate(entities):
+            overlaps = word.original_start < ent_end and ent_start < word.original_end
+            contained = ent_start <= word.original_start and word.original_end <= ent_end
+            if overlaps and not contained:
+                straddles = True
+                affected.add(entity_index)
+        if straddles:
+            straddling.append(word_index)
+            # Any entity this word also fully covers becomes ambiguous too.
+            for entity_index, (ent_start, ent_end) in enumerate(entities):
+                if word.original_start < ent_end and ent_start < word.original_end:
+                    affected.add(entity_index)
+    return tuple(straddling), tuple(sorted(affected))
+
+
 def align_subtokens(
     words: list[SegmentedWord], tokenizer: SlowTokenizerLike, *,
     max_length: int, cls_token_id: int | None = None, sep_token_id: int | None = None,
@@ -177,7 +267,8 @@ def align_subtokens(
     result reports whether truncation occurred.
     """
     if max_length < 2:
-        raise AlignmentError("max_length must leave room for special tokens")
+        raise AlignmentError(
+            "max_length must leave room for special tokens", REASON_MAX_LENGTH_TOO_SMALL)
     body: list[AlignedSubtoken] = []
     budget = max_length - 2  # reserve CLS/SEP
     truncated = False
@@ -187,7 +278,8 @@ def align_subtokens(
             continue
         ids = tokenizer.convert_tokens_to_ids(pieces)
         if len(ids) != len(pieces):
-            raise AlignmentError("tokenizer returned mismatched pieces/ids")
+            raise AlignmentError(
+                "tokenizer returned mismatched pieces/ids", REASON_TOKENIZER_PIECE_ID_MISMATCH)
         for offset, (piece, token_id) in enumerate(zip(pieces, ids, strict=True)):
             if len(body) >= budget:
                 truncated = True
@@ -309,7 +401,8 @@ def verify_tokenizer_equivalence(
         raise AlignmentError(
             "tokenizer equivalence failed: per-word alignment produced "
             f"{len(per_word_ids)} ids but whole-sentence tokenization produced "
-            f"{len(sentence_ids)}; the tokenizer is not per-word decomposable")
+            f"{len(sentence_ids)}; the tokenizer is not per-word decomposable",
+            REASON_TOKENIZER_NOT_DECOMPOSABLE)
     return {
         "equivalent": True,
         "word_count": len(words),
@@ -330,10 +423,25 @@ def describe_backend(tokenizer: Any) -> dict[str, Any]:
 
 
 __all__ = [
-    "ALIGNMENT_BACKEND",
     "SUBTOKEN_SUPERVISION_POLICY",
     "BOUNDARY_MERGE_POLICY",
     "PARTIAL_TRUNCATION_POLICY",
+    "ALIGNMENT_BACKEND",
+    "EXPECTED_REASON_CODES",
+    "SEGMENTER_JOIN_CHARACTER",
+    "STAGE_GOVERNED_EXCLUSION",
+    "STAGE_SUBTOKEN_ENCODING",
+    "STAGE_TOKENIZER_EQUIVALENCE",
+    "STAGE_WORD_MAPPING",
+    "UNEXPECTED_REASON_CODES",
+    "REASON_EMPTY_SEGMENTED_WORD",
+    "REASON_ENTITY_OFFSET_INVARIANT_VIOLATED",
+    "REASON_GOVERNED_EXCLUSION",
+    "REASON_MAX_LENGTH_TOO_SMALL",
+    "REASON_NON_SEPARATOR_GAP_INSIDE_WORD",
+    "REASON_SEGMENTED_SYLLABLE_NOT_FOUND",
+    "REASON_TOKENIZER_NOT_DECOMPOSABLE",
+    "REASON_TOKENIZER_PIECE_ID_MISMATCH",
     "AlignmentError",
     "AlignedSubtoken",
     "AlignmentResult",
@@ -344,7 +452,9 @@ __all__ = [
     "classify_truncated_entities",
     "count_truncated_entities",
     "describe_backend",
+    "entities_touched_by_boundary_merge",
     "find_boundary_violations",
+    "is_legal_syllable_gap",
     "map_segmented_words",
     "segmented_text_to_words",
     "verify_tokenizer_equivalence",

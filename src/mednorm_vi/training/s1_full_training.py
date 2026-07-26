@@ -178,11 +178,14 @@ def _same_path(left: str, right: str) -> bool:
 
 def load_full_training_config(
     path: str | Path, *, pinned_revision: str | None = None,
+    smoke_artifact_dir: str | Path | None = None,
 ) -> FullTrainingConfig:
     """Load and validate the tracked full-training configuration.
 
-    ``pinned_revision`` overrides the file, which is how the Colab notebook feeds
-    the revision read from the **validated** smoke manifest.
+    ``pinned_revision`` and ``smoke_artifact_dir`` override the file, which is how
+    the Colab notebook feeds the revision **and the directory** of the smoke
+    artifact it actually validated at runtime. Full training therefore consumes
+    the artifact that passed, never a hardcoded or historical one.
     """
     doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(doc, dict):
@@ -202,7 +205,9 @@ def load_full_training_config(
             pinned_revision if pinned_revision is not None
             else model.get("pinned_revision", "")),
         output_dir=str(output.get("output_dir", "")),
-        smoke_artifact_dir=str(output.get("smoke_artifact_dir", "")),
+        smoke_artifact_dir=str(
+            smoke_artifact_dir if smoke_artifact_dir is not None
+            else output.get("smoke_artifact_dir", "")),
         initialize_from=str(model.get("initialize_from", "")),
         num_epochs=int(optimization.get("num_epochs", 0)),
         per_device_batch_size=int(optimization.get("per_device_batch_size", 0)),

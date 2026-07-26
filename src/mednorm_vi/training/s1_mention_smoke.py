@@ -19,10 +19,15 @@ import yaml  # type: ignore[import-untyped]
 from ..data_engine.annotation_coverage import SourceCoverage, example_loss_mask
 from ..schemas.constants import ENTITY_TYPES
 from .phobert_alignment import (
+    EXPECTED_REASON_CODES,
+    REASON_ENTITY_OFFSET_INVARIANT_VIOLATED,
+    REASON_GOVERNED_EXCLUSION,
+    STAGE_GOVERNED_EXCLUSION,
+    UNEXPECTED_REASON_CODES,
     AlignmentError,
     align_subtokens,
     classify_truncated_entities,
-    find_boundary_violations,
+    entities_touched_by_boundary_merge,
     map_segmented_words,
     segmented_text_to_words,
 )
@@ -68,6 +73,170 @@ class SmokeLimits:
             raise ValueError("S1 smoke batch_size must be between 1 and 4")
         if self.max_sequence_length < 16 or self.max_sequence_length > 256:
             raise ValueError("S1 smoke max_sequence_length must be between 16 and 256")
+
+
+def privacy_safe_example_id(example_id: str) -> str:
+    """Stable, non-reversible handle for one example.
+
+    Governed example ids look like ``vimq:dev:000958`` — structural, not clinical.
+    They are hashed anyway so nothing derived from the corpus is copied verbatim
+    into a manifest or audit, while a reviewer can still recompute the digest
+    locally to identify the row.
+    """
+    return hashlib.sha256(str(example_id).encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True, slots=True)
+class AlignmentDiagnostic:
+    """Why one example produced no supervision. Never contains text.
+
+    Only these fields are recorded: dataset/split identity, a hashed example id,
+    the pipeline stage, a stable reason code, and the exception class name.
+    """
+
+    source_dataset: str
+    split: str
+    privacy_safe_example_id: str
+    stage: str
+    reason_code: str
+    exception_type: str
+
+    @property
+    def expected(self) -> bool:
+        """True for tracked governance decisions, False for real failures."""
+        return self.reason_code in EXPECTED_REASON_CODES
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "source": self.source_dataset,
+            "split": self.split,
+            "privacy_safe_example_id": self.privacy_safe_example_id,
+            "stage": self.stage,
+            "reason_code": self.reason_code,
+            "exception_type": self.exception_type,
+        }
+
+
+def alignment_diagnostic(
+    example: Mapping[str, Any], *, split: str, stage: str, error: Exception,
+) -> AlignmentDiagnostic:
+    """Build a text-free diagnostic for an example that could not be encoded."""
+    reason = str(getattr(error, "reason_code", "") or "")
+    if reason not in (*UNEXPECTED_REASON_CODES, *EXPECTED_REASON_CODES):
+        reason = REASON_ENTITY_OFFSET_INVARIANT_VIOLATED if isinstance(
+            error, ValueError) and not isinstance(error, AlignmentError) else reason
+    return AlignmentDiagnostic(
+        source_dataset=str(example.get("source_dataset", "")),
+        split=str(split),
+        privacy_safe_example_id=privacy_safe_example_id(example.get("example_id", "")),
+        stage=str(stage),
+        reason_code=reason or "UNCLASSIFIED",
+        exception_type=type(error).__name__,
+    )
+
+
+def summarize_alignment_diagnostics(
+    diagnostics: Sequence[AlignmentDiagnostic],
+) -> dict[str, Any]:
+    """Split diagnostics into blocking failures and tracked governed exclusions."""
+    unexpected = [d for d in diagnostics if not d.expected]
+    expected = [d for d in diagnostics if d.expected]
+    by_reason: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        by_reason[diagnostic.reason_code] = by_reason.get(diagnostic.reason_code, 0) + 1
+    return {
+        # Blocks full-training readiness (the validator requires this to be 0).
+        "unalignable_example_count": len(unexpected),
+        # Deterministic, tracked governance decisions; never blocks.
+        "governed_exclusion_count": len(expected),
+        "unalignable_examples": [d.as_dict() for d in unexpected],
+        "governed_exclusions": [d.as_dict() for d in expected],
+        "reason_code_counts": dict(sorted(by_reason.items())),
+    }
+
+
+def load_governed_exclusions(path: str | Path) -> dict[str, dict[str, Any]]:
+    """Load the tracked, deterministic governed-exclusion policy.
+
+    Keyed by privacy-safe example id. An example may only be skipped without
+    blocking readiness when it is listed here with a recorded justification —
+    never silently. An empty policy (the current state) means every failure is
+    unexpected and blocks.
+    """
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(doc, dict):
+        raise ValueError("governed exclusion policy must be a mapping")
+    entries: dict[str, dict[str, Any]] = {}
+    for entry in doc.get("exclusions") or []:
+        handle = str(entry.get("privacy_safe_example_id", "")).strip()
+        justification = str(entry.get("justification", "")).strip()
+        if not handle or not justification:
+            raise ValueError(
+                f"governed exclusion needs privacy_safe_example_id and justification: {entry}")
+        entries[handle] = dict(entry)
+    return entries
+
+
+def governed_exclusion_diagnostic(
+    example: Mapping[str, Any], *, split: str,
+) -> AlignmentDiagnostic:
+    """Diagnostic for an example skipped by the tracked exclusion policy."""
+    return AlignmentDiagnostic(
+        source_dataset=str(example.get("source_dataset", "")),
+        split=str(split),
+        privacy_safe_example_id=privacy_safe_example_id(example.get("example_id", "")),
+        stage=STAGE_GOVERNED_EXCLUSION,
+        reason_code=REASON_GOVERNED_EXCLUSION,
+        exception_type="",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SmokeArtifactPaths:
+    """Where the smoke rerun writes, and what it must never touch.
+
+    The v1 artifact recorded ``full_training_readiness: false`` and is immutable
+    historical evidence; the corrected rerun writes to a separate versioned
+    directory so the two can be compared rather than confused.
+    """
+
+    artifact_version: str
+    artifact_dir: str
+    previous_artifact_dir: str
+    previous_artifact_status: str = ""
+
+    def validate(self) -> None:
+        if not self.artifact_version:
+            raise ValueError("smoke output needs an explicit artifact_version")
+        if not self.artifact_dir or not self.previous_artifact_dir:
+            raise ValueError("smoke output needs artifact_dir and previous_artifact_dir")
+        if Path(self.artifact_dir).resolve() == Path(self.previous_artifact_dir).resolve():
+            raise ValueError(
+                "the corrected smoke artifact_dir must differ from the historical "
+                f"artifact: {self.artifact_dir}")
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "artifact_version": self.artifact_version,
+            "artifact_dir": self.artifact_dir,
+            "previous_artifact_dir": self.previous_artifact_dir,
+            "previous_artifact_status": self.previous_artifact_status,
+        }
+
+
+def smoke_artifact_paths_from_config(config: Mapping[str, Any]) -> SmokeArtifactPaths:
+    """Read the tracked, versioned smoke output contract."""
+    output = config.get("output")
+    if not isinstance(output, Mapping):
+        raise ValueError("S1 smoke config missing output section")
+    paths = SmokeArtifactPaths(
+        artifact_version=str(output.get("artifact_version", "")),
+        artifact_dir=str(output.get("artifact_dir", "")),
+        previous_artifact_dir=str(output.get("previous_artifact_dir", "")),
+        previous_artifact_status=str(output.get("previous_artifact_status", "")),
+    )
+    paths.validate()
+    return paths
 
 
 def sha256_file(path: str | Path) -> str:
@@ -327,18 +496,18 @@ def encode_mention_example_slow(
 
     ``segmented_text`` is the RDRSegmenter output (underscore-joined syllables).
     When omitted, the original text is treated as already whitespace-segmented.
-    Raises :class:`~mednorm_vi.training.phobert_alignment.AlignmentError` when a
-    segmented word straddles a gold entity boundary (counted, never mislabeled).
+    When word segmentation merges across a gold entity boundary, the straddling
+    word and every subtoken of the entities it touches are masked out and counted
+    (:data:`BOUNDARY_MERGE_POLICY`); the rest of the example keeps its
+    supervision. No token is ever given an incompatible label.
     """
     text = str(example.get("text", ""))
     entities = [
         (int(e["start"]), int(e["end"])) for e in example.get("entities", []) or []
     ]
     words = map_segmented_words(text, segmented_text_to_words(segmented_text or text))
-    violations = find_boundary_violations(words, entities)
-    if violations:
-        raise AlignmentError(
-            f"{len(violations)} segmented word(s) straddle a gold entity boundary")
+    straddling_words, boundary_merged_entities = entities_touched_by_boundary_merge(
+        words, entities)
     aligned = align_subtokens(
         words, tokenizer, max_length=max_length,
         cls_token_id=getattr(tokenizer, "cls_token_id", None),
@@ -369,6 +538,25 @@ def encode_mention_example_slow(
                 feature["labels"][position] = [0 for _ in ENTITY_TYPE_ORDER]
                 feature["label_mask"][position] = 0
 
+    # Boundary-merge policy: mask the straddling words and every subtoken of the
+    # entities they made ambiguous, rather than discarding the whole example.
+    straddling = set(straddling_words)
+    for position, piece in enumerate(aligned.subtokens):
+        if piece.is_special:
+            continue
+        ambiguous = piece.source_word_index in straddling
+        if not ambiguous:
+            for entity_index in boundary_merged_entities:
+                ent_start, ent_end = entities[entity_index]
+                if piece.original_start < ent_end and ent_start < piece.original_end:
+                    ambiguous = True
+                    break
+        if ambiguous:
+            feature["labels"][position] = [0 for _ in ENTITY_TYPE_ORDER]
+            feature["label_mask"][position] = 0
+
+    feature["boundary_merge_masked_word_count"] = len(straddling_words)
+    feature["boundary_merge_affected_entity_count"] = len(boundary_merged_entities)
     feature["truncated"] = aligned.truncated
     feature["fully_dropped_entity_count"] = report.fully_dropped_count
     feature["partially_truncated_entity_count"] = report.partially_truncated_count
@@ -474,8 +662,16 @@ def preparation_digest(features: Sequence[Mapping[str, Any]]) -> str:
 __all__ = [
     "ENTITY_TYPE_ORDER",
     "ENTITY_TYPE_TO_ID",
+    "AlignmentDiagnostic",
+    "alignment_diagnostic",
+    "governed_exclusion_diagnostic",
+    "load_governed_exclusions",
+    "privacy_safe_example_id",
+    "summarize_alignment_diagnostics",
     "ExpectedCorpus",
+    "SmokeArtifactPaths",
     "SmokeLimits",
+    "smoke_artifact_paths_from_config",
     "count_jsonl",
     "encode_mention_example",
     "expected_corpus_from_config",

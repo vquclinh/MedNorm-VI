@@ -81,8 +81,13 @@ loss:
 
 output:
   output_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_full_training_v1
-  # Must never be written to; kept here so the config can prove the two differ.
-  smoke_artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke
+  # The VALIDATED smoke artifact that authorizes this run. The notebook overrides
+  # it with the directory actually validated at runtime, so full training always
+  # consumes the artifact that passed - never a stale or historical one. Never
+  # written to; recorded so the config can prove it differs from output_dir.
+  # v1 (`s1_mention_first_run_smoke`) is the historical failed-readiness artifact
+  # and must NOT be used to authorize training.
+  smoke_artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v2
 
 # The governed corpus this run is allowed to consume, byte-for-byte identical to
 # the smoke gate (Audit 0020).

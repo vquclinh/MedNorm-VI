@@ -115,7 +115,12 @@ def test_s1_first_run_smoke_uses_governed_config_and_drive_artifacts() -> None:
     assert 'Path("/content/MedNorm-VI")' in src
     assert "configs/training/s1_mention_first_run_smoke.yaml" in src
     assert "verify_governed_corpus(CORPUS_DIR, expected_corpus)" in src
-    assert 'OUTPUT_DIR = DRIVE_ROOT / "artifacts" / "s1_mention_first_run_smoke"' in src
+    # Audit 0026: the corrected rerun writes to a versioned directory so the
+    # historical v1 artifact (full_training_readiness: false) is never overwritten.
+    assert ('OUTPUT_DIR = DRIVE_ROOT / "artifacts" / '
+            'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"') in src
+    assert ('HISTORICAL_SMOKE_ARTIFACT_DIR = DRIVE_ROOT / "artifacts" / '
+            '"s1_mention_first_run_smoke"') in src
     assert "MODEL_CACHE_DIR = DRIVE_ROOT" in src
     assert "AutoTokenizer.from_pretrained" in src
     assert "AutoModel.from_pretrained" in src

@@ -36,7 +36,10 @@ REPO = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO / "configs" / "training" / "s1_mention_full_training.yaml"
 SMOKE_CONFIG_PATH = REPO / "configs" / "training" / "s1_mention_first_run_smoke.yaml"
 PINNED = "b" * 40
-SMOKE_ARTIFACT_DIR = "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke"
+SMOKE_ARTIFACT_DIR = (
+    "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v2")
+HISTORICAL_SMOKE_DIR = (
+    "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke")
 
 
 @pytest.fixture(scope="module")
@@ -374,3 +377,34 @@ def test_manifest_never_points_training_output_at_the_smoke_artifact(config) -> 
     assert manifest["artifacts"]["smoke_artifact_dir"] == SMOKE_ARTIFACT_DIR
     for key in ("latest_checkpoint", "best_checkpoint", "training_manifest"):
         assert SMOKE_ARTIFACT_DIR not in manifest["artifacts"][key]
+
+
+# --- full training consumes the VALIDATED artifact, not a hardcoded path ------
+
+def test_config_points_at_the_corrected_v2_smoke_artifact(config) -> None:
+    assert config.smoke_artifact_dir == SMOKE_ARTIFACT_DIR
+    assert config.smoke_artifact_dir != HISTORICAL_SMOKE_DIR
+
+
+def test_smoke_artifact_dir_can_be_supplied_at_runtime() -> None:
+    """The notebook passes the directory it actually validated."""
+    selected = "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v3"
+    runtime = load_full_training_config(
+        CONFIG_PATH, pinned_revision=PINNED, smoke_artifact_dir=selected)
+    assert runtime.smoke_artifact_dir == selected
+    assert runtime.output_dir != selected
+
+
+def test_runtime_smoke_artifact_equal_to_the_output_dir_is_rejected(config) -> None:
+    with pytest.raises(FullTrainingConfigError, match="must never be overwritten"):
+        load_full_training_config(
+            CONFIG_PATH, pinned_revision=PINNED, smoke_artifact_dir=config.output_dir)
+
+
+def test_manifest_records_the_validated_artifact_that_authorized_the_run() -> None:
+    selected = "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v2"
+    runtime = load_full_training_config(
+        CONFIG_PATH, pinned_revision=PINNED, smoke_artifact_dir=selected)
+    manifest = _manifest(runtime)
+    assert manifest["artifacts"]["smoke_artifact_dir"] == selected
+    assert HISTORICAL_SMOKE_DIR not in manifest["artifacts"]["latest_checkpoint"]

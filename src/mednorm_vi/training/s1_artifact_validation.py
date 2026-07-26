@@ -29,10 +29,11 @@ from .s1_mention_smoke import sha256_file
 MANIFEST_NAME = "training_manifest.json"
 CHECKPOINT_RELATIVE_PATH = "checkpoint/s1_mention_smoke_model.pt"
 
-# The checkpoint SHA-256 the user observed on the confirmed Colab GPU run.
-EXPECTED_SMOKE_CHECKPOINT_SHA256 = (
-    "7310f69acfae278f36753c4b356979737f17388c74f6703a362bb22788892213"
-)
+# NO run-specific checkpoint hash lives here. This module is reused across smoke
+# reruns, so the expected hash is supplied by the operator at validation time
+# (a notebook config variable or MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256) and is
+# never baked into source. Accepting a new run must never require a code edit.
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 # A Hugging Face commit hash: the only revision form that is truly immutable.
 IMMUTABLE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -40,6 +41,14 @@ MUTABLE_REVISIONS = frozenset({"", "main", "master", "head", "HEAD", "latest"})
 
 # Base-model cache files must never be copied into the reviewed artifact.
 FORBIDDEN_ARTIFACT_SUFFIXES = (".safetensors", ".bin", ".h5", ".onnx", ".msgpack")
+
+# The only keys a privacy-safe alignment diagnostic may carry. Anything else could
+# smuggle clinical text into a manifest that is reviewed and shared.
+ALLOWED_DIAGNOSTIC_KEYS = frozenset({
+    "source", "split", "privacy_safe_example_id", "stage", "reason_code", "exception_type",
+})
+# A hashed example handle: 16 lowercase hex characters.
+PRIVACY_SAFE_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 
 
 class ArtifactValidationError(ValueError):
@@ -72,6 +81,11 @@ class ValidationOutcome:
             "resolved_model_revision": self.resolved_model_revision,
             "diagnostics": dict(self.diagnostics),
         }
+
+
+def is_valid_sha256(value: str) -> bool:
+    """True only for a full lowercase 64-hex digest."""
+    return bool(SHA256_PATTERN.match(str(value or "").strip()))
 
 
 def is_immutable_revision(revision: str) -> bool:
@@ -214,6 +228,52 @@ def _boolean_conditions(manifest: Mapping[str, Any]) -> list[tuple[str, bool, An
     ]
 
 
+def _diagnostic_conditions(manifest: Mapping[str, Any]) -> list[tuple[str, bool, Any]]:
+    """Counter reconciliation and privacy of the alignment diagnostics.
+
+    Unexpected failures must block; tracked governed exclusions must not. Both are
+    only trustworthy if every considered example is accounted for exactly once and
+    no diagnostic carries free-form content.
+    """
+    alignment = manifest.get("alignment")
+    if not isinstance(alignment, Mapping):
+        return [("alignment block recorded", False, alignment)]
+    checks: list[tuple[str, bool, Any]] = []
+    considered = alignment.get("examples_considered")
+    aligned = alignment.get("aligned_example_count")
+    unalignable = alignment.get("unalignable_example_count")
+    excluded = alignment.get("governed_exclusion_count", 0)
+    if isinstance(considered, int):
+        total = sum(v for v in (aligned, unalignable, excluded) if isinstance(v, int))
+        checks.append((
+            "alignment counters reconcile (aligned + unalignable + governed exclusions "
+            "== examples considered)",
+            total == considered,
+            {"aligned": aligned, "unalignable": unalignable,
+             "governed_exclusions": excluded, "considered": considered}))
+        checks.append((
+            "tokenizer equivalence and alignment cover the same examples",
+            alignment.get("tokenizer_equivalence_considered") == considered,
+            {"equivalence_considered": alignment.get("tokenizer_equivalence_considered"),
+             "alignment_considered": considered}))
+    diagnostics: list[Any] = []
+    for key in ("unalignable_examples", "governed_exclusions"):
+        entries = alignment.get(key) or []
+        if not isinstance(entries, Sequence) or isinstance(entries, str):
+            checks.append((f"{key} is a list", False, entries))
+            continue
+        diagnostics.extend(entries)
+    offending = [
+        entry for entry in diagnostics
+        if not isinstance(entry, Mapping) or set(entry) - ALLOWED_DIAGNOSTIC_KEYS
+        or not PRIVACY_SAFE_ID_PATTERN.match(str(entry.get("privacy_safe_example_id", "")))
+    ]
+    checks.append((
+        "alignment diagnostics are privacy-safe (hashed ids, no free-form fields)",
+        not offending, offending[:3]))
+    return checks
+
+
 def _corpus_conditions(
     manifest: Mapping[str, Any], expected_corpus: Mapping[str, Any],
 ) -> list[tuple[str, bool, Any]]:
@@ -247,13 +307,17 @@ def _corpus_conditions(
 def validate_smoke_artifact(
     artifact_dir: str | Path, *,
     expected_corpus: Mapping[str, Any],
-    expected_checkpoint_sha256: str = EXPECTED_SMOKE_CHECKPOINT_SHA256,
+    expected_checkpoint_sha256: str,
     hasher: Callable[[str | Path], str] = sha256_file,
 ) -> ValidationOutcome:
     """Validate the real S1 smoke artifact and report every failed condition.
 
     The checkpoint SHA-256 is recomputed from the bytes on disk and must equal
-    **both** the hash recorded inside the manifest and ``expected_checkpoint_sha256``.
+    **both** the hash recorded inside the manifest **and**
+    ``expected_checkpoint_sha256``, which the operator supplies explicitly for the
+    run being accepted. A missing or malformed expected hash never grants
+    readiness: the recomputed digest is reported so it can be confirmed, without
+    editing any source file.
 
     A failed global ``pip check`` does not invalidate the artifact: environment
     health is scoped to the S1 dependency closure (Audit 0024), so unrelated
@@ -266,12 +330,14 @@ def validate_smoke_artifact(
     for label, holds, observed in (
         *_boolean_conditions(manifest),
         *_corpus_conditions(manifest, expected_corpus),
+        *_diagnostic_conditions(manifest),
     ):
         if not holds:
             failures.append(f"{label} (observed: {observed!r})")
 
     checkpoint_path = base / CHECKPOINT_RELATIVE_PATH
     manifest_sha = str(_get(manifest, "artifacts.checkpoint_sha256", ""))
+    expected_sha = str(expected_checkpoint_sha256 or "").strip().lower()
     computed_sha = ""
     if not checkpoint_path.is_file():
         failures.append(f"checkpoint file does not exist (observed: {str(checkpoint_path)!r})")
@@ -281,10 +347,18 @@ def validate_smoke_artifact(
             failures.append(
                 "recomputed checkpoint SHA-256 does not match the manifest "
                 f"(observed: {computed_sha!r}, manifest: {manifest_sha!r})")
-        if computed_sha != str(expected_checkpoint_sha256):
+        if not is_valid_sha256(expected_sha):
+            # Never silently accept whatever is on disk: ask for confirmation and
+            # show the digest the operator would be confirming.
             failures.append(
-                "recomputed checkpoint SHA-256 does not match the expected Colab hash "
-                f"(observed: {computed_sha!r}, expected: {expected_checkpoint_sha256!r})")
+                "expected checkpoint SHA-256 was not supplied (or is malformed): set "
+                "EXPECTED_SMOKE_CHECKPOINT_SHA256 to the 64-hex digest of the run you "
+                f"are accepting. The recomputed digest is {computed_sha!r} "
+                f"(observed: {expected_checkpoint_sha256!r})")
+        elif computed_sha != expected_sha:
+            failures.append(
+                "recomputed checkpoint SHA-256 does not match the operator-supplied "
+                f"expected hash (observed: {computed_sha!r}, expected: {expected_sha!r})")
 
     cache_files = find_base_model_cache_files(base)
     if cache_files:
@@ -309,7 +383,14 @@ def validate_smoke_artifact(
             "tokenizer_revision": _get(manifest, "tokenizer.tokenizer_revision", ""),
             "word_segmenter_version": _get(
                 manifest, "word_segmentation.word_segmenter_version", ""),
+            "unalignable_examples": _get(manifest, "alignment.unalignable_examples", []),
+            "governed_exclusions": _get(manifest, "alignment.governed_exclusions", []),
+            "reason_code_counts": _get(manifest, "alignment.reason_code_counts", {}),
+            "boundary_merge_masked_word_count": _get(
+                manifest, "alignment.boundary_merge_masked_word_count", 0),
             "resolved_commit": _get(manifest, "repository.resolved_commit", ""),
+            "artifact_dir": str(base),
+            "expected_checkpoint_sha256_supplied": is_valid_sha256(expected_sha),
         },
     )
 
@@ -333,14 +414,15 @@ def pinned_revision_from_outcome(outcome: ValidationOutcome) -> str:
 
 
 __all__ = [
+    "ALLOWED_DIAGNOSTIC_KEYS",
     "CHECKPOINT_RELATIVE_PATH",
-    "EXPECTED_SMOKE_CHECKPOINT_SHA256",
     "MANIFEST_NAME",
     "MUTABLE_REVISIONS",
     "ArtifactValidationError",
     "ValidationOutcome",
     "find_base_model_cache_files",
     "is_immutable_revision",
+    "is_valid_sha256",
     "load_smoke_manifest",
     "pinned_revision_from_outcome",
     "validate_smoke_artifact",

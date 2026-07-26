@@ -135,7 +135,9 @@ def test_s1_smoke_notebook_uses_required_colab_paths() -> None:
     assert 'REPO_DIR = Path("/content/MedNorm-VI")' in code
     assert 'REPO_URL = "https://github.com/vquclinh/MedNorm-VI.git"' in code
     assert 'REPO_REF = "main"' in code
-    assert 'OUTPUT_DIR = DRIVE_ROOT / "artifacts" / "s1_mention_first_run_smoke"' in code
+    # Audit 0026: the corrected rerun writes to its own versioned directory.
+    assert ('DRIVE_ROOT / "artifacts" / '
+            'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"') in code
     assert 'MODEL_CACHE_DIR = DRIVE_ROOT / "model_cache" / "huggingface"' in code
     assert "CORPUS_DIR = (\n    DRIVE_ROOT" in code
     assert "REPO_DIR / \"data\"" not in code
@@ -187,9 +189,44 @@ def test_s1_smoke_notebook_runs_alignment_preflight_before_model_download() -> N
     # segmentation resources are verified/recorded, with a fail-fast assertion
     assert "word_segmenter_resource_hashes" in code
     assert "VnCoreNLP resources missing after acquisition" in code
-    # unalignable examples are counted, never silently mislabeled
-    assert "except AlignmentError:" in code
-    assert 'alignment_preflight["unalignable_example_count"] += 1' in code
+    # unalignable examples are recorded as diagnostics, never silently mislabeled
+    assert "except (AlignmentError, ValueError) as exc:" in code
+    assert "alignment_diagnostic(" in code
+    assert "summarize_alignment_diagnostics(alignment_diagnostics)" in code
+
+
+def test_s1_smoke_notebook_covers_train_and_validation_in_one_preflight() -> None:
+    """Audit 0026: validation alignment failures used to be silently dropped."""
+    code = _code(S1_SMOKE)
+    assert 'SMOKE_SPLITS = (("train", train_examples), ("validation", validation_examples))' in code
+    assert "EXAMPLES_CONSIDERED = sum(len(rows) for _, rows in SMOKE_SPLITS)" in code
+    # equivalence and alignment must share the same denominator
+    assert '"tokenizer_equivalence_considered": EXAMPLES_CONSIDERED' in code
+    assert '"examples_considered": EXAMPLES_CONSIDERED' in code
+    assert '"tokenizer_equivalence_skipped_unmappable"' in code
+    # every considered example is accounted for exactly once
+    assert "RECONCILED = (" in code
+    assert "assert RECONCILED" in code
+
+
+def test_s1_smoke_notebook_separates_unexpected_failures_from_governed_exclusions() -> None:
+    code = _code(S1_SMOKE)
+    assert "load_governed_exclusions(" in code
+    assert "governed_exclusion_diagnostic(" in code
+    assert '"governed_exclusion_count"' in code
+    assert '"unalignable_examples"' in code
+    assert "BOUNDARY_MERGE_POLICY" in code
+
+
+def test_s1_notebooks_record_only_privacy_safe_alignment_diagnostics() -> None:
+    """No raw clinical text or verbatim example id may reach a manifest."""
+    for notebook in (S1_SMOKE, S1_FULL):
+        code = _code(notebook)
+        assert "privacy_safe_example_id(" in code, notebook
+        for leak in ('row["text"]}', '"raw_text"', '"entity_text"', 'exc)}"'):
+            assert leak not in code, f"{notebook} may leak content via {leak!r}"
+        # diagnostics are always built through the tracked, text-free helper
+        assert "alignment_diagnostic(" in code, notebook
 
 
 def _s1_index(needle: str) -> int:
@@ -553,3 +590,47 @@ def _s1_index_in(notebook: str, needle: str) -> int:
     code = _code(notebook)
     assert needle in code, f"{needle!r} not found in {notebook}"
     return code.index(needle)
+
+
+# --- artifact lifecycle wiring in the notebooks (Audit 0026) ------------------
+
+def test_smoke_notebook_writes_to_a_versioned_directory_not_over_v1() -> None:
+    code = _code(S1_SMOKE)
+    assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
+    assert "OUTPUT_DIR.resolve() != HISTORICAL_SMOKE_ARTIFACT_DIR.resolve()" in code
+    # the path is tracked in configuration, not only in the notebook
+    assert "smoke_artifact_paths_from_config(smoke_config)" in code
+    assert "smoke_artifact_paths.artifact_version == SMOKE_ARTIFACT_VERSION" in code
+
+
+@pytest.mark.parametrize("notebook", [S1_VALIDATION, S1_FULL])
+def test_notebooks_take_the_artifact_dir_and_expected_hash_at_runtime(notebook) -> None:
+    code = _code(notebook)
+    assert "MEDNORM_SMOKE_ARTIFACT_DIR" in code
+    assert "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256" in code
+    # the expected hash defaults to EMPTY, so nothing is auto-accepted
+    assert 'os.environ.get(\n    "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256", "")' in code
+    # the default artifact directory is v2, never the historical v1
+    assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
+    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v2"' in code
+
+
+def test_no_notebook_hardcodes_a_checkpoint_digest() -> None:
+    """Accepting a rerun must never require editing a notebook's Python."""
+    for notebook in (S1_SMOKE, S1_VALIDATION, S1_FULL):
+        assert not re.search(r"[0-9a-f]{64}", _code(notebook)), notebook
+
+
+def test_validation_notebook_prints_the_recomputed_hash_for_confirmation() -> None:
+    code = _code(S1_VALIDATION)
+    assert 'outcome.diagnostics["expected_checkpoint_sha256_supplied"]' in code
+    assert "outcome.checkpoint_sha256" in code
+    assert "No Python source needs to change." in code
+
+
+def test_full_training_notebook_refuses_the_historical_v1_artifact() -> None:
+    code = _code(S1_FULL)
+    assert "SMOKE_ARTIFACT_DIR.resolve() != HISTORICAL_SMOKE_ARTIFACT_DIR.resolve()" in code
+    assert "must not authorize full training" in code
+    # and it passes the validated directory into the training config
+    assert "smoke_artifact_dir=SMOKE_ARTIFACT_DIR" in code

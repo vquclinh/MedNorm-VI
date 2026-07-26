@@ -8,28 +8,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from mednorm_vi.training.s1_artifact_validation import (
     CHECKPOINT_RELATIVE_PATH,
-    EXPECTED_SMOKE_CHECKPOINT_SHA256,
     ArtifactValidationError,
     ValidationOutcome,
     find_base_model_cache_files,
     is_immutable_revision,
+    is_valid_sha256,
     load_smoke_manifest,
     pinned_revision_from_outcome,
     validate_smoke_artifact,
 )
-from mednorm_vi.training.s1_mention_smoke import load_smoke_config
+from mednorm_vi.training.s1_mention_smoke import (
+    load_smoke_config,
+    smoke_artifact_paths_from_config,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 SMOKE_CONFIG = load_smoke_config(REPO / "configs" / "training" / "s1_mention_first_run_smoke.yaml")
 EXPECTED_CORPUS = SMOKE_CONFIG["corpus"]
 RESOLVED_REVISION = "b" * 40
 REPO_COMMIT = "c" * 40
+# The digest recorded by the historical v1 run, kept only as test data. It no
+# longer lives in the reusable validator.
+HISTORICAL_V1_CHECKPOINT_SHA256 = (
+    "7310f69acfae278f36753c4b356979737f17388c74f6703a362bb22788892213")
 
 
 def _manifest() -> dict:
@@ -62,11 +70,22 @@ def _manifest() -> dict:
             "tokenizer_revision": "main",
         },
         "alignment": {
-            "alignment_backend": "character_offset_reconstruction",
+            "alignment_backend": "phobert-slow-char-alignment-v2",
             "tokenizer_equivalence_checked": True,
             "tokenizer_equivalence_examples": 12,
             "tokenizer_equivalence_failures": 0,
+            "tokenizer_equivalence_considered": 12,
+            "tokenizer_equivalence_skipped_unmappable": 0,
+            "examples_considered": 12,
+            "aligned_example_count": 12,
             "unalignable_example_count": 0,
+            "governed_exclusion_count": 0,
+            "unalignable_examples": [],
+            "governed_exclusions": [],
+            "reason_code_counts": {},
+            "counters_reconciled": True,
+            "boundary_merge_masked_word_count": 1,
+            "boundary_merge_affected_entity_count": 2,
         },
         "word_segmentation": {
             "segmenter_mode": "vncorenlp",
@@ -157,11 +176,11 @@ def test_checkpoint_hash_must_match_the_manifest(tmp_path: Path) -> None:
     assert any("does not match the manifest" in f for f in outcome.failures)
 
 
-def test_checkpoint_hash_must_match_the_expected_colab_hash(tmp_path: Path) -> None:
+def test_checkpoint_hash_must_match_the_operator_supplied_hash(tmp_path: Path) -> None:
     base = _artifact(tmp_path, _manifest())
-    outcome = _validate(base, expected_sha=EXPECTED_SMOKE_CHECKPOINT_SHA256)
+    outcome = _validate(base, expected_sha=HISTORICAL_V1_CHECKPOINT_SHA256)
     assert outcome.smoke_validated is False
-    assert any("expected Colab hash" in f for f in outcome.failures)
+    assert any("operator-supplied" in f for f in outcome.failures)
 
 
 def test_hash_is_recomputed_from_the_bytes_not_read_from_the_manifest(tmp_path: Path) -> None:
@@ -180,7 +199,7 @@ def test_missing_checkpoint_file_is_reported(tmp_path: Path) -> None:
     (base / CHECKPOINT_RELATIVE_PATH).unlink()
     outcome = validate_smoke_artifact(
         base, expected_corpus=EXPECTED_CORPUS,
-        expected_checkpoint_sha256=EXPECTED_SMOKE_CHECKPOINT_SHA256)
+        expected_checkpoint_sha256=HISTORICAL_V1_CHECKPOINT_SHA256)
     assert outcome.smoke_validated is False
     assert any("checkpoint file does not exist" in f for f in outcome.failures)
 
@@ -327,3 +346,179 @@ def test_malformed_manifest_raises(tmp_path: Path) -> None:
     (tmp_path / "training_manifest.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(ArtifactValidationError, match="not valid JSON"):
         load_smoke_manifest(tmp_path)
+
+
+# --- alignment counter reconciliation and diagnostic privacy (Audit 0026) -----
+
+def test_counters_must_reconcile_with_the_examples_considered(tmp_path: Path) -> None:
+    """aligned + unalignable + governed exclusions must equal examples considered."""
+    manifest = _manifest()
+    manifest["alignment"]["aligned_example_count"] = 7      # the pre-fix manifest shape
+    outcome = _validate(_artifact(tmp_path, manifest))
+    assert outcome.smoke_validated is False
+    assert any("counters reconcile" in f for f in outcome.failures)
+
+
+def test_equivalence_and_alignment_must_cover_the_same_examples(tmp_path: Path) -> None:
+    """The old manifest scored equivalence over 12 but alignment over 8."""
+    manifest = _manifest()
+    manifest["alignment"]["tokenizer_equivalence_considered"] = 8
+    outcome = _validate(_artifact(tmp_path, manifest))
+    assert outcome.smoke_validated is False
+    assert any("cover the same examples" in f for f in outcome.failures)
+
+
+def test_governed_exclusions_reconcile_without_blocking(tmp_path: Path) -> None:
+    """A tracked exclusion keeps the books balanced and does NOT fail validation."""
+    manifest = _manifest()
+    manifest["alignment"].update({
+        "aligned_example_count": 11, "governed_exclusion_count": 1,
+        "governed_exclusions": [{
+            "source": "vimq", "split": "train",
+            "privacy_safe_example_id": "0123456789abcdef",
+            "stage": "governed_exclusion", "reason_code": "GOVERNED_EXCLUSION",
+            "exception_type": ""}],
+    })
+    outcome = _validate(_artifact(tmp_path, manifest))
+    assert outcome.smoke_validated is True
+    assert outcome.diagnostics["governed_exclusions"]
+
+
+def test_unexpected_unalignable_examples_still_fail_validation(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["alignment"].update({
+        "aligned_example_count": 11, "unalignable_example_count": 1,
+        "unalignable_examples": [{
+            "source": "vimq", "split": "validation",
+            "privacy_safe_example_id": "0123456789abcdef",
+            "stage": "word_mapping",
+            "reason_code": "NON_SEPARATOR_GAP_INSIDE_WORD",
+            "exception_type": "AlignmentError"}],
+    })
+    outcome = _validate(_artifact(tmp_path, manifest))
+    assert outcome.smoke_validated is False
+    assert any("zero unalignable examples" in f for f in outcome.failures)
+    # the privacy-safe diagnostic is surfaced so the operator can act on it
+    assert outcome.diagnostics["unalignable_examples"][0]["reason_code"] == (
+        "NON_SEPARATOR_GAP_INSIDE_WORD")
+
+
+@pytest.mark.parametrize("entry", [
+    {"source": "vimq", "split": "train", "privacy_safe_example_id": "0123456789abcdef",
+     "stage": "word_mapping", "reason_code": "X", "exception_type": "AlignmentError",
+     "text": "benh nhan dau bung"},                       # raw clinical text
+    {"source": "vimq", "split": "train", "privacy_safe_example_id": "vimq:dev:000958",
+     "stage": "word_mapping", "reason_code": "X", "exception_type": "AlignmentError"},
+    {"source": "vimq", "split": "train", "privacy_safe_example_id": "",
+     "stage": "word_mapping", "reason_code": "X", "exception_type": "AlignmentError"},
+])
+def test_diagnostics_carrying_content_or_verbatim_ids_fail_validation(tmp_path, entry) -> None:
+    """A manifest must never smuggle clinical text through a diagnostic field."""
+    manifest = _manifest()
+    manifest["alignment"].update({
+        "aligned_example_count": 11, "governed_exclusion_count": 1,
+        "governed_exclusions": [entry]})
+    outcome = _validate(_artifact(tmp_path, manifest))
+    assert outcome.smoke_validated is False
+    assert any("privacy-safe" in f for f in outcome.failures)
+
+
+# --- artifact lifecycle: v1 historical vs v2 corrected (Audit 0026) -----------
+
+def test_v1_and_v2_smoke_output_directories_are_distinct() -> None:
+    paths = smoke_artifact_paths_from_config(SMOKE_CONFIG)
+    assert paths.artifact_version == "v2"
+    assert paths.artifact_dir.endswith("s1_mention_first_run_smoke_v2")
+    assert paths.previous_artifact_dir.endswith("s1_mention_first_run_smoke")
+    assert paths.artifact_dir != paths.previous_artifact_dir
+    assert "FULL_TRAINING_READINESS_FALSE" in paths.previous_artifact_status
+
+
+def test_corrected_smoke_config_cannot_target_the_historical_artifact(tmp_path: Path) -> None:
+    """The rerun must never overwrite the v1 evidence."""
+    import yaml
+    doc = yaml.safe_load(
+        (REPO / "configs" / "training" / "s1_mention_first_run_smoke.yaml").read_text(
+            encoding="utf-8"))
+    doc["output"]["artifact_dir"] = doc["output"]["previous_artifact_dir"]
+    with pytest.raises(ValueError, match="must differ from the historical"):
+        smoke_artifact_paths_from_config(doc)
+
+
+def test_smoke_config_output_section_is_required(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="missing output section"):
+        smoke_artifact_paths_from_config({"limits": {}})
+
+
+# --- the expected hash is supplied at runtime, never hardcoded ---------------
+
+def test_validator_source_contains_no_run_specific_checkpoint_hash() -> None:
+    """Accepting a new run must never require editing Python source."""
+    source = (REPO / "src" / "mednorm_vi" / "training"
+              / "s1_artifact_validation.py").read_text(encoding="utf-8")
+    assert HISTORICAL_V1_CHECKPOINT_SHA256 not in source
+    assert "EXPECTED_SMOKE_CHECKPOINT_SHA256 = " not in source
+    assert not re.search(r"[0-9a-f]{64}", source), "a 64-hex digest is hardcoded"
+
+
+# ("A" * 64 is NOT here: the validator lower-cases first, so an upper-case digest
+# is a valid hash that simply has to match - see the case-tolerance test below.)
+@pytest.mark.parametrize("expected", ["", "   ", None, "not-a-hash", "abc123",
+                                      "0" * 63, "0" * 65, "g" * 64])
+def test_missing_or_malformed_expected_hash_blocks_readiness(tmp_path, expected) -> None:
+    base = _artifact(tmp_path, _manifest())
+    outcome = validate_smoke_artifact(
+        base, expected_corpus=EXPECTED_CORPUS, expected_checkpoint_sha256=expected)
+    assert outcome.smoke_validated is False
+    assert any("expected checkpoint SHA-256 was not supplied" in f for f in outcome.failures)
+    # The recomputed digest is reported so the operator can confirm it.
+    assert outcome.checkpoint_sha256
+    assert any(outcome.checkpoint_sha256 in f for f in outcome.failures)
+    assert outcome.diagnostics["expected_checkpoint_sha256_supplied"] is False
+
+
+def test_a_new_run_is_accepted_by_supplying_its_hash_only(tmp_path: Path) -> None:
+    """Two different runs both validate, with no source change between them."""
+    for payload in (b"rerun-v2-alpha", b"rerun-v2-beta"):
+        base = _artifact(tmp_path / payload.decode(), _manifest(), checkpoint_bytes=payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        outcome = validate_smoke_artifact(
+            base, expected_corpus=EXPECTED_CORPUS, expected_checkpoint_sha256=digest)
+        assert outcome.smoke_validated is True
+        assert outcome.checkpoint_sha256 == digest
+        assert outcome.diagnostics["expected_checkpoint_sha256_supplied"] is True
+
+
+def test_expected_hash_is_case_and_whitespace_tolerant(tmp_path: Path) -> None:
+    base = _artifact(tmp_path, _manifest(), checkpoint_bytes=b"rerun")
+    digest = hashlib.sha256(b"rerun").hexdigest()
+    outcome = validate_smoke_artifact(
+        base, expected_corpus=EXPECTED_CORPUS,
+        expected_checkpoint_sha256=f"  {digest.upper()}  ")
+    assert outcome.smoke_validated is True
+
+
+def test_all_three_hashes_must_agree(tmp_path: Path) -> None:
+    """recomputed == manifest == operator-supplied, or nothing is granted."""
+    manifest = _manifest()
+    manifest["artifacts"]["checkpoint_sha256"] = "0" * 64      # manifest disagrees
+    base = _artifact(tmp_path, manifest, checkpoint_bytes=b"rerun")
+    outcome = validate_smoke_artifact(
+        base, expected_corpus=EXPECTED_CORPUS,
+        expected_checkpoint_sha256=hashlib.sha256(b"rerun").hexdigest())
+    assert outcome.smoke_validated is False
+    assert any("does not match the manifest" in f for f in outcome.failures)
+
+
+@pytest.mark.parametrize("value,valid", [
+    ("a" * 64, True), ("0123456789abcdef" * 4, True),
+    ("A" * 64, False), ("a" * 63, False), ("", False), ("zz", False),
+])
+def test_sha256_validity_rule(value, valid) -> None:
+    assert is_valid_sha256(value) is valid
+
+
+def test_outcome_reports_the_artifact_directory_it_validated(tmp_path: Path) -> None:
+    base = _artifact(tmp_path, _manifest())
+    outcome = _validate(base)
+    assert outcome.diagnostics["artifact_dir"] == str(base)

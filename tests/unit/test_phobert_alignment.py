@@ -334,16 +334,29 @@ def test_truncation_cutting_an_entity_is_counted() -> None:
 
 # --- boundary-merge policy ----------------------------------------------------
 
-def test_segmentation_merge_crossing_entity_boundary_fails_fast() -> None:
+def test_segmentation_merge_crossing_entity_boundary_is_masked_not_mislabeled() -> None:
+    """Audit 0026: the straddling word is masked; the example is NOT discarded.
+
+    Previously this raised and threw away every other entity in the example. The
+    ambiguous supervision is now removed (labels zeroed, label_mask 0) and counted,
+    which is the same rule PARTIAL_TRUNCATION_POLICY applies to truncation.
+    """
     text = "đau đầu nhiều"
     # entity covers only "đau", but segmentation merges "đau_đầu" -> straddles boundary
     words = map_segmented_words(text, segmented_text_to_words("đau_đầu nhiều"))
     assert find_boundary_violations(words, [(0, 3)]) == [0]
     ex = _example(text, [("đau", 0, 3, "SYMPTOM")])
-    with pytest.raises(AlignmentError, match="straddle"):
-        encode_mention_example_slow(
-            ex, FakeSlowTokenizer(), coverage_by_source=COVERAGE, max_length=32,
-            segmented_text="đau_đầu nhiều")
+    feature = encode_mention_example_slow(
+        ex, FakeSlowTokenizer(), coverage_by_source=COVERAGE, max_length=32,
+        segmented_text="đau_đầu nhiều")
+    assert feature["boundary_merge_masked_word_count"] == 1
+    assert feature["boundary_merge_affected_entity_count"] == 1
+    symptom = ENTITY_TYPE_ORDER.index("SYMPTOM")
+    # No token may carry the ambiguous label, and no masked token may carry any label.
+    assert all(lab[symptom] == 0 for lab in feature["labels"])
+    for lab, keep in zip(feature["labels"], feature["label_mask"], strict=True):
+        if not keep:
+            assert not any(lab)
 
 
 def test_word_fully_inside_entity_is_not_a_violation() -> None:

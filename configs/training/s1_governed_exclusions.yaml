@@ -1,0 +1,37 @@
+version: 1
+name: s1_governed_exclusions
+policy_version: s1-governed-exclusions-v1
+
+# Deterministic governed-exclusion policy for S1 (Audit 0026).
+#
+# An example may be skipped WITHOUT blocking full-training readiness only when it
+# is listed here with a recorded justification. Anything else that fails to encode
+# is an UNEXPECTED failure: it is counted in `unalignable_example_count`, listed in
+# `unalignable_examples`, and blocks readiness.
+#
+# Rules:
+#   * exclusions are keyed by `privacy_safe_example_id`
+#     (= sha256(example_id).hexdigest()[:16]); no raw clinical text, no raw entity
+#     text, and no verbatim example id is ever recorded here;
+#   * every entry needs a `justification` and a `decided_in` audit reference;
+#   * excluding an example is a governance decision, not a way to silence a bug.
+#     Prefer fixing the alignment backend;
+#   * this policy never edits the governed corpus itself. Changing corpus files
+#     requires concrete evidence and a separate, explicit governance decision.
+
+exclusions: []
+
+# Deliberately EMPTY. Audit 0026 found no invalid governed annotation.
+#
+# The one confirmed failure was an implementation defect, not bad data: several
+# governed sources (ViMQ ~93% of examples, PhoNER-COVID19 ~99%) are distributed
+# ALREADY word-segmented, so `_` occurs literally in `original_text` and entity
+# spans legitimately contain it. `map_segmented_words()` treated that literal
+# underscore as an illegal separator and rejected the example. That is fixed in
+# the alignment backend, so no exclusion is warranted.
+#
+# Open governance observation (NOT acted on here, no corpus file was modified):
+# storing pre-segmented text as `original_text` is in tension with spec §4, which
+# requires `original_text` to be the untouched source used to emit text and
+# position. Resolving that is a corpus-rebuild decision for a future milestone and
+# needs its own evidence and sign-off.

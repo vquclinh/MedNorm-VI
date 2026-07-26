@@ -31,6 +31,21 @@ limits:
   max_sequence_length: 160
   learning_rate: 0.00002
 
+# Artifact lifecycle (Audit 0026).
+#
+#   v1 = the historical smoke artifact whose manifest recorded
+#        full_training_readiness: false (pre-segmented-source alignment bug).
+#        It is immutable historical evidence and must NEVER be overwritten.
+#   v2 = the corrected rerun artifact produced after the alignment fix.
+#
+# The rerun writes to `artifact_dir`. `previous_artifact_dir` is recorded only so
+# the notebook and tests can prove the two are distinct.
+output:
+  artifact_version: v2
+  artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v2
+  previous_artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke
+  previous_artifact_status: HISTORICAL_FULL_TRAINING_READINESS_FALSE
+
 runtime:
   require_colab: true
   require_gpu: true

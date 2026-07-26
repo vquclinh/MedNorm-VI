@@ -68,3 +68,4 @@ Each audit should record, at minimum:
 - `0023-s1-colab-dependency-bootstrap-numpy-abi.md`
 - `0024-s1-scoped-dependency-health.md`
 - `0025-s1-smoke-artifact-validation-and-full-training-prep.md`
+- `0026-s1-pre-segmented-source-alignment-fix.md`
