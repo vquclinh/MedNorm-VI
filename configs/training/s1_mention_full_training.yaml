@@ -1,0 +1,112 @@
+version: 1
+stage_id: S1
+mode: FULL_TRAINING
+seed: 20260723
+
+# Full S1 mention training (Audit 0025).
+#
+# Spec §15 defines S1 as "Mention extraction / Span-W2NER-MRC heads / Span BCE-focal
+# + boundary offset + type loss". This configuration trains the ViHealthBERT span+type
+# head (registry role mention_span_type). The boundary-offset head belongs to L4
+# (Boundary & Type Resolver) and is deliberately NOT bolted on here; see the audit.
+#
+# Every hyperparameter below is derived from the spec, the measured governed corpus,
+# the 135M backbone, and realistic Colab Pro GPU limits - not copied or scaled from
+# the smoke limits.
+
+model:
+  registry_model_id: vihealthbert_span_type
+  hf_model_id: demdecuong/vihealthbert-base-word
+  approved_source: Hugging Face model hub
+  requested_revision: main
+
+  # PINNED IMMUTABLE REVISION - REQUIRED BEFORE FULL TRAINING.
+  #
+  # Deliberately empty. The immutable commit hash must be read from the VALIDATED
+  # smoke manifest field `model.resolved_model_revision` (40 hex characters) and
+  # pasted here. Loading this config without a 40-hex value raises
+  # FullTrainingConfigError: `main` is mutable and would make the run
+  # unreproducible. Never invent a revision.
+  pinned_revision: ""
+
+  # Full training starts from the approved PRETRAINED base revision. The one-step
+  # smoke checkpoint (s1_mention_smoke_model.pt) is execution evidence only and is
+  # rejected as an initialization or resume source.
+  initialize_from: pretrained_base
+
+data:
+  corpus_dir_relative: data/derived/training_corpora/mednorm_vi_training_v1
+
+  # p99 example length in the governed train split is 329 characters; word
+  # segmentation plus BPE keeps that comfortably inside 256 subtokens, which is
+  # also the hard ceiling for ViHealthBERT-Word (PhoBERT: 258 position embeddings).
+  max_sequence_length: 256
+
+  # phoner_covid19 declares boundary=false and entity_type=false in the governed
+  # annotation-coverage manifest, so its label_mask is entirely zero: 10,027 of
+  # 33,826 train examples would produce no gradient at all. Scoping the sampler to
+  # the 23,799 supervised examples removes ~30% of wasted GPU time. The governed
+  # corpus files are NOT modified.
+  filter_unsupervised_examples: true
+
+optimization:
+  # 23,799 supervised examples / effective batch 32 = 744 optimizer steps per epoch;
+  # 4 epochs = 2,976 steps. Standard encoder fine-tuning range (3-5 epochs), and
+  # roughly 40 minutes of Colab GPU time for a 135M backbone at 256 tokens.
+  num_epochs: 4
+  per_device_batch_size: 16
+  gradient_accumulation_steps: 2      # effective batch size 32
+
+  # 3e-5 sits in the standard 2e-5..5e-5 band for BERT-base-scale fine-tuning. The
+  # classification head is randomly initialized, so it gets a higher rate.
+  learning_rate: 0.00003
+  head_learning_rate: 0.0001
+  weight_decay: 0.01                  # not applied to bias/LayerNorm parameters
+  warmup_ratio: 0.06                  # RoBERTa convention; PhoBERT is RoBERTa-based
+  max_grad_norm: 1.0
+  mixed_precision: auto               # bf16 when the GPU supports it, else fp16
+
+loss:
+  # Spec §15 sanctions "Span BCE/focal". Positive tokens are rare (8.26% of
+  # supervised training characters fall inside an entity), and spec §1 puts entity
+  # recall at the head of the optimization chain, so focal is the default. Plain
+  # BCE - what the smoke exercised - remains selectable.
+  type: focal
+  focal_gamma: 2.0
+  focal_alpha: 0.25
+
+  # Training-time selection threshold only. Calibrated, metric-aware thresholds are
+  # the job of L8 (Metric Decoder) and S6, not of S1 training (spec §13).
+  decision_threshold: 0.5
+
+output:
+  output_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_full_training_v1
+  # Must never be written to; kept here so the config can prove the two differ.
+  smoke_artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke
+
+# The governed corpus this run is allowed to consume, byte-for-byte identical to
+# the smoke gate (Audit 0020).
+corpus:
+  expected_total_examples: 35916
+  expected_train_examples: 33826
+  expected_validation_examples: 1045
+  expected_internal_test_examples: 1045
+  expected_corpus_manifest_sha256: a3fd365d523b0ac54aab408ee14d00f88aefa42691fc810c445f8528e89fb8e3
+  expected_train_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  expected_vietmed_status: included_from_artifacts
+  expected_cross_split_family_leakage: 0
+  expected_eval_map_approximate_entities: 0
+
+runtime:
+  require_colab: true
+  require_gpu: true
+  # A long run must never start by accident (see the notebook guard).
+  confirmation_phrase: "RUN FULL S1 TRAINING"
+
+evaluation:
+  # Span-level micro F1 over contiguous typed token runs is the closest available
+  # proxy for entity-level scoring and selects the best checkpoint. Per-type token
+  # precision/recall/F1 are recorded for the error analysis required by spec §18.1.
+  best_metric_key: validation_span_micro_f1
+  best_metric_mode: max
+  evaluate_at_epoch_end: true

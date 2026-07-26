@@ -17,6 +17,8 @@ REPO = Path(__file__).resolve().parents[2]
 NB = REPO / "notebooks"
 VIETMED = "MedNorm_Data_VietMed_Preprocess.ipynb"
 S1_SMOKE = "MedNorm_S1_Mention_FirstRun_Smoke.ipynb"
+S1_VALIDATION = "MedNorm_S1_Smoke_Artifact_Validation.ipynb"
+S1_FULL = "MedNorm_S1_Mention_Full_Training.ipynb"
 ALL_NOTEBOOKS = sorted(p.name for p in NB.glob("*.ipynb"))
 
 # Notebooks honestly classified as DESIGN_DRAFT in the integrity report. They may
@@ -418,3 +420,136 @@ def test_all_notebooks_are_valid_json() -> None:
     for name in ALL_NOTEBOOKS:
         doc = json.loads((NB / name).read_text(encoding="utf-8"))
         assert doc["nbformat"] == 4 and doc["cells"]
+
+
+# --- S1 smoke-artifact validation notebook (Audit 0025) -----------------------
+
+def test_validation_notebook_reads_the_real_manifest_and_checkpoint() -> None:
+    code = _code(S1_VALIDATION)
+    assert "validate_smoke_artifact(" in code
+    assert "load_smoke_manifest(" in code
+    assert "EXPECTED_SMOKE_CHECKPOINT_SHA256" in code
+    assert "outcome.smoke_validated" in code
+    # It must fail loudly and enumerate every failed condition.
+    assert "for failure in outcome.failures" in code
+    assert "raise AssertionError" in code
+
+
+def test_validation_notebook_treats_global_pip_check_as_a_diagnostic() -> None:
+    code = _code(S1_VALIDATION)
+    assert "non_blocking_dependency_conflicts" in code
+    assert "pip_check_output" in code
+    assert "does NOT invalidate this artifact" in code
+
+
+def test_validation_notebook_never_trains_installs_or_restarts() -> None:
+    code = _code(S1_VALIDATION)
+    for forbidden in ("pip install", "os.kill", "loss.backward", "optimizer.step",
+                      "from_pretrained", "output.zip"):
+        assert forbidden not in code, f"validation notebook must not contain {forbidden!r}"
+
+
+def test_validation_notebook_pins_the_revision_from_the_validated_manifest() -> None:
+    code = _code(S1_VALIDATION)
+    assert "pinned_revision_from_outcome(outcome)" in code
+    assert _s1_index_in(S1_VALIDATION, "outcome.smoke_validated") < _s1_index_in(
+        S1_VALIDATION, "pinned_revision_from_outcome(outcome)")
+
+
+# --- S1 full-training notebook (Audit 0025) -----------------------------------
+
+def test_full_training_notebook_has_an_explicit_guard_before_training() -> None:
+    code = _code(S1_FULL)
+    assert "CONFIRM_FULL_TRAINING" in code
+    assert 'confirmation_phrase' in code
+    assert "full training requires explicit confirmation" in code
+    # The guard must precede model acquisition, the real optimizer, and the loop.
+    # (The ABI preflight's dummy AdamW legitimately runs earlier.)
+    guard = _s1_index_in(S1_FULL, "raise SystemExit(\"full training requires")
+    for later in ("AutoModel.from_pretrained", "torch.optim.AdamW(parameter_groups)",
+                  "scaled.backward()"):
+        assert guard < _s1_index_in(S1_FULL, later), f"guard must precede {later}"
+
+
+def test_full_training_notebook_requires_a_validated_smoke_artifact_first() -> None:
+    code = _code(S1_FULL)
+    assert "validate_smoke_artifact(" in code
+    assert "smoke_outcome.smoke_validated" in code
+    assert "full training is not authorized" in code
+    assert _s1_index_in(S1_FULL, "validate_smoke_artifact(") < _s1_index_in(
+        S1_FULL, "AutoModel.from_pretrained")
+
+
+def test_full_training_notebook_uses_the_pinned_immutable_revision() -> None:
+    code = _code(S1_FULL)
+    assert "PINNED_MODEL_REVISION = pinned_revision_from_outcome(smoke_outcome)" in code
+    # The pinned hash reaches the config, the tokenizer, and the backbone.
+    assert code.count("revision=PINNED_MODEL_REVISION") == 3
+    assert "pinned_revision=PINNED_MODEL_REVISION" in code
+    assert 'revision="main"' not in code
+    assert "resolved_model_revision == PINNED_MODEL_REVISION" in code
+
+
+def test_full_training_notebook_never_initializes_from_the_smoke_checkpoint() -> None:
+    code = _code(S1_FULL)
+    assert "s1_mention_smoke_model.pt" not in code
+    assert "validate_resume_checkpoint(payload, config)" in code
+    assert "OUTPUT_DIR.resolve() != SMOKE_ARTIFACT_DIR.resolve()" in code
+
+
+def test_full_training_notebook_writes_to_a_separate_output_directory() -> None:
+    code = _code(S1_FULL)
+    assert "s1_mention_full_training_v1" not in code            # comes from the config
+    assert "full_training_output_paths(OUTPUT_DIR)" in code
+    assert "latest_checkpoint" in code and "best_checkpoint" in code
+    assert "OUTPUT_PATHS[\"training_manifest\"]" in code
+
+
+def test_full_training_notebook_preserves_the_validated_bootstrap_and_gates() -> None:
+    code = _code(S1_FULL)
+    for preserved in (
+        "decide_bootstrap_action(bootstrap_marker, MARKER_FINGERPRINT)",
+        "os.kill(os.getpid(), 9)",
+        "rng = RandomState(42)",
+        "dummy_optimizer.zero_grad(set_to_none=True)",
+        "abi_problems = validate_abi_report(abi_report)",
+        "classify_dependency_health(",
+        "verify_governed_corpus(",
+        "verify_tokenizer_equivalence(",
+        "encode_mention_example_slow(",
+        "py_vncorenlp.VnCoreNLP",
+        "use_fast=False",
+    ):
+        assert preserved in code, f"full-training notebook lost {preserved!r}"
+    assert "assert PRODUCTION_SEGMENTATION" in code
+    assert code.count("os.kill(os.getpid(), 9)") == 1           # exactly one restart
+
+
+def test_full_training_notebook_has_a_real_training_loop() -> None:
+    code = _code(S1_FULL)
+    for required in (
+        "torch.optim.AdamW(parameter_groups)",
+        "get_linear_schedule_with_warmup",
+        "clip_grad_norm_",
+        "gradient_accumulation_steps",
+        "torch.autocast",
+        "scaled.backward()",
+        "MentionMetrics()",
+        "is_better_metric(",
+        "build_full_training_manifest(",
+    ):
+        assert required in code, f"full-training loop is missing {required!r}"
+    assert "torch.cuda.OutOfMemoryError" in code                 # OOM guidance
+    assert "resumable" in code
+
+
+def test_full_training_notebook_runs_no_inference_or_packaging() -> None:
+    code = _code(S1_FULL)
+    for forbidden in ("output.zip", "openai", "anthropic", "requests.post"):
+        assert forbidden not in code
+
+
+def _s1_index_in(notebook: str, needle: str) -> int:
+    code = _code(notebook)
+    assert needle in code, f"{needle!r} not found in {notebook}"
+    return code.index(needle)

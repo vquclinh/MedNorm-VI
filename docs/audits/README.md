@@ -67,3 +67,4 @@ Each audit should record, at minimum:
 - `0022-s1-slow-tokenizer-alignment-fix.md`
 - `0023-s1-colab-dependency-bootstrap-numpy-abi.md`
 - `0024-s1-scoped-dependency-health.md`
+- `0025-s1-smoke-artifact-validation-and-full-training-prep.md`

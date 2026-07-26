@@ -62,7 +62,9 @@ def test_stage_notebook_has_required_sections(name: str) -> None:
     assert "CONFIRM_FULL" in src and "SystemExit" in src
 
 
-EXPECTED_INVENTORY = {
+# Audit 0017 documents exactly this inventory (1 VietMed prep + 7 stage S0-S6
+# + 1 S1 smoke + 1 retained inference/packaging = 10).
+AUDIT_0017_INVENTORY = {
     "MedNorm_Data_VietMed_Preprocess.ipynb",
     "MedNorm_S0_DomainAdaptation.ipynb",
     "MedNorm_S1_MentionExtraction.ipynb",
@@ -75,16 +77,28 @@ EXPECTED_INVENTORY = {
     "MedNorm_Full_Offline_Inference_and_Packaging.ipynb",
 }
 
+# Notebooks added after Audit 0017. Audits are immutable, so each later notebook
+# is documented in the audit that introduced it, not retrofitted into 0017.
+LATER_NOTEBOOKS = {
+    "MedNorm_S1_Smoke_Artifact_Validation.ipynb":
+        "0025-s1-smoke-artifact-validation-and-full-training-prep.md",
+    "MedNorm_S1_Mention_Full_Training.ipynb":
+        "0025-s1-smoke-artifact-validation-and-full-training-prep.md",
+}
+EXPECTED_INVENTORY = AUDIT_0017_INVENTORY | set(LATER_NOTEBOOKS)
+
 
 def test_notebook_inventory_matches_expected() -> None:
-    # Audit 0017 documents exactly this inventory (1 VietMed prep + 7 stage S0-S6
-    # + 1 S1 smoke + 1 retained inference/packaging = 10). Keep them in sync.
     assert set(ALL_NOTEBOOKS) == EXPECTED_INVENTORY
-    assert len(ALL_NOTEBOOKS) == 10
-    audit = (REPO / "docs" / "audits"
-             / "0017-training-readiness-and-governed-corpus.md").read_text(encoding="utf-8")
-    for name in EXPECTED_INVENTORY:
-        assert name in audit, f"audit does not list notebook {name}"
+    assert len(ALL_NOTEBOOKS) == 12
+    audit_dir = REPO / "docs" / "audits"
+    audit_0017 = (audit_dir / "0017-training-readiness-and-governed-corpus.md").read_text(
+        encoding="utf-8")
+    for name in AUDIT_0017_INVENTORY:
+        assert name in audit_0017, f"Audit 0017 does not list notebook {name}"
+    for name, audit_name in LATER_NOTEBOOKS.items():
+        audit = (audit_dir / audit_name).read_text(encoding="utf-8")
+        assert name in audit, f"{audit_name} does not list notebook {name}"
 
 
 def test_vietmed_preprocess_is_cpu_dataprep_not_training() -> None:
