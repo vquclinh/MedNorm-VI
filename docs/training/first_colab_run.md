@@ -1,4 +1,4 @@
-# First Colab Runs - Order and Gating (Audits 0017, 0020, 0021)
+# First Colab Runs - Order and Gating (Audits 0017, 0020, 0021, 0023, 0024)
 
 Two Colab actions, in order. Neither is full training. **Do not run full S1
 training** until the gating conditions at the bottom are all satisfied.
@@ -32,8 +32,10 @@ notebooks/MedNorm_S1_MentionExtraction.ipynb        (status: DESIGN_DRAFT)
 Audit 0020 clears the **data/corpus gate** for the S1 smoke milestone: VietMed is
 included, duplicate-family leakage is 0, eval approximate entities are 0, and the
 double rebuild is byte-identical. Audit 0021 implements the first-run smoke notebook but
-does not execute it locally. The notebook remains `IMPLEMENTED_UNEXECUTED` until the user
-runs it on Colab Pro and returns the artifacts.
+does not execute it locally. Audits 0023 and 0024 harden the Colab dependency path:
+one constrained install transaction, one forced kernel restart, then a scoped S1
+dependency-health preflight. The notebook remains `IMPLEMENTED_UNEXECUTED` until the
+user runs it on Colab Pro and returns the artifacts.
 
 Fresh Colab defaults:
 
@@ -73,9 +75,16 @@ max_sequence_length      160
 ```
 
 - **Runtime:** Colab Pro GPU. T4 is sufficient for the smoke path; L4/A100 are also fine.
+- **Run protocol:** use `Runtime > Run all` once for PASS 1, wait for the intentional
+  restart, reconnect, then use `Runtime > Run all` again for PASS 2.
 - **Primary backbone:** ViHealthBERT via registry id `vihealthbert_span_type` and Hugging
   Face source `demdecuong/vihealthbert-base-word`, cached under Drive. The notebook records
   the resolved model revision after acquisition.
+- **Dependency-health policy:** global `pip check` output is retained in full, but only
+  conflicts raised by distributions inside the S1 dependency closure block the run.
+  Unrelated IPython/Jedi and Gradio/Hugging Face Hub conflicts stay visible as
+  non-blocking diagnostics; NumPy, Torch, Jedi, Gradio, and Hugging Face Hub are not
+  modified merely to make global `pip check` green.
 - **Scope:** one bounded forward/backward/optimizer step plus one tiny validation inference
   batch. **No** leaderboard/full-model claim; **no** automatic transition to full training.
 - **Return:** `OUTPUT_DIR`, containing `checkpoint/s1_mention_smoke_model.pt` and

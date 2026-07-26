@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,168 @@ class DependencyContractError(ValueError):
     """Raised when the dependency contract is violated or malformed."""
 
 
+# --- dependency-health scoping (Audit 0024) -----------------------------------
+#
+# `pip check` audits the ENTIRE Colab image, including large preinstalled packages
+# S1 never imports (Gradio, IPython/jedi, …). Treating any global `pip check`
+# failure as a NumPy/Torch ABI failure blocked a runtime whose RandomState and
+# AdamW checks both passed. Health is therefore scoped to S1's own dependency
+# closure: a conflict blocks only when the COMPLAINING distribution is something
+# S1 actually depends on.
+
+_NAME_SEPARATORS = re.compile(r"[-_.]+")
+_REQUIREMENT_NAME = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_DISTRIBUTION_TOKEN = r"(?P<dependent>[A-Za-z0-9][A-Za-z0-9._-]*)\s+\S+"
+_PIP_CHECK_MISSING_LINE = re.compile(
+    rf"^{_DISTRIBUTION_TOKEN}\s+(?:requires|has requirement)\s+"
+    r"(?P<requirement>.+),\s+which is not installed\.?\s*$"
+)
+_PIP_CHECK_INCOMPATIBLE_LINE = re.compile(
+    rf"^{_DISTRIBUTION_TOKEN}\s+(?:requires|has requirement)\s+"
+    r"(?P<requirement>.+),\s+but you have\s+"
+    r"(?P<installed>[A-Za-z0-9][A-Za-z0-9._-]*)\s+.+?"
+    r"(?:\s+which is incompatible)?\.?\s*$"
+)
+
+
+def normalize_distribution_name(name: str) -> str:
+    """PEP 503 normalization (``huggingface_hub`` and ``huggingface-hub`` agree)."""
+    return _NAME_SEPARATORS.sub("-", str(name).strip()).lower()
+
+
+def parse_requirement_name(requirement: str) -> str:
+    """Distribution name from a requirement string, ignoring the version spec."""
+    match = _REQUIREMENT_NAME.match(str(requirement))
+    return normalize_distribution_name(match.group(1)) if match else ""
+
+
+def _is_extra_only(requirement: str) -> bool:
+    """True for requirements gated behind an extra S1 does not install."""
+    _, _, marker = str(requirement).partition(";")
+    return "extra" in marker and "==" in marker
+
+
+def compute_dependency_closure(
+    roots: Iterable[str], requirements: Mapping[str, Sequence[str]],
+) -> frozenset[str]:
+    """Transitive closure of the distributions S1 depends on.
+
+    ``requirements`` maps a normalized distribution name to its declared
+    requirement strings (from ``importlib.metadata``). Requirements gated behind
+    an extra are excluded — S1 installs no extras, so they are not in its closure.
+    """
+    closure: set[str] = set()
+    pending = [normalize_distribution_name(root) for root in roots]
+    while pending:
+        name = pending.pop()
+        if not name or name in closure:
+            continue
+        closure.add(name)
+        for requirement in requirements.get(name, ()) or ():
+            if _is_extra_only(requirement):
+                continue
+            dependency = parse_requirement_name(requirement)
+            if dependency and dependency not in closure:
+                pending.append(dependency)
+    return frozenset(closure)
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyConflict:
+    """One `pip check` complaint, with the distribution that raised it."""
+
+    dependent: str        # normalized name of the COMPLAINING distribution
+    requirement: str      # normalized name of the distribution it is unhappy about
+    kind: str             # "incompatible" | "missing" | "unparsed"
+    message: str          # the original, untruncated `pip check` line
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "dependent": self.dependent, "requirement": self.requirement,
+            "kind": self.kind, "message": self.message,
+        }
+
+
+def parse_pip_check_output(output: str) -> list[DependencyConflict]:
+    """Parse every non-empty `pip check` line; unrecognized lines are kept."""
+    conflicts: list[DependencyConflict] = []
+    for raw in str(output or "").splitlines():
+        line = raw.strip()
+        if not line or line.lower().startswith("no broken requirements"):
+            continue
+        missing_match = _PIP_CHECK_MISSING_LINE.match(line)
+        incompatible_match = _PIP_CHECK_INCOMPATIBLE_LINE.match(line)
+        match = missing_match or incompatible_match
+        if match is None:
+            conflicts.append(DependencyConflict("", "", "unparsed", line))
+            continue
+        conflicts.append(DependencyConflict(
+            dependent=normalize_distribution_name(match.group("dependent")),
+            requirement=parse_requirement_name(match.group("requirement")),
+            kind="missing" if missing_match else "incompatible",
+            message=line,
+        ))
+    return conflicts
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyHealth:
+    """Closure-scoped verdict over the global `pip check` output."""
+
+    blocking: tuple[DependencyConflict, ...]
+    non_blocking: tuple[DependencyConflict, ...]
+    closure: frozenset[str]
+    pip_check_output: str
+    pip_check_returncode: int
+
+    @property
+    def healthy(self) -> bool:
+        """S1 is healthy when nothing inside ITS closure is broken."""
+        return not self.blocking
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "s1_dependency_healthy": self.healthy,
+            "s1_dependency_closure": sorted(self.closure),
+            "blocking_dependency_conflicts": [c.message for c in self.blocking],
+            "non_blocking_dependency_conflicts": [c.message for c in self.non_blocking],
+            "dependency_conflicts": [c.as_dict() for c in (*self.blocking, *self.non_blocking)],
+            "pip_check_passed": self.pip_check_returncode == 0,
+            "pip_check_returncode": self.pip_check_returncode,
+            "pip_check_output": self.pip_check_output,   # complete, never truncated
+        }
+
+
+def classify_dependency_health(
+    pip_check_output: str, closure: Iterable[str], pip_check_returncode: int = 0,
+) -> DependencyHealth:
+    """Split `pip check` complaints into S1-blocking and unrelated-but-recorded.
+
+    A conflict blocks only when the **complaining** distribution is inside S1's
+    dependency closure. ``gradio requires huggingface-hub<1.0`` is Gradio's
+    problem: S1 never imports Gradio, and huggingface-hub must not be moved to
+    satisfy it. ``transformers requires tokenizers…`` is S1's problem and blocks.
+
+    A line that cannot be parsed blocks only if it mentions a closure member, so
+    unfamiliar pip wording about unrelated packages can never fail the run.
+    """
+    normalized = frozenset(normalize_distribution_name(name) for name in closure)
+    blocking: list[DependencyConflict] = []
+    non_blocking: list[DependencyConflict] = []
+    for conflict in parse_pip_check_output(pip_check_output):
+        if conflict.kind == "unparsed":
+            tokens = {normalize_distribution_name(t) for t in re.split(r"\s+", conflict.message)}
+            relevant = bool(tokens & normalized)
+        else:
+            relevant = conflict.dependent in normalized
+        (blocking if relevant else non_blocking).append(conflict)
+    return DependencyHealth(
+        blocking=tuple(blocking), non_blocking=tuple(non_blocking),
+        closure=normalized, pip_check_output=str(pip_check_output or ""),
+        pip_check_returncode=int(pip_check_returncode),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DependencyContract:
     contract_version: str
@@ -62,9 +225,17 @@ class DependencyContract:
     marker_path: str
     expected_passes: int
     not_installed: tuple[str, ...] = field(default_factory=tuple)
+    # (distribution, module) pairs S1 actually imports. These are the ROOTS of the
+    # dependency closure that scopes `pip check`; everything else in the Colab
+    # image is out of scope for S1 health.
+    import_closure_roots: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     # SHA-256 of the exact contract file bytes; changes whenever the tracked
     # contract changes in any way, forcing a fresh install+restart.
     contract_sha256: str = ""
+
+    @property
+    def closure_root_distributions(self) -> tuple[str, ...]:
+        return tuple(normalize_distribution_name(d) for d, _ in self.import_closure_roots)
 
     @property
     def install_requirement_hash(self) -> str:
@@ -74,6 +245,7 @@ class DependencyContract:
             "protected": sorted(PROTECTED_PACKAGES),
             "inherited": sorted(self.inherited_from_runtime),
             "not_installed": sorted(self.not_installed),
+            "import_closure": sorted(f"{d}:{m}" for d, m in self.import_closure_roots),
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -150,8 +322,24 @@ def load_dependency_contract(path: str | Path) -> DependencyContract:
         marker_path=str(restart.get("marker_path", "/content/.mednorm_s1_bootstrap.json")),
         expected_passes=int(restart.get("expected_passes", 2)),
         not_installed=tuple(str(e.get("name", "")) for e in (doc.get("not_installed") or [])),
+        import_closure_roots=_load_import_closure_roots(doc),
         contract_sha256=compute_contract_sha256(path),
     )
+
+
+def _load_import_closure_roots(doc: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Read the governed (distribution, module) roots of the S1 import closure."""
+    roots: list[tuple[str, str]] = []
+    for entry in doc.get("s1_import_closure") or []:
+        distribution = str(entry.get("distribution", "")).strip()
+        module = str(entry.get("module", "")).strip()
+        if not distribution or not module:
+            raise DependencyContractError(
+                f"s1_import_closure entry needs distribution and module: {entry}")
+        roots.append((distribution, module))
+    if not roots:
+        raise DependencyContractError("dependency contract declares no s1_import_closure")
+    return tuple(roots)
 
 
 def marker_mismatches(
@@ -256,8 +444,14 @@ def validate_abi_report(report: Mapping[str, Any]) -> list[str]:
         problems.append("torch.optim.AdamW construction failed")
     if int(report.get("numpy_distribution_count", 0) or 0) > 1:
         problems.append("multiple numpy distributions installed")
-    if not report.get("pip_check_passed", False):
-        problems.append("pip check reported broken requirements")
+    # `pip check` is DIAGNOSTIC ONLY. Its global verdict covers the whole Colab
+    # image; only conflicts inside S1's own dependency closure may block the run.
+    if not report.get("s1_dependency_closure_verified", False):
+        problems.append("S1 dependency closure was not verified")
+    for module in report.get("s1_import_failures", ()) or ():
+        problems.append(f"S1 dependency import failed: {module}")
+    for message in report.get("blocking_dependency_conflicts", ()) or ():
+        problems.append(f"S1 dependency conflict: {message}")
     numpy_path = str(report.get("numpy_path", "") or "")
     for shadow in ("/content/drive", "/MedNorm-VI/src", "/content/MedNorm-VI"):
         if shadow in numpy_path:
@@ -287,6 +481,7 @@ def evaluate_full_training_readiness(evidence: Mapping[str, Any]) -> bool:
         and _count(evidence, "unalignable_example_count", 1) == 0
         and evidence.get("dependency_restart_completed", False)
         and evidence.get("numpy_abi_preflight_passed", False)
+        and evidence.get("s1_dependency_closure_verified", False)
         and evidence.get("train_loss_finite", False)
         and evidence.get("backward_completed", False)
         and evidence.get("optimizer_step_completed", False)
@@ -302,8 +497,15 @@ __all__ = [
     "FORBIDDEN_INSTALL_TOKENS",
     "PROTECTED_PACKAGES",
     "REQUIRED_MARKER_FIELDS",
+    "DependencyConflict",
     "DependencyContract",
+    "DependencyHealth",
     "MarkerFingerprint",
+    "classify_dependency_health",
+    "compute_dependency_closure",
+    "normalize_distribution_name",
+    "parse_pip_check_output",
+    "parse_requirement_name",
     "build_marker_fingerprint",
     "compute_contract_sha256",
     "marker_mismatches",

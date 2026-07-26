@@ -272,6 +272,35 @@ def test_s1_smoke_notebook_keeps_adamw_as_the_real_optimizer() -> None:
     assert "optimizer = torch.optim.AdamW(model.parameters()" in code
 
 
+def test_s1_smoke_notebook_scopes_pip_check_without_remediation() -> None:
+    code = _code(S1_SMOKE)
+    assert "classify_dependency_health(" in code
+    assert "DEPENDENCY_HEALTH.as_dict()" in code
+    assert (
+        '"blocking_dependency_conflicts": '
+        "[c.message for c in DEPENDENCY_HEALTH.blocking]"
+    ) in code
+    assert (
+        '"non_blocking_dependency_conflicts": '
+        "[c.message for c in DEPENDENCY_HEALTH.non_blocking]"
+    ) in code
+    assert '"pip_check_stdout": pip_check.stdout' in code
+    assert '"pip_check_stderr": pip_check.stderr' in code
+    assert '"pip_check_output": pip_check_output' in code
+    assert "[:2000]" not in code
+
+    install_related_lines = []
+    for line in code.splitlines():
+        lower = line.lower()
+        if line.lstrip().startswith("#"):
+            continue
+        if "install" in lower or "pip" in lower:
+            install_related_lines.append(lower)
+    assert not any("jedi" in line for line in install_related_lines)
+    assert not any("gradio" in line for line in install_related_lines)
+    assert not any("huggingface-hub" in line for line in install_related_lines)
+
+
 def test_s1_smoke_notebook_manifest_records_environment_fields() -> None:
     code = _code(S1_SMOKE)
     for field in ("dependency_contract_version", "dependency_restart_completed",
@@ -281,7 +310,9 @@ def test_s1_smoke_notebook_manifest_records_environment_fields() -> None:
                   "pip_check_passed", "dependency_contract_sha256",
                   "install_requirement_hash", "python_major_minor",
                   "protected_baseline_versions", "bootstrap_action",
-                  "bootstrap_marker_mismatches"):
+                  "bootstrap_marker_mismatches", "s1_dependency_closure",
+                  "blocking_dependency_conflicts", "non_blocking_dependency_conflicts",
+                  "pip_check_output", "s1_dependency_closure_verified"):
         assert field in code, f"manifest env field {field!r} missing"
     assert "evaluate_full_training_readiness({" in code
 

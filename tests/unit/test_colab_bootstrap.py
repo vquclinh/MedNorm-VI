@@ -20,11 +20,16 @@ from mednorm_vi.training.colab_bootstrap import (
     build_install_command,
     build_marker_fingerprint,
     build_pip_constraints,
+    classify_dependency_health,
     compute_contract_sha256,
+    compute_dependency_closure,
     decide_bootstrap_action,
     evaluate_full_training_readiness,
     load_dependency_contract,
     marker_mismatches,
+    normalize_distribution_name,
+    parse_pip_check_output,
+    parse_requirement_name,
     validate_abi_report,
     validate_install_command,
 )
@@ -33,6 +38,18 @@ REPO = Path(__file__).resolve().parents[2]
 CONTRACT_PATH = REPO / "configs" / "training" / "s1_mention_colab_dependencies.yaml"
 BASELINE = {"numpy": "2.0.2", "torch": "2.8.0+cu126"}
 PYTHON_MM = "3.12"
+
+# The exact conflicts a fresh Colab GPU runtime reported after the S1 install.
+JEDI_LINE = "ipython 7.34.0 requires jedi, which is not installed."
+GRADIO_LINE = ("gradio 6.20.0 has requirement huggingface-hub<2.0,>=1.2.0, "
+               "but you have huggingface-hub 0.36.2.")
+TRANSFORMERS_LINE = ("transformers 4.44.2 requires tokenizers<0.20,>=0.19, but you have "
+                     "tokenizers 0.21.0 which is incompatible.")
+MISSING_TOKENIZERS_LINE = "transformers 4.44.2 requires tokenizers, which is not installed."
+S1_CLOSURE = frozenset({
+    "numpy", "torch", "transformers", "tokenizers", "huggingface-hub", "safetensors",
+    "sentencepiece", "accelerate", "py-vncorenlp", "pyyaml", "filelock", "requests",
+})
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +70,7 @@ def _exact_marker(fingerprint) -> dict:
 # --- contract -----------------------------------------------------------------
 
 def test_contract_loads_and_declares_inherited_stack(contract) -> None:
-    assert contract.contract_version == "s1-colab-deps-v1"
+    assert contract.contract_version == "s1-colab-deps-v2"
     assert "numpy" in contract.inherited_from_runtime
     assert "torch" in contract.inherited_from_runtime
     assert contract.expected_passes == 2
@@ -222,6 +239,8 @@ def _healthy() -> dict:
         "numpy_imported": True, "numpy_random_imported": True, "torch_imported": True,
         "adamw_constructed": True, "numpy_distribution_count": 1,
         "pip_check_passed": True, "numpy_path": "/usr/local/lib/python3.12/dist-packages/numpy",
+        "s1_dependency_closure_verified": True, "s1_import_failures": [],
+        "blocking_dependency_conflicts": [],
     }
 
 
@@ -241,13 +260,30 @@ def test_abi_report_flags_each_failure(key, message) -> None:
     assert message in validate_abi_report(report)
 
 
-def test_abi_report_flags_duplicate_numpy_and_pip_check() -> None:
-    report = _healthy()
-    report["numpy_distribution_count"] = 2
-    report["pip_check_passed"] = False
+def test_abi_report_flags_duplicate_numpy() -> None:
+    report = _healthy() | {"numpy_distribution_count": 2}
+    assert "multiple numpy distributions installed" in validate_abi_report(report)
+
+
+def test_abi_report_ignores_a_failed_global_pip_check() -> None:
+    """A red global `pip check` caused by unrelated Colab packages must not fail S1."""
+    report = _healthy() | {"pip_check_passed": False,
+                           "non_blocking_dependency_conflicts": [GRADIO_LINE, JEDI_LINE]}
+    assert validate_abi_report(report) == []
+
+
+def test_abi_report_flags_blocking_closure_conflicts_and_import_failures() -> None:
+    report = _healthy() | {"blocking_dependency_conflicts": [TRANSFORMERS_LINE],
+                           "s1_import_failures": ["transformers: ImportError: boom"]}
     problems = validate_abi_report(report)
-    assert "multiple numpy distributions installed" in problems
-    assert "pip check reported broken requirements" in problems
+    assert any(TRANSFORMERS_LINE in p for p in problems)
+    assert any("S1 dependency import failed: transformers" in p for p in problems)
+
+
+def test_abi_report_fails_closed_when_the_closure_was_never_verified() -> None:
+    report = _healthy()
+    del report["s1_dependency_closure_verified"]
+    assert "S1 dependency closure was not verified" in validate_abi_report(report)
 
 
 @pytest.mark.parametrize("path", [
@@ -260,6 +296,157 @@ def test_abi_report_flags_shadowed_numpy(path) -> None:
     assert any("unexpected location" in p for p in validate_abi_report(report))
 
 
+# --- dependency closure and pip check scoping ---------------------------------
+
+def test_contract_declares_the_s1_import_closure(contract) -> None:
+    modules = {module for _, module in contract.import_closure_roots}
+    assert {"numpy", "torch", "transformers", "tokenizers", "huggingface_hub",
+            "sentencepiece", "py_vncorenlp", "yaml"} <= modules
+    assert "huggingface-hub" in contract.closure_root_distributions   # PEP 503
+    assert "gradio" not in contract.closure_root_distributions
+    assert "jedi" not in contract.closure_root_distributions
+
+
+def test_contract_requires_an_import_closure(tmp_path: Path) -> None:
+    doc = CONTRACT_PATH.read_text(encoding="utf-8").replace("s1_import_closure:", "unused_key:")
+    bad = tmp_path / "no_closure.yaml"
+    bad.write_text(doc, encoding="utf-8")
+    with pytest.raises(DependencyContractError):
+        load_dependency_contract(bad)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("huggingface_hub", "huggingface-hub"),
+    ("HuggingFace.Hub", "huggingface-hub"),
+    ("py_vncorenlp", "py-vncorenlp"),
+])
+def test_distribution_names_are_pep503_normalized(raw, expected) -> None:
+    assert normalize_distribution_name(raw) == expected
+
+
+@pytest.mark.parametrize("requirement,expected", [
+    ("huggingface-hub<1.0,>=0.28.1", "huggingface-hub"),
+    ("huggingface-hub<2.0,>=1.2.0", "huggingface-hub"),
+    ("tokenizers>=0.19", "tokenizers"),
+    ("requests[socks]>=2.0", "requests"),
+    ('jedi>=0.16; extra == "test"', "jedi"),
+])
+def test_requirement_names_ignore_version_specs(requirement, expected) -> None:
+    assert parse_requirement_name(requirement) == expected
+
+
+def test_dependency_closure_is_transitive_and_excludes_extras() -> None:
+    graph = {
+        "transformers": ["tokenizers>=0.19", "huggingface-hub<1.0", 'pytest; extra == "dev"'],
+        "huggingface-hub": ["requests", "filelock"],
+        "tokenizers": ["huggingface-hub"],
+        "gradio": ["huggingface-hub<1.0"],          # depends INTO the closure
+        "requests": [], "filelock": [],
+    }
+    closure = compute_dependency_closure(["transformers"], graph)
+    assert closure == {"transformers", "tokenizers", "huggingface-hub", "requests", "filelock"}
+    assert "pytest" not in closure                  # extras are not installed by S1
+    assert "gradio" not in closure                  # a reverse dependency is NOT in the closure
+
+
+def test_dependency_closure_survives_cycles_and_unknown_distributions() -> None:
+    graph = {"a": ["b"], "b": ["a", "missing-dist"]}
+    assert compute_dependency_closure(["a"], graph) == {"a", "b", "missing-dist"}
+
+
+def test_parse_pip_check_output_extracts_dependent_and_kind() -> None:
+    conflicts = parse_pip_check_output(f"{JEDI_LINE}\n{GRADIO_LINE}\n")
+    assert [(c.dependent, c.requirement, c.kind) for c in conflicts] == [
+        ("ipython", "jedi", "missing"),
+        ("gradio", "huggingface-hub", "incompatible"),
+    ]
+    assert conflicts[1].message == GRADIO_LINE      # original line retained verbatim
+
+
+def test_observed_colab_conflicts_are_non_blocking() -> None:
+    """The exact fresh-Colab output: IPython/jedi and Gradio/huggingface-hub.
+
+    Neither IPython nor Gradio is imported by S1, so neither may fail the run --
+    and huggingface_hub must NOT be upgraded to satisfy Gradio.
+    """
+    health = classify_dependency_health(
+        f"{JEDI_LINE}\n{GRADIO_LINE}", S1_CLOSURE, pip_check_returncode=1)
+    assert health.healthy is True
+    assert health.blocking == ()
+    assert [c.dependent for c in health.non_blocking] == ["ipython", "gradio"]
+    assert health.as_dict()["pip_check_passed"] is False        # honestly recorded
+    assert health.as_dict()["pip_check_output"] == f"{JEDI_LINE}\n{GRADIO_LINE}"
+
+
+@pytest.mark.parametrize("line,dependent,requirement", [
+    ("ipython 8.12.3 requires jedi>=0.16, which is not installed.", "ipython", "jedi"),
+    ("ipython 7.34.0 has requirement jedi>=0.16, which is not installed.",
+     "ipython", "jedi"),
+    ("gradio 5.49.1 has requirement huggingface-hub<1.0,>=0.28.1, "
+     "but you have huggingface-hub 1.0.1.", "gradio", "huggingface-hub"),
+    ("gradio 6.20.0 requires huggingface-hub<2.0,>=1.2.0, "
+     "but you have huggingface-hub 0.36.2 which is incompatible.",
+     "gradio", "huggingface-hub"),
+])
+def test_equivalent_colab_conflict_variants_remain_non_blocking(
+    line: str, dependent: str, requirement: str,
+) -> None:
+    health = classify_dependency_health(line, S1_CLOSURE, pip_check_returncode=1)
+    assert health.healthy is True
+    assert health.blocking == ()
+    assert [(c.dependent, c.requirement) for c in health.non_blocking] == [
+        (dependent, requirement)
+    ]
+
+
+@pytest.mark.parametrize("line,dependent", [
+    (TRANSFORMERS_LINE, "transformers"),
+    (MISSING_TOKENIZERS_LINE, "transformers"),
+    ("torch 2.8.0 requires filelock, which is not installed.", "torch"),
+    ("huggingface-hub 1.0.1 requires requests>=2.0, which is not installed.",
+     "huggingface-hub"),
+])
+def test_conflicts_raised_inside_the_closure_block(line, dependent) -> None:
+    health = classify_dependency_health(line, S1_CLOSURE, pip_check_returncode=1)
+    assert health.healthy is False
+    assert [c.dependent for c in health.blocking] == [dependent]
+
+
+def test_blocking_and_non_blocking_conflicts_are_separated_together() -> None:
+    output = f"{JEDI_LINE}\n{TRANSFORMERS_LINE}\n{GRADIO_LINE}"
+    health = classify_dependency_health(output, S1_CLOSURE, pip_check_returncode=1)
+    assert [c.message for c in health.blocking] == [TRANSFORMERS_LINE]
+    assert [c.message for c in health.non_blocking] == [JEDI_LINE, GRADIO_LINE]
+    payload = health.as_dict()
+    assert payload["s1_dependency_healthy"] is False
+    assert payload["pip_check_output"] == output                # complete diagnostics
+    assert len(payload["dependency_conflicts"]) == 3
+
+
+def test_clean_pip_check_is_healthy() -> None:
+    for output in ("", "No broken requirements found.\n"):
+        health = classify_dependency_health(output, S1_CLOSURE, pip_check_returncode=0)
+        assert health.healthy is True and health.non_blocking == ()
+
+
+def test_unparsed_lines_block_only_when_they_mention_the_closure() -> None:
+    unrelated = classify_dependency_health(
+        "gradio has some brand new pip wording", S1_CLOSURE, 1)
+    relevant = classify_dependency_health(
+        "transformers has some brand new pip wording", S1_CLOSURE, 1)
+    assert unrelated.healthy is True
+    assert [c.kind for c in unrelated.non_blocking] == ["unparsed"]
+    assert relevant.healthy is False
+    assert [c.kind for c in relevant.blocking] == ["unparsed"]
+
+
+def test_huggingface_hub_is_never_a_remediation_target(contract) -> None:
+    """Gradio's complaint must not turn into an install of huggingface_hub."""
+    assert not any("huggingface" in s.lower() for s in contract.install_specifiers)
+    health = classify_dependency_health(GRADIO_LINE, S1_CLOSURE, 1)
+    assert health.healthy is True
+
+
 # --- readiness formula --------------------------------------------------------
 
 def _ready() -> dict:
@@ -267,6 +454,7 @@ def _ready() -> dict:
         "production_segmentation": True, "tokenizer_equivalence_examples": 4,
         "tokenizer_equivalence_failures": 0, "unalignable_example_count": 0,
         "dependency_restart_completed": True, "numpy_abi_preflight_passed": True,
+        "s1_dependency_closure_verified": True,
         "train_loss_finite": True, "backward_completed": True,
         "optimizer_step_completed": True, "validation_completed": True,
         "checkpoint_saved": True, "checkpoint_reloaded": True,
@@ -279,7 +467,8 @@ def test_full_readiness_true_only_when_everything_holds() -> None:
 
 @pytest.mark.parametrize("key", [
     "production_segmentation", "dependency_restart_completed",
-    "numpy_abi_preflight_passed", "train_loss_finite", "backward_completed",
+    "numpy_abi_preflight_passed", "s1_dependency_closure_verified",
+    "train_loss_finite", "backward_completed",
     "optimizer_step_completed", "validation_completed", "checkpoint_saved",
     "checkpoint_reloaded",
 ])
