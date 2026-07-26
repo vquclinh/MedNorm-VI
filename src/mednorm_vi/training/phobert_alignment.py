@@ -105,6 +105,74 @@ SEGMENTATION_SOURCE_SEGMENTER = "vncorenlp_rdrsegmenter"
 PRE_SEGMENTED_PATTERN = re.compile(r"[^\W_]_[^\W_]", re.UNICODE)
 
 
+# VnCoreNLP runs on the JVM, where text is UTF-16. A non-BMP ("astral") character
+# is a surrogate pair there, and the round trip truncates it to its low 16 bits -
+# for example MATHEMATICAL BOLD SMALL BETA U+1D6C3 comes back as U+D6C3, a
+# completely different character. That is silent corruption of real clinical
+# content, not an orthographic variant, so it must never be accepted as
+# equivalent. Astral characters are instead swapped for BMP sentinels across the
+# segmenter boundary and restored immediately afterwards: one code point for one
+# code point, so offsets are untouched and the aligner only ever sees real text.
+ASTRAL_SENTINEL = "\ue000"          # first BMP private-use sentinel
+ASTRAL_SENTINEL_BASE = ord(ASTRAL_SENTINEL)
+ASTRAL_SENTINEL_LIMIT = 0xF8FF
+
+
+def _astral_sentinel(index: int) -> str:
+    value = ASTRAL_SENTINEL_BASE + index
+    if value > ASTRAL_SENTINEL_LIMIT:
+        raise AlignmentError(
+            "too many non-BMP characters to protect with the reserved BMP sentinels",
+            REASON_SEGMENTER_ALTERED_CHARACTERS)
+    return chr(value)
+
+
+def _is_astral_sentinel(char: str) -> bool:
+    return ASTRAL_SENTINEL_BASE <= ord(char) <= ASTRAL_SENTINEL_LIMIT
+
+
+def protect_astral_characters(text: str) -> tuple[str, tuple[str, ...]]:
+    """Replace non-BMP characters with a sentinel the JVM can round-trip."""
+    astral = tuple(char for char in text if ord(char) > 0xFFFF)
+    if not astral:
+        return text, ()
+    if any(_is_astral_sentinel(char) for char in text):
+        raise AlignmentError(
+            "text already contains a reserved astral sentinel; cannot protect it safely",
+            REASON_SEGMENTER_ALTERED_CHARACTERS)
+    sentinel_index = 0
+    protected: list[str] = []
+    for char in text:
+        if ord(char) > 0xFFFF:
+            protected.append(_astral_sentinel(sentinel_index))
+            sentinel_index += 1
+        else:
+            protected.append(char)
+    return "".join(protected), astral
+
+
+def restore_astral_characters(segmented: str, astral: tuple[str, ...]) -> str:
+    """Put the original non-BMP characters back, in order."""
+    if not astral:
+        return segmented
+    expected = tuple(_astral_sentinel(index) for index in range(len(astral)))
+    observed = tuple(char for char in segmented if _is_astral_sentinel(char))
+    if observed != expected:
+        raise AlignmentError(
+            f"segmenter did not preserve the protected non-BMP character sequence "
+            f"(expected {len(expected)}, found {len(observed)})",
+            REASON_SEGMENTER_ALTERED_CHARACTERS)
+    restored: list[str] = []
+    index = 0
+    for char in segmented:
+        if _is_astral_sentinel(char):
+            restored.append(astral[index])
+            index += 1
+        else:
+            restored.append(char)
+    return "".join(restored)
+
+
 def looks_pre_segmented(text: str) -> bool:
     """True when ``text`` is already RDRSegmenter output.
 
@@ -129,7 +197,9 @@ def resolve_segmented_text(
         return str(original_text), SEGMENTATION_SOURCE_PRE_SEGMENTED
     if segmenter is None:
         return str(original_text), SEGMENTATION_SOURCE_PRE_SEGMENTED
-    return str(segmenter(original_text)), SEGMENTATION_SOURCE_SEGMENTER
+    protected, astral = protect_astral_characters(str(original_text))
+    segmented = restore_astral_characters(str(segmenter(protected)), astral)
+    return segmented, SEGMENTATION_SOURCE_SEGMENTER
 
 
 class SlowTokenizerLike(Protocol):
@@ -664,6 +734,7 @@ __all__ = [
     "PARTIAL_TRUNCATION_POLICY",
     "ALIGNMENT_BACKEND",
     "EXPECTED_REASON_CODES",
+    "ASTRAL_SENTINEL",
     "SEGMENTATION_SOURCE_PRE_SEGMENTED",
     "SEGMENTATION_SOURCE_SEGMENTER",
     "SEGMENTER_JOIN_CHARACTER",
@@ -703,6 +774,8 @@ __all__ = [
     "is_legal_syllable_gap",
     "is_separator_character",
     "looks_pre_segmented",
+    "protect_astral_characters",
+    "restore_astral_characters",
     "resolve_segmented_text",
     "map_segmented_words",
     "segmented_text_to_words",

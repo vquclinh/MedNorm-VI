@@ -1,4 +1,4 @@
-# First Colab Runs - Order and Gating (Audits 0017, 0020, 0021, 0023, 0024)
+# First Colab Runs - Order and Gating (Audits 0017, 0020, 0021, 0023, 0024, 0029, 0030)
 
 Two Colab actions, in order. Neither is full training. **Do not run full S1
 training** until the gating conditions at the bottom are all satisfied.
@@ -34,8 +34,11 @@ included, duplicate-family leakage is 0, eval approximate entities are 0, and th
 double rebuild is byte-identical. Audit 0021 implements the first-run smoke notebook but
 does not execute it locally. Audits 0023 and 0024 harden the Colab dependency path:
 one constrained install transaction, one forced kernel restart, then a scoped S1
-dependency-health preflight. The notebook remains `IMPLEMENTED_UNEXECUTED` until the
-user runs it on Colab Pro and returns the artifacts.
+dependency-health preflight. Audit 0029 adds the full-corpus S1 alignment gate, and
+Audit 0030 records the authoritative local real-component preflight passing with
+24,844/24,844 supervised train+validation examples aligned and zero failures. The
+notebook remains `IMPLEMENTED_UNEXECUTED` until the user runs smoke-v5 on Colab Pro and
+returns the artifacts.
 
 Fresh Colab defaults:
 
@@ -45,7 +48,7 @@ REPO_DIR = Path("/content/MedNorm-VI")
 REPO_URL = "https://github.com/vquclinh/MedNorm-VI.git"
 REPO_REF = "main"
 CORPUS_DIR = DRIVE_ROOT / "data/derived/training_corpora/mednorm_vi_training_v1"
-OUTPUT_DIR = DRIVE_ROOT / "artifacts/s1_mention_first_run_smoke"
+OUTPUT_DIR = DRIVE_ROOT / "artifacts/s1_mention_first_run_smoke_v5"
 MODEL_CACHE_DIR = DRIVE_ROOT / "model_cache/huggingface"
 ```
 
@@ -88,11 +91,12 @@ max_sequence_length      160
 - **Scope:** one bounded forward/backward/optimizer step plus one tiny validation inference
   batch. **No** leaderboard/full-model claim; **no** automatic transition to full training.
 - **Return:** `OUTPUT_DIR`, containing `checkpoint/s1_mention_smoke_model.pt` and
-  `training_manifest.json`. Do not return base-model cache files.
+  `training_manifest.json`, plus the recomputed checkpoint SHA-256. Do not return base-model
+  cache files.
 
 ## Do NOT recommend full S1 training until ALL of these hold
 
-1. S1 smoke notebook is behaviorally verified from a successful Colab return;
+1. S1 smoke-v5 notebook is behaviorally verified from a successful Colab return;
 2. near-duplicate-safe splits remain rebuilt (duplicate-family grouping; 0 family leakage);
 3. TEST_NAME and TEST_RESULT supervision exists (synthetic/lexicon — currently absent);
 4. medication coverage is further improved beyond approximate VietMed spans;

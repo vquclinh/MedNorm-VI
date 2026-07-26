@@ -16,6 +16,7 @@ import pytest
 
 from mednorm_vi.training.colab_bootstrap import evaluate_full_training_readiness
 from mednorm_vi.training.phobert_alignment import (
+    ASTRAL_SENTINEL,
     BOUNDARY_MERGE_POLICY,
     EQUIVALENCE_CANONICAL,
     EQUIVALENCE_TONE_PLACEMENT,
@@ -36,7 +37,9 @@ from mednorm_vi.training.phobert_alignment import (
     looks_pre_segmented,
     map_segmented_words,
     orthographic_equivalence,
+    protect_astral_characters,
     resolve_segmented_text,
+    restore_astral_characters,
     segmented_text_to_words,
 )
 from mednorm_vi.training.s1_mention_smoke import (
@@ -607,3 +610,86 @@ def test_equivalence_requires_identical_non_tone_marks() -> None:
     # circumflex vs horn on the same base letter: same letter, different vowel.
     assert orthographic_equivalence("ầu", 0, "àu", 0) is None
     assert orthographic_equivalence("ơi", 0, "oi", 0) is None
+
+
+# --- non-BMP characters across the JVM segmenter boundary ---------------------
+#
+# VnCoreNLP runs on the JVM, where text is UTF-16. A non-BMP character is a
+# surrogate pair there and the round trip truncates it to its low 16 bits, which
+# silently replaces real clinical content with a different character. It is NOT
+# an orthographic variant and must never be accepted as equivalent.
+
+ASTRAL_CHARACTER = "\U0001d6c3"          # MATHEMATICAL BOLD SMALL BETA
+
+
+def test_astral_characters_are_protected_across_the_segmenter() -> None:
+    text = f"xet nghiem {ASTRAL_CHARACTER} - hCG"
+
+    def jvm_like_segmenter(payload: str) -> str:
+        # A JVM round trip preserves BMP characters exactly.
+        assert all(ord(c) <= 0xFFFF for c in payload), "astral char reached the JVM"
+        return payload.replace("xet nghiem", "xet_nghiem")
+
+    segmented, source = resolve_segmented_text(text, jvm_like_segmenter)
+    assert source == SEGMENTATION_SOURCE_SEGMENTER
+    assert ASTRAL_CHARACTER in segmented          # restored verbatim
+    words = map_segmented_words(text, segmented_text_to_words(segmented))
+    carrier = next(w for w in words if ASTRAL_CHARACTER in w.model_text)
+    assert text[carrier.original_start:carrier.original_end] == ASTRAL_CHARACTER
+
+
+def test_a_truncated_astral_character_is_never_accepted_as_equivalent() -> None:
+    """0x1D6C3 & 0xFFFF == 0xD6C3 - a different letter, so alignment must fail."""
+    truncated = chr(ord(ASTRAL_CHARACTER) & 0xFFFF)
+    assert truncated != ASTRAL_CHARACTER
+    assert orthographic_equivalence(ASTRAL_CHARACTER, 0, truncated, 0) is None
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words(f"a {ASTRAL_CHARACTER} b", segmented_text_to_words(f"a {truncated} b"))
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+
+
+def test_protection_round_trips_and_preserves_length() -> None:
+    text = f"{ASTRAL_CHARACTER} x {ASTRAL_CHARACTER}"
+    protected, astral = protect_astral_characters(text)
+    assert len(protected) == len(text)            # one code point for one code point
+    assert astral == (ASTRAL_CHARACTER, ASTRAL_CHARACTER)
+    assert all(ord(c) <= 0xFFFF for c in protected)
+    assert restore_astral_characters(protected, astral) == text
+
+
+def test_text_without_astral_characters_is_untouched() -> None:
+    text = "benh nhan dau dau"
+    protected, astral = protect_astral_characters(text)
+    assert protected == text and astral == ()
+    assert restore_astral_characters(text, ()) == text
+
+
+def test_a_segmenter_that_loses_a_protected_character_fails_loudly() -> None:
+    _protected, astral = protect_astral_characters(f"a {ASTRAL_CHARACTER} b")
+    with pytest.raises(AlignmentError) as excinfo:
+        restore_astral_characters("a b", astral)          # sentinel dropped
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+
+
+def test_a_segmenter_that_duplicates_a_protected_character_fails_loudly() -> None:
+    protected, astral = protect_astral_characters(f"a {ASTRAL_CHARACTER} b")
+    with pytest.raises(AlignmentError) as excinfo:
+        restore_astral_characters(protected + ASTRAL_SENTINEL, astral)
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+
+
+def test_a_segmenter_that_reorders_protected_characters_fails_loudly() -> None:
+    second_astral = "\U0001d6c4"
+    protected, astral = protect_astral_characters(f"{ASTRAL_CHARACTER} x {second_astral}")
+    first_sentinel = protected[0]
+    second_sentinel = protected[-1]
+    assert first_sentinel != second_sentinel
+    reordered = f"{second_sentinel} x {first_sentinel}"
+    with pytest.raises(AlignmentError) as excinfo:
+        restore_astral_characters(reordered, astral)
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+
+
+def test_text_already_containing_the_sentinel_is_refused() -> None:
+    with pytest.raises(AlignmentError):
+        protect_astral_characters(f"a {ASTRAL_SENTINEL} {ASTRAL_CHARACTER}")
