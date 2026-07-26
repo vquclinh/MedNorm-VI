@@ -10,7 +10,7 @@
 - **Spec:** `docs/MedNorm-VI_Architecture.pdf` v1.1 — read in full, **unmodified** (`git status`
   clean; SHA-256 `0d5eaa2045f6a4fba6c6505c14507a44e1c15768cb4adea76088b5f42081e09b`; last
   touched by commit `4be29de`, 2026-07-11).
-- **Status:** `BEST_CHECKPOINT_VALIDATED_AND_EVALUATED — FULL_ARTIFACT_UNVALIDATED`.
+- **Status:** `S1_FULL_ARTIFACT_VALIDATED_AND_HELD_OUT_EVALUATED`.
 
 ## 1. Exact initial Git state
 
@@ -176,6 +176,51 @@ no optimizer, no scheduler, no backward. The checkpoint SHA-256 and mtime were r
 `reports/s1_internal_test_eval/internal_test_evaluation.json`, recording
 `full_artifact_validated: false`.
 
+## 7a. Authoritative full-artifact validation (executed on Drive)
+
+The operator subsequently ran Audit 0031's **unmodified** `validate_full_training_artifact()`
+against the real Google Drive artifact. It passed with zero failed conditions:
+
+```text
+full_training_artifact_validated  true
+failed_condition_count            0
+failed_conditions                 []
+checkpoint_schema_checked         true
+
+artifact_dir      /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_full_training_v1
+completed_epochs  4
+completed_optimizer_steps         2976
+best_metric_key   validation_span_micro_f1
+best_metric       0.7194053623573136
+best.pt   SHA-256 a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+latest.pt SHA-256 0011cae4e8725a3133b3099a2f5bb1dc8b87e06261f3d6cdf9b9c5be510ed563
+pinned model revision  f89e80b461e86f9cfc1c84019bd819830c24b6c5
+repository commit recorded by the artifact  36c520d6221c6ad1391a03655b8e22d476d6fff0
+history validation records  4
+```
+
+All six required files were present: `checkpoints/best.pt`, `checkpoints/latest.pt`,
+`logs/training_history.jsonl`, `resolved_config.json`, `validation_metrics.json`,
+`training_manifest.json`.
+
+**What this settles.** The three-way checkpoint hash agreement, run completion, epoch/step
+accounting against the plan, the pinned revision, the config hash, the recorded best metric, the
+one-validation-record-per-epoch history, the checkpoint resume schema, and the three independent
+checks that the smoke checkpoint was **not** the initializer — all now hold against the real
+files. `best_metric = 0.7194053623573136` is therefore no longer merely operator-reported: it is
+read from a validated manifest that agrees with `validation_metrics.json`.
+
+The artifact records repository commit `36c520d6221c6ad1391a03655b8e22d476d6fff0`, which is a
+verified ancestor of the current HEAD — so the run's provenance is intact.
+
+The `best.pt` digest matches the local copy validated in §6 byte for byte, which ties the local
+held-out evaluation in §7 to the same validated artifact.
+
+**What this does not settle.** `validation_span_micro_f1` is a validation-split figure computed
+on the split used for checkpoint selection, and it is a token-index span proxy — **not** the
+organizer's complete metric, which additionally scores character-exact text under WER,
+assertions under Jaccard, and candidate sets under Jaccard at 40% weight (spec §1).
+
 ## 8. Dual-mode notebook
 
 `MedNorm_S1_Mention_InternalTest_Evaluation.ipynb` now supports both runtimes without
@@ -215,7 +260,7 @@ Evidence: module inventory, configs, tests, registry, and artifacts actually on 
 | Stage | Status | Implementation | Executed evidence | Checkpoint | Next blocker |
 | --- | --- | --- | --- | --- | --- |
 | S0 domain adaptation | `SCAFFOLD_ONLY` | `MedNorm_S0_DomainAdaptation.ipynb` is a DESIGN_DRAFT with placeholders | none | none | notebook is not runnable |
-| **S1 mention** | **`IMPLEMENTED_AND_EXECUTED`** | full training path, alignment backend, preflight, validators | full-corpus preflight 24,844/24,844; smoke-v5; training reported 4 epochs / 2,976 steps; **best.pt validated and evaluated held-out (§6, §7)** | `best.pt` local, SHA verified | full artifact (manifest/latest/history) still unvalidated |
+| **S1 mention** | **`IMPLEMENTED_AND_EXECUTED`** | full training path, alignment backend, preflight, validators | full-corpus preflight 24,844/24,844; smoke-v5; **full artifact VALIDATED on Drive, 0 failed conditions (§7a)**; 4 epochs / 2,976 steps; best.pt validated locally and evaluated held-out (§6, §7) | complete artifact validated; `best.pt` local SHA matches | S2 depends on an assertion corpus, not on S1 |
 | S2 assertion | `SCAFFOLD_ONLY` | `MedNorm_S2_Assertion.ipynb` DESIGN_DRAFT | none | none | no assertion corpus or trained head |
 | S3 retrieval | `SCAFFOLD_ONLY` | `MedNorm_S3_Retrieval.ipynb` DESIGN_DRAFT | none | none | no embeddings/index built |
 | S4 reranking | `SCAFFOLD_ONLY` | `MedNorm_S4_Reranker.ipynb` DESIGN_DRAFT | none | none | depends on S3 |
@@ -301,18 +346,36 @@ reports/local_alignment_preflight/                        ignored (reports/**)
 
 ## 15. Remaining blockers
 
-1. **The full training artifact is still unvalidated.** `manifest`, `latest.pt`, history,
-   `resolved_config.json` and `validation_metrics.json` exist only on Drive. Audit 0031's
-   validator must run there. The reported validation metric 0.7194 remains operator-reported.
-2. Held-out span micro F1 **0.746** is a token-index proxy, not the organizer's character-exact
-   entity metric with assertions and candidate Jaccard.
-3. TEST_NAME and TEST_RESULT have no supervision in the governed corpus.
-4. Eight of nine layers and six of seven stages remain scaffold, unexecuted or not started.
-5. Five of six registry roles still have `checkpoint_hash: missing`.
+*(The full-artifact blocker recorded earlier in this milestone is **resolved** — see §7a.)*
+
+1. **Neither S1 figure is the organizer's metric.** Validation span micro F1 **0.7194053623573136**
+   and held-out internal-test span micro F1 **0.746182** are both token-index span proxies. The
+   organizer scores character-exact text under WER, assertions under Jaccard, and candidate sets
+   under Jaccard at 40% weight (spec §1). No organizer-metric claim is made.
+2. **TEST_NAME and TEST_RESULT have no governed supervision**, so their metrics are undefined
+   rather than poor — two of the five spec entity types are unlearned.
+3. **SYMPTOM is the weakest supervised type** (token P/R/F1 0.7820 / 0.6234 / 0.6938), with
+   recall the binding constraint.
+4. **S2–S6 remain untrained**: assertion, retrieval, reranking, the Qwen LoRA critic and
+   calibration have no weights and no executed evidence.
+5. Eight of nine layers remain scaffold or unexecuted; L4, L6, L7 and L8 in particular.
+6. Five of six registry roles still have `checkpoint_hash: missing`.
+7. **No organizer inference has been run and no `output.zip` has ever been produced.**
 
 ## 16. Honest status
 
-`BEST_CHECKPOINT_VALIDATED_AND_EVALUATED — FULL_ARTIFACT_UNVALIDATED`. The local best checkpoint
-is validated from its own bytes and has produced a first held-out internal-test result. Full
-artifact validation, S2–S6, L4/L6/L7/L8 and organizer packaging all remain outstanding. No
-training, retraining, organizer inference or `output.zip` occurred in this milestone.
+`S1_FULL_ARTIFACT_VALIDATED_AND_HELD_OUT_EVALUATED`.
+
+* **Full training artifact: VALIDATED** on Drive by Audit 0031's unmodified validator, zero
+  failed conditions, all six files present, checkpoint schema checked (§7a).
+* **Local best checkpoint: VALIDATED** from its own bytes (§6), digest identical to the
+  validated artifact's `best.pt`.
+* **Held-out evaluation: EXECUTED** on the governed `internal_test` split (§7).
+* Two distinct numbers, deliberately kept apart: validation span micro F1
+  **0.7194053623573136** (selection split) and held-out internal-test span micro F1
+  **0.746182**. Neither is the organizer's complete metric.
+
+S1 mention extraction is the only stage with trained, validated weights. S2–S6 remain untrained;
+L4, L6, L7 and L8 remain scaffolds; TEST_NAME and TEST_RESULT remain unsupervised; SYMPTOM
+remains the weakest supervised type. No training, retraining, organizer inference or
+`output.zip` occurred in this milestone, and no checkpoint or Drive artifact was modified.

@@ -444,18 +444,48 @@ def test_design_draft_notebooks_are_documented_as_such(name: str) -> None:
     assert name in doc, f"{name} missing from the notebook integrity report"
 
 
+# Notebooks whose real-data execution is backed by a recorded, audited artifact.
+# Adding a name here without the audit trail is exactly what this guard prevents.
+REAL_DATA_VERIFIED_NOTEBOOKS = {
+    VIETMED,                                              # Audit 0020
+    "MedNorm_S1_Mention_Full_Training.ipynb",             # Audits 0031/0032
+    "MedNorm_S1_Mention_InternalTest_Evaluation.ipynb",   # Audit 0032
+}
+_AUDIT_CITATION = re.compile(r"Audit 00\d\d")
+
+
 def test_integrity_report_does_not_claim_unverified_notebooks_are_verified() -> None:
+    """A real-data claim needs an allow-listed notebook AND a cited audit.
+
+    The guard exists because Audit 0018 shipped a status document asserting a
+    notebook worked while its `git clone` was commented out. Evidence, not prose.
+    """
     doc = (REPO / "docs" / "notebooks" / "notebook_execution_integrity.md").read_text(
         encoding="utf-8")
-    # Only the VietMed notebook row may carry a smoke-verified status. Inventory rows
-    # are the table lines that name a notebook file (the legend row names none).
+    # Inventory rows are the table lines that name a notebook file (the legend
+    # row names none). Only the VietMed row may claim SYNTHETIC_SMOKE_VERIFIED.
     for line in doc.splitlines():
         if not line.strip().startswith("|") or ".ipynb" not in line:
             continue
         if "SYNTHETIC_SMOKE_VERIFIED" in line:
             assert VIETMED in line, f"non-VietMed notebook claims smoke-verified: {line}"
         if "REAL_DATA_EXECUTED" in line or "ARTIFACTS_VERIFIED" in line:
-            assert VIETMED in line, f"unsupported real-data/artifact claim: {line}"
+            assert any(name in line for name in REAL_DATA_VERIFIED_NOTEBOOKS), (
+                f"unsupported real-data/artifact claim: {line}")
+            assert _AUDIT_CITATION.search(line), (
+                f"real-data claim without an audit citation: {line}")
+
+
+def test_the_full_training_row_records_the_validated_drive_artifact() -> None:
+    """The S1 full-training claim must cite the evidence that supports it."""
+    doc = (REPO / "docs" / "notebooks" / "notebook_execution_integrity.md").read_text(
+        encoding="utf-8")
+    row = next(line for line in doc.splitlines()
+               if "MedNorm_S1_Mention_Full_Training.ipynb" in line and line.startswith("|"))
+    assert "REAL_DATA_EXECUTED" in row and "ARTIFACTS_VERIFIED" in row
+    for evidence in ("2,976 optimizer steps", "0.7194053623573136",
+                     "zero failed conditions", "all six required files"):
+        assert evidence in row, f"full-training row is missing evidence: {evidence!r}"
 
 
 def test_all_notebooks_are_valid_json() -> None:

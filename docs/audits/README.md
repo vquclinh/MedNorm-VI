@@ -75,3 +75,4 @@ Each audit should record, at minimum:
 - `0030-s1-authoritative-preflight-and-astral-protection.md`
 - `0031-s1-full-training-run-validation-and-internal-test-evaluation.md`
 - `0032-s1-local-checkpoint-and-architecture-progress-review.md`
+- `0033-s1-exact-mention-evaluator.md`
