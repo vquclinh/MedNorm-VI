@@ -71,3 +71,4 @@ Each audit should record, at minimum:
 - `0026-s1-pre-segmented-source-alignment-fix.md`
 - `0027-s1-character-level-alignment-and-segmentation-policy.md`
 - `0028-s1-tone-placement-equivalence.md`
+- `0029-s1-orthographic-equivalence-and-full-corpus-preflight.md`

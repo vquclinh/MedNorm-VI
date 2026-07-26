@@ -427,17 +427,19 @@ def test_diagnostics_carrying_content_or_verbatim_ids_fail_validation(tmp_path, 
 
 def test_every_smoke_artifact_version_is_a_distinct_directory() -> None:
     paths = smoke_artifact_paths_from_config(SMOKE_CONFIG)
-    assert paths.artifact_version == "v4"
-    assert paths.artifact_dir.endswith("s1_mention_first_run_smoke_v4")
-    assert [v for v, _, _ in paths.previous_artifacts] == ["v1", "v2", "v3"]
+    assert paths.artifact_version == "v5"
+    assert paths.artifact_dir.endswith("s1_mention_first_run_smoke_v5")
+    assert [v for v, _, _ in paths.previous_artifacts] == ["v1", "v2", "v3", "v4"]
     all_dirs = [paths.artifact_dir, *paths.previous_artifact_dirs]
-    assert len(set(all_dirs)) == 4, "v1..v4 must be four distinct directories"
+    assert len(set(all_dirs)) == 5, "v1..v5 must be five distinct directories"
     assert paths.previous_artifact_dirs[0].endswith("s1_mention_first_run_smoke")
     assert paths.previous_artifact_dirs[1].endswith("s1_mention_first_run_smoke_v2")
     assert paths.previous_artifact_dirs[2].endswith("s1_mention_first_run_smoke_v3")
+    assert paths.previous_artifact_dirs[3].endswith("s1_mention_first_run_smoke_v4")
     statuses = [s for _, _, s in paths.previous_artifacts]
     assert "FULL_TRAINING_READINESS_FALSE" in statuses[0]
-    assert all("UNALIGNABLE" in s for s in statuses[1:])
+    assert all("UNALIGNABLE" in s for s in statuses[1:3])
+    assert "BEFORE_FULL_CORPUS_PREFLIGHT" in statuses[3]
 
 
 def test_corrected_smoke_config_cannot_target_the_historical_artifact(tmp_path: Path) -> None:

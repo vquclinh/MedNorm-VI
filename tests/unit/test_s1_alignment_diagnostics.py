@@ -17,7 +17,8 @@ import pytest
 from mednorm_vi.training.colab_bootstrap import evaluate_full_training_readiness
 from mednorm_vi.training.phobert_alignment import (
     BOUNDARY_MERGE_POLICY,
-    EQUIVALENT_CLUSTER_LENGTH,
+    EQUIVALENCE_CANONICAL,
+    EQUIVALENCE_TONE_PLACEMENT,
     REASON_EMPTY_SEGMENTED_WORD,
     REASON_GOVERNED_EXCLUSION,
     REASON_NON_SEPARATOR_GAP_INSIDE_WORD,
@@ -28,13 +29,13 @@ from mednorm_vi.training.phobert_alignment import (
     SEGMENTER_JOIN_CHARACTER,
     STAGE_SUBTOKEN_ENCODING,
     STAGE_WORD_MAPPING,
-    TONE_PLACEMENT_EQUIVALENTS,
+    VIETNAMESE_VOWEL_BASES,
     AlignmentError,
     entities_touched_by_boundary_merge,
-    equivalent_cluster_length,
     is_legal_syllable_gap,
     looks_pre_segmented,
     map_segmented_words,
+    orthographic_equivalence,
     resolve_segmented_text,
     segmented_text_to_words,
 )
@@ -470,124 +471,139 @@ def test_structural_mismatch_diagnostics_carry_no_characters() -> None:
         assert fragment not in message
 
 
-# --- Audit 0028: RDRSegmenter normalizes Vietnamese tone-mark placement -------
+# --- Audit 0029: general Vietnamese orthographic equivalence ------------------
 #
-# Written from the TRANSFORMATION, never from the failing example's text or id.
-# In an oa/oe/uy cluster the tone may sit on either vowel; both spellings are the
-# same word and each side is exactly two code points.
+# The governed corpus stores some text in a partially DECOMPOSED form (a base
+# letter followed by a standalone combining mark). The segmenter emits the
+# composed spelling, and it may also move a tone mark within a vowel cluster.
+# Everything below is written from those TRANSFORMATIONS - never from an
+# example's text or privacy-safe id.
 
-def _traditional(text: str) -> str:
-    """Rewrite every cluster to the placement RDRSegmenter emits."""
-    for traditional, alternative in TONE_PLACEMENT_EQUIVALENTS:
-        text = text.replace(alternative, traditional)
-    return text
-
-
-def test_the_equivalence_table_is_a_bijection_over_two_code_points() -> None:
-    assert len(TONE_PLACEMENT_EQUIVALENTS) == 15
-    firsts = [a for a, _ in TONE_PLACEMENT_EQUIVALENTS]
-    seconds = [b for _, b in TONE_PLACEMENT_EQUIVALENTS]
-    assert len(set(firsts)) == len(set(seconds)) == 15   # no duplicates either side
-    assert not set(firsts) & set(seconds)                # and the sides are disjoint
-    for left, right in TONE_PLACEMENT_EQUIVALENTS:
-        # Equal length on both sides is what keeps offsets exact.
-        assert len(left) == len(right) == EQUIVALENT_CLUSTER_LENGTH
-        # Same word: identical letters once the tone mark is stripped.
-        strip = {"̀", "́", "̃", "̉", "̣"}
-        assert ("".join(c for c in unicodedata.normalize("NFD", left) if c not in strip)
-                == "".join(c for c in unicodedata.normalize("NFD", right)
-                           if c not in strip))
+# Audit 0028's fixed 15-pair table, kept only as a coverage oracle: the general
+# rule must still accept every pair the table used to enumerate.
+TONE_PAIR_ORACLE = (
+    ("oà", "òa"), ("oá", "óa"), ("oả", "ỏa"), ("oã", "õa"), ("oạ", "ọa"),
+    ("oè", "òe"), ("oé", "óe"), ("oẻ", "ỏe"), ("oẽ", "õe"), ("oẹ", "ọe"),
+    ("uỳ", "ùy"), ("uý", "úy"), ("uỷ", "ủy"), ("uỹ", "ũy"), ("uỵ", "ụy"),
+)
 
 
-def test_equivalence_is_accepted_in_both_directions_and_both_cases() -> None:
-    for traditional, alternative in TONE_PLACEMENT_EQUIVALENTS:
-        for original, segmented in ((alternative, traditional), (traditional, alternative)):
-            for pair in ((original, segmented),
-                         (original.capitalize(), segmented.capitalize()),
-                         (original.upper(), segmented.upper())):
-                assert equivalent_cluster_length(pair[0], 0, pair[1], 0) == 2, pair
-
-
-def test_tone_placement_rewrite_aligns_with_exact_original_offsets() -> None:
-    """The real v3 failure mode: the segmenter rewrote the tone placement."""
-    original = "tieu hóa va nuot nghen"          # alternative placement in the source
-    segmented = _traditional(original)            # what RDRSegmenter returns
-    assert segmented != original, "the fixture must actually exercise the rewrite"
-    words = map_segmented_words(original, segmented_text_to_words(segmented))
-    assert [w.original_start for w in words] == [0, 5, 9, 12, 17]
-    # Spans index UNTOUCHED original_text, not the segmenter's spelling.
-    assert original[words[1].original_start:words[1].original_end] == "hóa"
-    assert words[1].model_text == _traditional("hóa")
-
-
-def test_entity_offsets_survive_a_tone_placement_rewrite() -> None:
-    """original_text[start:end] == entity text must still hold exactly."""
-    text = "benh nhan tieu hóa kem"
-    start, end = 10, 18
-    assert text[start:end] == "tieu hóa"
-    example = {
-        "example_id": "synthetic", "source_dataset": "vimq", "text": text,
-        "entities": [{"start": start, "end": end, "text": text[start:end],
-                      "target_type": "SYMPTOM", "mapping_status": "MAP_EXACT"}],
-    }
-    feature = encode_mention_example_slow(
-        example, WhitespaceTokenizer(), coverage_by_source=_coverage(),
-        max_length=32, segmented_text=_traditional(text))
-    symptom = ENTITY_TYPE_ORDER.index("SYMPTOM")
-    assert sum(1 for row in feature["labels"] if row[symptom]) == 2   # both words
-    for row, keep in zip(feature["labels"], feature["label_mask"], strict=True):
-        if not keep:
-            assert not any(row)
-
-
-def test_tone_rewrite_combined_with_a_compound_merge_aligns() -> None:
-    """Both segmenter behaviours at once, which is the real example's shape."""
-    original = "doan noi tam vi - thuc quan tieu hóa"
-    segmented = _traditional(original).replace(
-        "tam vi - thuc quan", "tam_vi-thuc_quan")
-    words = map_segmented_words(original, segmented_text_to_words(segmented))
-    compound = next(w for w in words if "-" in w.model_text)
-    assert original[compound.original_start:compound.original_end] == "tam vi - thuc quan"
-    for left, right in zip(words, words[1:], strict=False):
-        assert left.original_end <= right.original_start
-
-
-def test_a_genuinely_different_letter_still_fails() -> None:
-    """The equivalence must not become fuzzy matching."""
-    with pytest.raises(AlignmentError) as excinfo:
-        map_segmented_words("tieu hoa va", segmented_text_to_words("tieu hou va"))
-    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
-
-
-@pytest.mark.parametrize("original,segmented", [
-    ("tieu hóa", "tieu hõa"),      # different tone, not a placement move
-    ("tieu hóa", "tieu hó"),       # dropped character
-    ("tieu hoa", "tieu hoaa"),     # inserted character
-    ("tieu hóa", "tieu óha"),      # reordered characters
-])
-def test_non_equivalent_diacritic_changes_still_fail(original, segmented) -> None:
-    with pytest.raises(AlignmentError) as excinfo:
+def _aligns(original: str, segmented: str) -> bool:
+    try:
         map_segmented_words(original, segmented_text_to_words(segmented))
-    assert excinfo.value.reason_code in (
-        REASON_SEGMENTER_ALTERED_CHARACTERS, REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
+    except AlignmentError:
+        return False
+    return True
 
 
-def test_mismatch_diagnostic_reports_the_transformation_class_not_the_text() -> None:
-    with pytest.raises(AlignmentError) as excinfo:
-        map_segmented_words("tieu hóa va", segmented_text_to_words("tieu hõa va"))
-    message = str(excinfo.value)
-    assert "same_base_letter=True" in message      # diacritic-level, not a new letter
-    assert "categories Ll/Ll" in message
-    for fragment in ("hóa", "hõa", "tieu"):
-        assert fragment not in message
+def _decomposed(text: str) -> str:
+    return unicodedata.normalize("NFD", text)
 
 
-def test_offsets_remain_monotonic_and_exact_under_tone_rewrites() -> None:
-    original = "hóa hoa hóa nuot"
-    words = map_segmented_words(original, segmented_text_to_words(_traditional(original)))
-    assert [(w.original_start, w.original_end) for w in words] == [
-        (0, 3), (4, 7), (8, 11), (12, 16)]
-    for word in words:
-        assert original[word.original_start:word.original_end].strip()
-    for left, right in zip(words, words[1:], strict=False):
-        assert left.original_end <= right.original_start
+def _composed(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
+
+
+# --- transformation 1: canonical composition (the four real v4 failures) ------
+
+@pytest.mark.parametrize("base_letter,mark_name", [
+    ("ơ", "COMBINING HOOK ABOVE"),        # U+01A1 + U+0309
+    ("i", "COMBINING TILDE"),             # U+0069 + U+0303
+    ("i", "COMBINING GRAVE ACCENT"),      # U+0069 + U+0300
+    ("â", "COMBINING GRAVE ACCENT"),      # U+00E2 + U+0300
+])
+def test_partially_decomposed_source_aligns_with_the_composed_spelling(
+    base_letter, mark_name,
+) -> None:
+    """Each of the four real failures, reproduced from its code points alone."""
+    mark = unicodedata.lookup(mark_name)
+    original = f"x {base_letter}{mark} y"          # the source's decomposed form
+    segmented = _composed(original)                # what the segmenter emits
+    assert len(segmented) < len(original), "the fixture must exercise composition"
+    words = map_segmented_words(original, segmented_text_to_words(segmented))
+    cluster = words[1]
+    # The span covers BOTH original code points and slices untouched original_text.
+    assert original[cluster.original_start:cluster.original_end] == f"{base_letter}{mark}"
+    assert cluster.original_end - cluster.original_start == 2
+
+
+def test_composition_is_accepted_in_both_directions() -> None:
+    composed, decomposed = "ở", _decomposed("ở")
+    assert len(decomposed) == 3 and len(composed) == 1
+    for original, segmented in ((decomposed, composed), (composed, decomposed)):
+        result = orthographic_equivalence(original, 0, segmented, 0)
+        assert result is not None
+        assert result[2] == EQUIVALENCE_CANONICAL
+        assert result[0] == len(original) and result[1] == len(segmented)
+
+
+def test_offsets_index_untouched_original_text_when_the_source_is_decomposed() -> None:
+    """The aligner must never normalize the original: that shifts every offset."""
+    original = f"benh {_decomposed('ở')} nhan"
+    assert unicodedata.normalize("NFC", original) != original
+    words = map_segmented_words(original, segmented_text_to_words(_composed(original)))
+    # The trailing word still maps onto its true position in the ORIGINAL string.
+    assert original[words[-1].original_start:words[-1].original_end] == "nhan"
+    assert words[-1].original_end == len(original)
+
+
+# --- transformation 2: tone placement, and both at once -----------------------
+
+@pytest.mark.parametrize("first,second", TONE_PAIR_ORACLE)
+def test_the_general_rule_covers_every_pair_the_old_table_enumerated(first, second) -> None:
+    for original, segmented in ((first, second), (second, first)):
+        result = orthographic_equivalence(original, 0, segmented, 0)
+        assert result is not None, (original, segmented)
+        assert result[2] == EQUIVALENCE_TONE_PLACEMENT
+
+
+def test_the_general_rule_covers_clusters_absent_from_the_old_table() -> None:
+    """A three-vowel cluster, which no two-character pair table could express."""
+    result = orthographic_equivalence("uyế", 0, "úyê", 0)
+    assert result is not None and result[2] == EQUIVALENCE_TONE_PLACEMENT
+
+
+def test_a_decomposed_source_whose_tone_also_moves_aligns() -> None:
+    """Both transformations in one cluster - the shape the full corpus exposed."""
+    original = "u\u0309y"                          # decomposed, tone on the first vowel
+    segmented = _composed("uỷ")                    # composed, tone on the second
+    assert original != segmented
+    words = map_segmented_words(original, segmented_text_to_words(segmented))
+    assert len(words) == 1
+    assert words[0].original_start == 0
+    assert words[0].original_end == len(original)   # the whole ORIGINAL cluster
+
+
+# --- the rule cannot accept a different tone or base letter -------------------
+
+@pytest.mark.parametrize("original,segmented,label", [
+    ("hóa", "hõa", "different tone"),
+    ("hóa", "hóe", "different base letter"),
+    ("hoa", "hao", "reordered base letters"),
+    ("hoa", "hoaa", "inserted character"),
+    ("hóa", "hó", "dropped character"),
+    ("an", "án", "tone inserted"),
+    ("án", "an", "tone removed"),
+    ("uơ", "ưo", "non-tone quality mark moved to another letter"),
+    ("hoa xyz", "hoa", "dropped trailing word"),
+])
+def test_unsupported_character_changes_still_fail(original, segmented, label) -> None:
+    assert not _aligns(original, segmented), label
+
+
+def test_a_tone_may_not_move_onto_a_consonant() -> None:
+    """The carrier may only change inside a cluster of Vietnamese vowels."""
+    assert all(base in VIETNAMESE_VOWEL_BASES for base in "aeiouy")
+    assert orthographic_equivalence("ó" + "n", 0, "o" + "ń", 0) is None
+
+
+def test_equivalence_requires_an_identical_tone_multiset() -> None:
+    for original, segmented in (("óa", "õa"), ("óa", "òa"), ("óá", "oá"), ("óa", "oa")):
+        assert orthographic_equivalence(original, 0, segmented, 0) is None, (
+            original, segmented)
+
+
+def test_equivalence_requires_identical_non_tone_marks() -> None:
+    # circumflex vs horn on the same base letter: same letter, different vowel.
+    assert orthographic_equivalence("ầu", 0, "àu", 0) is None
+    assert orthographic_equivalence("ơi", 0, "oi", 0) is None

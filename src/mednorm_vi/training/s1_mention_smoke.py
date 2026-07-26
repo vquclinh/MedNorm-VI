@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,8 @@ from .phobert_alignment import (
     REASON_ENTITY_OFFSET_INVARIANT_VIOLATED,
     REASON_GOVERNED_EXCLUSION,
     STAGE_GOVERNED_EXCLUSION,
+    STAGE_SUBTOKEN_ENCODING,
+    STAGE_TOKENIZER_EQUIVALENCE,
     UNEXPECTED_REASON_CODES,
     AlignmentError,
     align_subtokens,
@@ -153,6 +155,160 @@ def summarize_alignment_diagnostics(
         "governed_exclusions": [d.as_dict() for d in expected],
         "reason_code_counts": dict(sorted(by_reason.items())),
     }
+
+
+@dataclass(frozen=True, slots=True)
+class AlignmentPreflightReport:
+    """Whole-corpus alignment result, computed WITHOUT any model.
+
+    The S1 smoke only ever exercised a dozen examples, so alignment defects kept
+    surfacing example by example. This report is the acceptance gate instead: it
+    covers every supervised example of every split and must be clean before a
+    long GPU run is allowed to start.
+    """
+
+    examples_considered: int
+    aligned_example_count: int
+    unalignable_example_count: int
+    governed_exclusion_count: int
+    equivalence_checked_count: int
+    equivalence_failure_count: int
+    by_split: dict[str, dict[str, int]]
+    by_source: dict[str, dict[str, int]]
+    reason_code_counts: dict[str, int]
+    stage_counts: dict[str, int]
+    unalignable_examples: list[dict[str, str]]
+    governed_exclusions: list[dict[str, str]]
+
+    @property
+    def counters_reconciled(self) -> bool:
+        return (
+            self.aligned_example_count
+            + self.unalignable_example_count
+            + self.governed_exclusion_count
+        ) == self.examples_considered
+
+    @property
+    def passed(self) -> bool:
+        """Zero UNEXPECTED failures, and the books balance.
+
+        Governed exclusions are tracked decisions and do not block; an unexpected
+        alignment or equivalence failure always does.
+        """
+        return (
+            self.unalignable_example_count == 0
+            and self.equivalence_failure_count == 0
+            and self.counters_reconciled
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "alignment_preflight_passed": self.passed,
+            "counters_reconciled": self.counters_reconciled,
+            "examples_considered": self.examples_considered,
+            "aligned_example_count": self.aligned_example_count,
+            "unalignable_example_count": self.unalignable_example_count,
+            "governed_exclusion_count": self.governed_exclusion_count,
+            "equivalence_checked_count": self.equivalence_checked_count,
+            "equivalence_failure_count": self.equivalence_failure_count,
+            "by_split": {k: dict(v) for k, v in sorted(self.by_split.items())},
+            "by_source": {k: dict(v) for k, v in sorted(self.by_source.items())},
+            "reason_code_counts": dict(sorted(self.reason_code_counts.items())),
+            "stage_counts": dict(sorted(self.stage_counts.items())),
+            "unalignable_examples": list(self.unalignable_examples),
+            "governed_exclusions": list(self.governed_exclusions),
+        }
+
+
+def run_alignment_preflight(
+    splits: Mapping[str, Iterable[Mapping[str, Any]]], *,
+    encode: Callable[[Mapping[str, Any]], Any],
+    verify_equivalence: Callable[[Mapping[str, Any]], None] | None = None,
+    governed_exclusions: Mapping[str, Any] | None = None,
+    supervised: Callable[[Mapping[str, Any]], bool] | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> tuple[AlignmentPreflightReport, dict[str, list[Any]]]:
+    """Align every example of every split, with no model forward or backward.
+
+    ``encode`` performs segmentation, character alignment and mention encoding and
+    raises on failure; ``verify_equivalence`` re-checks per-word tokenization
+    against whole-sentence tokenization. Both are supplied by the caller so this
+    stays free of Torch and Transformers.
+
+    Returns the report together with the encoded features per split, so the
+    caller does not have to encode the corpus a second time.
+    """
+    exclusions = dict(governed_exclusions or {})
+    diagnostics: list[AlignmentDiagnostic] = []
+    features: dict[str, list[Any]] = {}
+    by_split: dict[str, dict[str, int]] = {}
+    by_source: dict[str, dict[str, int]] = {}
+    considered = aligned = equivalence_checked = equivalence_failures = 0
+
+    def bump(table: dict[str, dict[str, int]], key: str, field: str) -> None:
+        table.setdefault(key, {"considered": 0, "aligned": 0,
+                               "unalignable": 0, "governed_exclusion": 0})[field] += 1
+
+    for split, rows in splits.items():
+        features[split] = []
+        for index, row in enumerate(rows):
+            if supervised is not None and not supervised(row):
+                continue
+            source = str(row.get("source_dataset", ""))
+            considered += 1
+            bump(by_split, split, "considered")
+            bump(by_source, source, "considered")
+            if progress is not None and considered % 2000 == 0:
+                progress(split, index, considered)
+
+            if privacy_safe_example_id(row.get("example_id", "")) in exclusions:
+                diagnostics.append(governed_exclusion_diagnostic(row, split=split))
+                bump(by_split, split, "governed_exclusion")
+                bump(by_source, source, "governed_exclusion")
+                continue
+            try:
+                feature = encode(row)
+            except (AlignmentError, ValueError) as exc:
+                diagnostics.append(alignment_diagnostic(
+                    row, split=split, stage=STAGE_SUBTOKEN_ENCODING, error=exc))
+                bump(by_split, split, "unalignable")
+                bump(by_source, source, "unalignable")
+                continue
+            if verify_equivalence is not None:
+                try:
+                    verify_equivalence(row)
+                except (AlignmentError, ValueError) as exc:
+                    equivalence_failures += 1
+                    diagnostics.append(alignment_diagnostic(
+                        row, split=split, stage=STAGE_TOKENIZER_EQUIVALENCE, error=exc))
+                    bump(by_split, split, "unalignable")
+                    bump(by_source, source, "unalignable")
+                    continue
+                equivalence_checked += 1
+            aligned += 1
+            bump(by_split, split, "aligned")
+            bump(by_source, source, "aligned")
+            features[split].append(feature)
+
+    summary = summarize_alignment_diagnostics(diagnostics)
+    stage_counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        stage_counts[diagnostic.stage] = stage_counts.get(diagnostic.stage, 0) + 1
+    report = AlignmentPreflightReport(
+        examples_considered=considered,
+        aligned_example_count=aligned,
+        unalignable_example_count=summary["unalignable_example_count"],
+        governed_exclusion_count=summary["governed_exclusion_count"],
+        equivalence_checked_count=equivalence_checked,
+        equivalence_failure_count=equivalence_failures,
+        by_split=by_split,
+        by_source=by_source,
+        reason_code_counts=summary["reason_code_counts"],
+        stage_counts=stage_counts,
+        unalignable_examples=summary["unalignable_examples"],
+        governed_exclusions=summary["governed_exclusions"],
+    )
+    return report, features
 
 
 def load_governed_exclusions(path: str | Path) -> dict[str, dict[str, Any]]:
@@ -673,6 +829,8 @@ __all__ = [
     "ENTITY_TYPE_ORDER",
     "ENTITY_TYPE_TO_ID",
     "AlignmentDiagnostic",
+    "AlignmentPreflightReport",
+    "run_alignment_preflight",
     "alignment_diagnostic",
     "governed_exclusion_diagnostic",
     "load_governed_exclusions",

@@ -187,64 +187,125 @@ class AlignmentResult:
     truncated_entity_count: int = 0
 
 
-def _strip_accents_fold(value: str) -> str:
-    return unicodedata.normalize("NFC", value)
-
-
 def segmented_text_to_words(segmented_text: str) -> list[str]:
     """Split RDRSegmenter output into words (whitespace separated)."""
     return [w for w in segmented_text.split() if w]
 
 
-# Vietnamese tone-mark placement equivalence (Audit 0028).
+# Vietnamese orthographic equivalence (Audit 0029).
 #
-# In an oa / oe / uy cluster the tone mark may sit on either vowel: "tone on the
-# first vowel" and "tone on the second vowel" are two spellings of the SAME word,
-# and the mapping between them is a bijection over exactly two code points per
-# side. RDRSegmenter normalizes to the traditional placement (tone on the second
-# vowel): measured over its own output in the governed corpus, 4,700 such clusters
-# are traditional and ZERO are the alternative form, while raw source text runs
-# roughly 23% alternative.
+# A word segmenter may re-spell a vowel cluster in ways that denote the IDENTICAL
+# word. Two such rewrites are observed in the governed corpus:
 #
-# Accepting this equivalence is offset-safe because both sides are exactly two
-# code points, so the cursor advances equally and every span still indexes
-# untouched ``original_text``. It is NOT fuzzy matching: only these listed pairs
-# are equivalent, and every other difference still fails.
-TONE_PLACEMENT_EQUIVALENTS: tuple[tuple[str, str], ...] = (
-    ("oà", "òa"), ("oá", "óa"), ("oả", "ỏa"), ("oã", "õa"), ("oạ", "ọa"),
-    ("oè", "òe"), ("oé", "óe"), ("oẻ", "ỏe"), ("oẽ", "õe"), ("oẹ", "ọe"),
-    ("uỳ", "ùy"), ("uý", "úy"), ("uỷ", "ủy"), ("uỹ", "ũy"), ("uỵ", "ụy"),
-)
+#   * canonical composition - the source stores a base letter followed by a
+#     standalone combining mark, and the segmenter emits the precomposed
+#     character (or the reverse). These are canonically equivalent by Unicode
+#     definition, so the code-point COUNT differs while the text does not.
+#   * tone-mark placement - in a vowel cluster the tone may sit on either vowel;
+#     both spellings are correct Vietnamese.
+#
+# Nothing else is accepted. The rule below is expressed structurally over NFD
+# decompositions rather than as a table of literal pairs, so it covers every
+# cluster in the language instead of an enumerated subset.
+
+# The five Vietnamese tone marks, as NFD combining characters.
+TONE_MARKS = frozenset("\u0300\u0301\u0303\u0309\u0323")   # grave acute tilde hook dot
+# Non-tone Vietnamese vowel marks (horn, breve, circumflex) stay attached to their
+# own base letter and may never move.
+VOWEL_QUALITY_MARKS = frozenset("\u031b\u0306\u0302")
+# A tone may only move between VOWELS, and only inside one cluster.
+VIETNAMESE_VOWEL_BASES = frozenset("aeiouy")
+# Vietnamese vowel clusters are at most three vowels (for example uye, oai, uoi).
+MAX_EQUIVALENCE_LETTERS = 3
+
+# Transformation classes, reported in diagnostics.
+EQUIVALENCE_CANONICAL = "canonical_composition"
+EQUIVALENCE_TONE_PLACEMENT = "tone_placement"
 
 
-def _equivalent_cluster_table() -> frozenset[tuple[str, str]]:
-    """Both directions and both letter cases of every documented pair."""
-    table: set[tuple[str, str]] = set()
-    for first, second in TONE_PLACEMENT_EQUIVALENTS:
-        for left, right in ((first, second), (second, first)):
-            table.add((left, right))
-            table.add((left.capitalize(), right.capitalize()))
-            table.add((left.upper(), right.upper()))
-    return frozenset(table)
+def _consume_letters(
+    text: str, index: int, letter_count: int,
+) -> tuple[int, list[tuple[str, list[str]]]] | None:
+    """Read ``letter_count`` base letters plus their combining marks.
 
-
-EQUIVALENT_CLUSTERS = _equivalent_cluster_table()
-EQUIVALENT_CLUSTER_LENGTH = 2
-
-
-def equivalent_cluster_length(
-    original: str, original_index: int, segmented: str, segmented_index: int,
-) -> int:
-    """Length of a documented orthographic-equivalent cluster, else ``0``.
-
-    Returns the SAME length for both sides, which is what keeps the alignment
-    offset-exact.
+    Handles both spellings uniformly: a precomposed character is decomposed, and a
+    standalone combining mark is attached to the letter it follows. Returns the
+    number of ORIGINAL code points consumed together with the decomposition, or
+    ``None`` when the text runs out or starts with a stray combining mark.
     """
-    pair = (
-        original[original_index:original_index + EQUIVALENT_CLUSTER_LENGTH],
-        segmented[segmented_index:segmented_index + EQUIVALENT_CLUSTER_LENGTH],
+    letters: list[tuple[str, list[str]]] = []
+    cursor = index
+    while cursor < len(text) and len(letters) < letter_count:
+        char = text[cursor]
+        if unicodedata.combining(char):
+            if not letters:
+                return None                     # a mark with nothing to attach to
+            letters[-1][1].append(char)
+            cursor += 1
+            continue
+        decomposed = unicodedata.normalize("NFD", char)
+        letters.append((decomposed[0], list(decomposed[1:])))
+        cursor += 1
+    if len(letters) < letter_count:
+        return None
+    while cursor < len(text) and unicodedata.combining(text[cursor]):
+        letters[-1][1].append(text[cursor])     # trailing marks belong to the last letter
+        cursor += 1
+    return cursor - index, letters
+
+
+def _cluster_signature(
+    letters: list[tuple[str, list[str]]],
+) -> tuple[tuple[str, ...], tuple[frozenset[str], ...], tuple[str, ...], tuple[int, ...]]:
+    """(base letters, per-letter non-tone marks, tone multiset, tone positions)."""
+    bases = tuple(base for base, _ in letters)
+    quality = tuple(frozenset(m for m in marks if m not in TONE_MARKS) for _, marks in letters)
+    tones = tuple(sorted(m for _, marks in letters for m in marks if m in TONE_MARKS))
+    carriers = tuple(
+        position for position, (_, marks) in enumerate(letters)
+        if any(m in TONE_MARKS for m in marks)
     )
-    return EQUIVALENT_CLUSTER_LENGTH if pair in EQUIVALENT_CLUSTERS else 0
+    return bases, quality, tones, carriers
+
+
+def orthographic_equivalence(
+    original: str, original_index: int, segmented: str, segmented_index: int,
+) -> tuple[int, int, str] | None:
+    """``(original_consumed, segmented_consumed, transformation)`` or ``None``.
+
+    Accepts a cluster only when EVERY one of these holds:
+
+    * the base-letter sequence is identical, in the same order;
+    * each base letter carries the identical non-tone Vietnamese marks;
+    * the multiset of tone marks over the cluster is identical;
+    * if the tone sits on a different letter, every base letter in the cluster is
+      a Vietnamese vowel (a tone may only move between vowels).
+
+    A different tone, a different base letter, a reordering, an insertion or a
+    deletion changes one of the first three properties and is therefore rejected.
+    The two sides may consume different numbers of CODE POINTS - that is precisely
+    the composed/decomposed difference - but they always describe the same
+    letters, so the original cursor still advances over exactly the characters the
+    cluster occupies in untouched ``original_text``.
+    """
+    for letter_count in range(1, MAX_EQUIVALENCE_LETTERS + 1):
+        left = _consume_letters(original, original_index, letter_count)
+        right = _consume_letters(segmented, segmented_index, letter_count)
+        if left is None or right is None:
+            return None
+        original_length, original_letters = left
+        segmented_length, segmented_letters = right
+        original_signature = _cluster_signature(original_letters)
+        segmented_signature = _cluster_signature(segmented_letters)
+        if original_signature[:3] != segmented_signature[:3]:
+            continue                            # try a wider vowel cluster
+        if original_signature[3] == segmented_signature[3]:
+            # Same letters, same marks, same carrier: canonically equivalent.
+            return original_length, segmented_length, EQUIVALENCE_CANONICAL
+        if all(base in VIETNAMESE_VOWEL_BASES for base in original_signature[0]):
+            return original_length, segmented_length, EQUIVALENCE_TONE_PLACEMENT
+        return None                             # tone moved outside a vowel cluster
+    return None
 
 
 def _mismatch_detail(original_char: str, segmented_char: str) -> str:
@@ -293,9 +354,14 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
     reconstructs exact offsets without assuming any particular regrouping, and it
     still fails loudly the moment a real character does not survive.
 
+    The original text is matched **verbatim**. Normalizing it first (as this used
+    to) computes offsets against a normalized COPY, so every offset after a
+    composed mark is shifted and ``original_text[start:end]`` silently stops
+    matching the entity text (spec §4).
+
     Raises :class:`AlignmentError` when the character sequences diverge.
     """
-    text = _strip_accents_fold(original_text)
+    text = original_text
     cursor = 0
     out: list[SegmentedWord] = []
     for index, word in enumerate(segmented_words):
@@ -314,23 +380,32 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
                     f"segmentation ran past the end of the original text at word "
                     f"{index}, character {position}",
                     REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
-            if text[cursor] == char:
+            # Fast path for a plain character match. It is only safe when NEITHER
+            # side carries a following combining mark: otherwise the base letter
+            # would match while its standalone mark is left stranded, and the
+            # comparison must be made over whole letter clusters instead.
+            trailing_mark = (
+                (cursor + 1 < len(text) and unicodedata.combining(text[cursor + 1]))
+                or (position + 1 < len(word) and unicodedata.combining(word[position + 1]))
+            )
+            if text[cursor] == char and not trailing_mark:
                 if start is None:
                     start = cursor
                 end = cursor + 1
                 cursor += 1
                 position += 1
                 continue
-            # A documented orthographic equivalence (same word, tone mark on the
-            # other vowel) consumes the SAME number of code points on both sides,
-            # so offsets stay exact.
-            span = equivalent_cluster_length(text, cursor, word, position)
-            if span:
+            # A documented orthographic equivalence: the same letters, the same
+            # marks, spelled differently. Both sides advance over exactly the
+            # characters the cluster occupies, so offsets stay exact.
+            equivalence = orthographic_equivalence(text, cursor, word, position)
+            if equivalence is not None:
+                original_span, segmented_span, _transformation = equivalence
                 if start is None:
                     start = cursor
-                end = cursor + span
-                cursor += span
-                position += span
+                end = cursor + original_span
+                cursor += original_span
+                position += segmented_span
                 continue
             # Structural, text-free detail: WHERE it diverged and WHAT KIND of
             # character each side had. The characters themselves are never
@@ -592,8 +667,12 @@ __all__ = [
     "SEGMENTATION_SOURCE_PRE_SEGMENTED",
     "SEGMENTATION_SOURCE_SEGMENTER",
     "SEGMENTER_JOIN_CHARACTER",
-    "TONE_PLACEMENT_EQUIVALENTS",
-    "EQUIVALENT_CLUSTERS",
+    "EQUIVALENCE_CANONICAL",
+    "EQUIVALENCE_TONE_PLACEMENT",
+    "MAX_EQUIVALENCE_LETTERS",
+    "TONE_MARKS",
+    "VIETNAMESE_VOWEL_BASES",
+    "VOWEL_QUALITY_MARKS",
     "STAGE_GOVERNED_EXCLUSION",
     "STAGE_SUBTOKEN_ENCODING",
     "STAGE_TOKENIZER_EQUIVALENCE",
@@ -619,7 +698,7 @@ __all__ = [
     "count_truncated_entities",
     "describe_backend",
     "entities_touched_by_boundary_merge",
-    "equivalent_cluster_length",
+    "orthographic_equivalence",
     "find_boundary_violations",
     "is_legal_syllable_gap",
     "is_separator_character",

@@ -222,11 +222,15 @@ def test_s1_notebooks_record_only_privacy_safe_alignment_diagnostics() -> None:
     """No raw clinical text or verbatim example id may reach a manifest."""
     for notebook in (S1_SMOKE, S1_FULL):
         code = _code(notebook)
-        assert "privacy_safe_example_id(" in code, notebook
+        # Either the notebook hashes ids itself, or it delegates to the tracked
+        # preflight helper, which hashes them internally.
+        assert ("privacy_safe_example_id(" in code
+                or "run_alignment_preflight(" in code), notebook
         for leak in ('row["text"]}', '"raw_text"', '"entity_text"', 'exc)}"'):
             assert leak not in code, f"{notebook} may leak content via {leak!r}"
-        # diagnostics are always built through the tracked, text-free helper
-        assert "alignment_diagnostic(" in code, notebook
+        # diagnostics are always built through tracked, text-free helpers
+        assert ("alignment_diagnostic(" in code
+                or "run_alignment_preflight(" in code), notebook
 
 
 def _s1_index(needle: str) -> int:
@@ -614,7 +618,7 @@ def test_notebooks_take_the_artifact_dir_and_expected_hash_at_runtime(notebook) 
     assert 'os.environ.get(\n    "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256", "")' in code
     # the default artifact directory is v4, never a historical one
     assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
-    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v4"' in code
+    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v5"' in code
 
 
 def test_no_notebook_hardcodes_a_checkpoint_digest() -> None:
@@ -637,3 +641,27 @@ def test_full_training_notebook_refuses_every_historical_artifact() -> None:
     assert "must not authorize full training" in code
     # and it passes the validated directory into the training config
     assert "smoke_artifact_dir=SMOKE_ARTIFACT_DIR" in code
+
+
+def test_full_training_notebook_gates_on_a_full_corpus_alignment_preflight() -> None:
+    """A dozen-example smoke cannot prove the corpus aligns; the preflight can."""
+    code = _code(S1_FULL)
+    assert "run_alignment_preflight(" in code
+    assert "assert alignment_preflight.passed" in code
+    assert "full training is not authorized" in code
+    # it must cover BOTH supervised splits, not a sample
+    assert '"train": iter_jsonl(CORPUS_DIR / "splits" / "train.jsonl")' in code
+    assert '"validation": iter_jsonl(CORPUS_DIR / "splits" / "validation.jsonl")' in code
+    assert "supervised=supervised_row" in code
+    assert "[:64]" not in code, "the preflight must not run on a truncated sample"
+    # and it must finish before the backbone is built or trained
+    gate = _s1_index_in(S1_FULL, "assert alignment_preflight.passed")
+    for later in ("AutoModel.from_pretrained", "torch.optim.AdamW(parameter_groups)",
+                  "scaled.backward()"):
+        assert gate < _s1_index_in(S1_FULL, later), f"preflight must precede {later}"
+
+
+def test_full_training_manifest_records_the_full_corpus_preflight() -> None:
+    code = _code(S1_FULL)
+    assert '"full_corpus_alignment_preflight": alignment_preflight_report' in code
+    assert "alignment_preflight.as_dict()" in code
