@@ -612,9 +612,9 @@ def test_notebooks_take_the_artifact_dir_and_expected_hash_at_runtime(notebook) 
     assert "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256" in code
     # the expected hash defaults to EMPTY, so nothing is auto-accepted
     assert 'os.environ.get(\n    "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256", "")' in code
-    # the default artifact directory is v3, never a historical one
+    # the default artifact directory is v4, never a historical one
     assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
-    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v3"' in code
+    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v4"' in code
 
 
 def test_no_notebook_hardcodes_a_checkpoint_digest() -> None:

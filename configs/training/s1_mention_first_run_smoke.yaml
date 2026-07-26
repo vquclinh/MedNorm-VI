@@ -37,13 +37,16 @@ limits:
 #        (pre-segmented-source alignment bug). Immutable historical evidence.
 #   v2 = Audit 0026 rerun; still 2 unalignable examples (standalone join token and
 #        a segmenter compound merge). Immutable historical diagnostic evidence.
-#   v3 = Audit 0027 rerun, after character-level alignment + the pre-segmented
-#        source policy. This is where the corrected rerun writes.
+#   v3 = Audit 0027 rerun; 1 unalignable example (RDRSegmenter normalizes
+#        Vietnamese tone-mark placement, which the aligner read as an altered
+#        character). Immutable historical diagnostic evidence.
+#   v4 = Audit 0028 rerun, after the tone-placement equivalence. This is where
+#        the corrected rerun writes.
 #
 # The rerun writes to `artifact_dir` and must never overwrite any previous one.
 output:
-  artifact_version: v3
-  artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v3
+  artifact_version: v4
+  artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v4
   previous_artifacts:
     - version: v1
       path: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke
@@ -51,6 +54,9 @@ output:
     - version: v2
       path: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v2
       status: HISTORICAL_TWO_UNALIGNABLE_EXAMPLES
+    - version: v3
+      path: /content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_first_run_smoke_v3
+      status: HISTORICAL_ONE_UNALIGNABLE_EXAMPLE
 
 runtime:
   require_colab: true

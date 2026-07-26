@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v3"
+ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v4"
 
 # The character RDRSegmenter uses to join the syllables of one word. Some governed
 # sources (ViMQ, PhoNER-COVID19) are distributed ALREADY word-segmented, so this
@@ -196,6 +196,72 @@ def segmented_text_to_words(segmented_text: str) -> list[str]:
     return [w for w in segmented_text.split() if w]
 
 
+# Vietnamese tone-mark placement equivalence (Audit 0028).
+#
+# In an oa / oe / uy cluster the tone mark may sit on either vowel: "tone on the
+# first vowel" and "tone on the second vowel" are two spellings of the SAME word,
+# and the mapping between them is a bijection over exactly two code points per
+# side. RDRSegmenter normalizes to the traditional placement (tone on the second
+# vowel): measured over its own output in the governed corpus, 4,700 such clusters
+# are traditional and ZERO are the alternative form, while raw source text runs
+# roughly 23% alternative.
+#
+# Accepting this equivalence is offset-safe because both sides are exactly two
+# code points, so the cursor advances equally and every span still indexes
+# untouched ``original_text``. It is NOT fuzzy matching: only these listed pairs
+# are equivalent, and every other difference still fails.
+TONE_PLACEMENT_EQUIVALENTS: tuple[tuple[str, str], ...] = (
+    ("oà", "òa"), ("oá", "óa"), ("oả", "ỏa"), ("oã", "õa"), ("oạ", "ọa"),
+    ("oè", "òe"), ("oé", "óe"), ("oẻ", "ỏe"), ("oẽ", "õe"), ("oẹ", "ọe"),
+    ("uỳ", "ùy"), ("uý", "úy"), ("uỷ", "ủy"), ("uỹ", "ũy"), ("uỵ", "ụy"),
+)
+
+
+def _equivalent_cluster_table() -> frozenset[tuple[str, str]]:
+    """Both directions and both letter cases of every documented pair."""
+    table: set[tuple[str, str]] = set()
+    for first, second in TONE_PLACEMENT_EQUIVALENTS:
+        for left, right in ((first, second), (second, first)):
+            table.add((left, right))
+            table.add((left.capitalize(), right.capitalize()))
+            table.add((left.upper(), right.upper()))
+    return frozenset(table)
+
+
+EQUIVALENT_CLUSTERS = _equivalent_cluster_table()
+EQUIVALENT_CLUSTER_LENGTH = 2
+
+
+def equivalent_cluster_length(
+    original: str, original_index: int, segmented: str, segmented_index: int,
+) -> int:
+    """Length of a documented orthographic-equivalent cluster, else ``0``.
+
+    Returns the SAME length for both sides, which is what keeps the alignment
+    offset-exact.
+    """
+    pair = (
+        original[original_index:original_index + EQUIVALENT_CLUSTER_LENGTH],
+        segmented[segmented_index:segmented_index + EQUIVALENT_CLUSTER_LENGTH],
+    )
+    return EQUIVALENT_CLUSTER_LENGTH if pair in EQUIVALENT_CLUSTERS else 0
+
+
+def _mismatch_detail(original_char: str, segmented_char: str) -> str:
+    """Structural description of a divergence. Never reports the characters.
+
+    ``same_base_letter`` separates a diacritic-level rewrite from a genuinely
+    different letter, which is the distinction that matters when triaging.
+    """
+    original_base = unicodedata.normalize("NFD", original_char)[:1]
+    segmented_base = unicodedata.normalize("NFD", segmented_char)[:1]
+    return (
+        f"categories {unicodedata.category(original_char)}/"
+        f"{unicodedata.category(segmented_char)}, "
+        f"same_base_letter={original_base == segmented_base}"
+    )
+
+
 def is_separator_character(char: str) -> bool:
     """Characters a segmenter may freely insert, remove, or move.
 
@@ -235,10 +301,12 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
     for index, word in enumerate(segmented_words):
         start: int | None = None
         end = 0
-        for position, char in enumerate(word):
+        position = 0
+        while position < len(word):
+            char = word[position]
             if is_separator_character(char):
-                continue                      # inserted by the segmenter, or a
-                                              # literal separator it may have moved
+                position += 1                 # inserted by the segmenter, or a
+                continue                      # literal separator it may have moved
             while cursor < len(text) and is_separator_character(text[cursor]):
                 cursor += 1
             if cursor >= len(text):
@@ -246,20 +314,32 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
                     f"segmentation ran past the end of the original text at word "
                     f"{index}, character {position}",
                     REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
-            if text[cursor] != char:
-                # Structural, text-free detail: WHERE it diverged and WHAT KIND of
-                # character each side had. The characters themselves are never
-                # reported, so no clinical content can leak into a diagnostic.
-                raise AlignmentError(
-                    f"segmenter altered a character: word {index} character "
-                    f"{position} (unicode category "
-                    f"{unicodedata.category(char)}) does not match original offset "
-                    f"{cursor} (unicode category {unicodedata.category(text[cursor])})",
-                    REASON_SEGMENTER_ALTERED_CHARACTERS)
-            if start is None:
-                start = cursor
-            end = cursor + 1
-            cursor += 1
+            if text[cursor] == char:
+                if start is None:
+                    start = cursor
+                end = cursor + 1
+                cursor += 1
+                position += 1
+                continue
+            # A documented orthographic equivalence (same word, tone mark on the
+            # other vowel) consumes the SAME number of code points on both sides,
+            # so offsets stay exact.
+            span = equivalent_cluster_length(text, cursor, word, position)
+            if span:
+                if start is None:
+                    start = cursor
+                end = cursor + span
+                cursor += span
+                position += span
+                continue
+            # Structural, text-free detail: WHERE it diverged and WHAT KIND of
+            # character each side had. The characters themselves are never
+            # reported, so no clinical content can leak into a diagnostic.
+            raise AlignmentError(
+                f"segmenter altered a character: word {index} character {position} "
+                f"does not match original offset {cursor} "
+                f"({_mismatch_detail(text[cursor], char)})",
+                REASON_SEGMENTER_ALTERED_CHARACTERS)
         if start is None:
             # A token made only of separators - RDRSegmenter emits a standalone
             # join character when it re-segments already-segmented text. It carries
@@ -271,6 +351,19 @@ def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[
     if not out:
         raise AlignmentError(
             "segmentation produced no mappable words", REASON_EMPTY_SEGMENTED_WORD)
+    # Anything left over in the original that is not a separator was dropped by the
+    # segmenter. Ignoring it would silently strip supervision from the tail of an
+    # example, so it is a failure like any other altered character.
+    remaining = [
+        offset for offset in range(cursor, len(text))
+        if not is_separator_character(text[offset])
+    ]
+    if remaining:
+        raise AlignmentError(
+            f"segmenter dropped {len(remaining)} original character(s) starting at "
+            f"offset {remaining[0]} (unicode category "
+            f"{unicodedata.category(text[remaining[0]])})",
+            REASON_SEGMENTER_ALTERED_CHARACTERS)
     return out
 
 
@@ -499,6 +592,8 @@ __all__ = [
     "SEGMENTATION_SOURCE_PRE_SEGMENTED",
     "SEGMENTATION_SOURCE_SEGMENTER",
     "SEGMENTER_JOIN_CHARACTER",
+    "TONE_PLACEMENT_EQUIVALENTS",
+    "EQUIVALENT_CLUSTERS",
     "STAGE_GOVERNED_EXCLUSION",
     "STAGE_SUBTOKEN_ENCODING",
     "STAGE_TOKENIZER_EQUIVALENCE",
@@ -524,6 +619,7 @@ __all__ = [
     "count_truncated_entities",
     "describe_backend",
     "entities_touched_by_boundary_merge",
+    "equivalent_cluster_length",
     "find_boundary_violations",
     "is_legal_syllable_gap",
     "is_separator_character",

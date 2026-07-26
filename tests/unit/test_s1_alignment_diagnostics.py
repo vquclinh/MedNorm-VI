@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ import pytest
 from mednorm_vi.training.colab_bootstrap import evaluate_full_training_readiness
 from mednorm_vi.training.phobert_alignment import (
     BOUNDARY_MERGE_POLICY,
+    EQUIVALENT_CLUSTER_LENGTH,
     REASON_EMPTY_SEGMENTED_WORD,
     REASON_GOVERNED_EXCLUSION,
     REASON_NON_SEPARATOR_GAP_INSIDE_WORD,
@@ -26,8 +28,10 @@ from mednorm_vi.training.phobert_alignment import (
     SEGMENTER_JOIN_CHARACTER,
     STAGE_SUBTOKEN_ENCODING,
     STAGE_WORD_MAPPING,
+    TONE_PLACEMENT_EQUIVALENTS,
     AlignmentError,
     entities_touched_by_boundary_merge,
+    equivalent_cluster_length,
     is_legal_syllable_gap,
     looks_pre_segmented,
     map_segmented_words,
@@ -460,6 +464,130 @@ def test_structural_mismatch_diagnostics_carry_no_characters() -> None:
         map_segmented_words("benh nhan khoe manh", segmented_text_to_words("benh nhon"))
     message = str(excinfo.value)
     assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
-    assert "unicode category" in message and "offset" in message
+    assert "categories" in message and "offset" in message
+    assert "same_base_letter=" in message
     for fragment in ("nhan", "nhon", "khoe", "manh"):
         assert fragment not in message
+
+
+# --- Audit 0028: RDRSegmenter normalizes Vietnamese tone-mark placement -------
+#
+# Written from the TRANSFORMATION, never from the failing example's text or id.
+# In an oa/oe/uy cluster the tone may sit on either vowel; both spellings are the
+# same word and each side is exactly two code points.
+
+def _traditional(text: str) -> str:
+    """Rewrite every cluster to the placement RDRSegmenter emits."""
+    for traditional, alternative in TONE_PLACEMENT_EQUIVALENTS:
+        text = text.replace(alternative, traditional)
+    return text
+
+
+def test_the_equivalence_table_is_a_bijection_over_two_code_points() -> None:
+    assert len(TONE_PLACEMENT_EQUIVALENTS) == 15
+    firsts = [a for a, _ in TONE_PLACEMENT_EQUIVALENTS]
+    seconds = [b for _, b in TONE_PLACEMENT_EQUIVALENTS]
+    assert len(set(firsts)) == len(set(seconds)) == 15   # no duplicates either side
+    assert not set(firsts) & set(seconds)                # and the sides are disjoint
+    for left, right in TONE_PLACEMENT_EQUIVALENTS:
+        # Equal length on both sides is what keeps offsets exact.
+        assert len(left) == len(right) == EQUIVALENT_CLUSTER_LENGTH
+        # Same word: identical letters once the tone mark is stripped.
+        strip = {"̀", "́", "̃", "̉", "̣"}
+        assert ("".join(c for c in unicodedata.normalize("NFD", left) if c not in strip)
+                == "".join(c for c in unicodedata.normalize("NFD", right)
+                           if c not in strip))
+
+
+def test_equivalence_is_accepted_in_both_directions_and_both_cases() -> None:
+    for traditional, alternative in TONE_PLACEMENT_EQUIVALENTS:
+        for original, segmented in ((alternative, traditional), (traditional, alternative)):
+            for pair in ((original, segmented),
+                         (original.capitalize(), segmented.capitalize()),
+                         (original.upper(), segmented.upper())):
+                assert equivalent_cluster_length(pair[0], 0, pair[1], 0) == 2, pair
+
+
+def test_tone_placement_rewrite_aligns_with_exact_original_offsets() -> None:
+    """The real v3 failure mode: the segmenter rewrote the tone placement."""
+    original = "tieu hóa va nuot nghen"          # alternative placement in the source
+    segmented = _traditional(original)            # what RDRSegmenter returns
+    assert segmented != original, "the fixture must actually exercise the rewrite"
+    words = map_segmented_words(original, segmented_text_to_words(segmented))
+    assert [w.original_start for w in words] == [0, 5, 9, 12, 17]
+    # Spans index UNTOUCHED original_text, not the segmenter's spelling.
+    assert original[words[1].original_start:words[1].original_end] == "hóa"
+    assert words[1].model_text == _traditional("hóa")
+
+
+def test_entity_offsets_survive_a_tone_placement_rewrite() -> None:
+    """original_text[start:end] == entity text must still hold exactly."""
+    text = "benh nhan tieu hóa kem"
+    start, end = 10, 18
+    assert text[start:end] == "tieu hóa"
+    example = {
+        "example_id": "synthetic", "source_dataset": "vimq", "text": text,
+        "entities": [{"start": start, "end": end, "text": text[start:end],
+                      "target_type": "SYMPTOM", "mapping_status": "MAP_EXACT"}],
+    }
+    feature = encode_mention_example_slow(
+        example, WhitespaceTokenizer(), coverage_by_source=_coverage(),
+        max_length=32, segmented_text=_traditional(text))
+    symptom = ENTITY_TYPE_ORDER.index("SYMPTOM")
+    assert sum(1 for row in feature["labels"] if row[symptom]) == 2   # both words
+    for row, keep in zip(feature["labels"], feature["label_mask"], strict=True):
+        if not keep:
+            assert not any(row)
+
+
+def test_tone_rewrite_combined_with_a_compound_merge_aligns() -> None:
+    """Both segmenter behaviours at once, which is the real example's shape."""
+    original = "doan noi tam vi - thuc quan tieu hóa"
+    segmented = _traditional(original).replace(
+        "tam vi - thuc quan", "tam_vi-thuc_quan")
+    words = map_segmented_words(original, segmented_text_to_words(segmented))
+    compound = next(w for w in words if "-" in w.model_text)
+    assert original[compound.original_start:compound.original_end] == "tam vi - thuc quan"
+    for left, right in zip(words, words[1:], strict=False):
+        assert left.original_end <= right.original_start
+
+
+def test_a_genuinely_different_letter_still_fails() -> None:
+    """The equivalence must not become fuzzy matching."""
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words("tieu hoa va", segmented_text_to_words("tieu hou va"))
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+
+
+@pytest.mark.parametrize("original,segmented", [
+    ("tieu hóa", "tieu hõa"),      # different tone, not a placement move
+    ("tieu hóa", "tieu hó"),       # dropped character
+    ("tieu hoa", "tieu hoaa"),     # inserted character
+    ("tieu hóa", "tieu óha"),      # reordered characters
+])
+def test_non_equivalent_diacritic_changes_still_fail(original, segmented) -> None:
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words(original, segmented_text_to_words(segmented))
+    assert excinfo.value.reason_code in (
+        REASON_SEGMENTER_ALTERED_CHARACTERS, REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
+
+
+def test_mismatch_diagnostic_reports_the_transformation_class_not_the_text() -> None:
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words("tieu hóa va", segmented_text_to_words("tieu hõa va"))
+    message = str(excinfo.value)
+    assert "same_base_letter=True" in message      # diacritic-level, not a new letter
+    assert "categories Ll/Ll" in message
+    for fragment in ("hóa", "hõa", "tieu"):
+        assert fragment not in message
+
+
+def test_offsets_remain_monotonic_and_exact_under_tone_rewrites() -> None:
+    original = "hóa hoa hóa nuot"
+    words = map_segmented_words(original, segmented_text_to_words(_traditional(original)))
+    assert [(w.original_start, w.original_end) for w in words] == [
+        (0, 3), (4, 7), (8, 11), (12, 16)]
+    for word in words:
+        assert original[word.original_start:word.original_end].strip()
+    for left, right in zip(words, words[1:], strict=False):
+        assert left.original_end <= right.original_start
