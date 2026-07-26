@@ -195,32 +195,39 @@ def governed_exclusion_diagnostic(
 class SmokeArtifactPaths:
     """Where the smoke rerun writes, and what it must never touch.
 
-    The v1 artifact recorded ``full_training_readiness: false`` and is immutable
-    historical evidence; the corrected rerun writes to a separate versioned
-    directory so the two can be compared rather than confused.
+    Every earlier artifact is immutable evidence of what that run actually
+    produced, so each rerun claims its own versioned directory.
     """
 
     artifact_version: str
     artifact_dir: str
-    previous_artifact_dir: str
-    previous_artifact_status: str = ""
+    previous_artifacts: tuple[tuple[str, str, str], ...] = ()   # (version, path, status)
+
+    @property
+    def previous_artifact_dirs(self) -> tuple[str, ...]:
+        return tuple(path for _, path, _ in self.previous_artifacts)
 
     def validate(self) -> None:
         if not self.artifact_version:
             raise ValueError("smoke output needs an explicit artifact_version")
-        if not self.artifact_dir or not self.previous_artifact_dir:
-            raise ValueError("smoke output needs artifact_dir and previous_artifact_dir")
-        if Path(self.artifact_dir).resolve() == Path(self.previous_artifact_dir).resolve():
-            raise ValueError(
-                "the corrected smoke artifact_dir must differ from the historical "
-                f"artifact: {self.artifact_dir}")
+        if not self.artifact_dir:
+            raise ValueError("smoke output needs an artifact_dir")
+        if not self.previous_artifacts:
+            raise ValueError("smoke output must record the historical artifacts")
+        current = Path(self.artifact_dir).resolve()
+        for version, path, _ in self.previous_artifacts:
+            if Path(path).resolve() == current:
+                raise ValueError(
+                    "the corrected smoke artifact_dir must differ from the historical "
+                    f"{version} artifact: {self.artifact_dir}")
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "artifact_version": self.artifact_version,
             "artifact_dir": self.artifact_dir,
-            "previous_artifact_dir": self.previous_artifact_dir,
-            "previous_artifact_status": self.previous_artifact_status,
+            "previous_artifacts": [
+                {"version": v, "path": p, "status": s} for v, p, s in self.previous_artifacts
+            ],
         }
 
 
@@ -229,11 +236,14 @@ def smoke_artifact_paths_from_config(config: Mapping[str, Any]) -> SmokeArtifact
     output = config.get("output")
     if not isinstance(output, Mapping):
         raise ValueError("S1 smoke config missing output section")
+    previous = tuple(
+        (str(e.get("version", "")), str(e.get("path", "")), str(e.get("status", "")))
+        for e in (output.get("previous_artifacts") or [])
+    )
     paths = SmokeArtifactPaths(
         artifact_version=str(output.get("artifact_version", "")),
         artifact_dir=str(output.get("artifact_dir", "")),
-        previous_artifact_dir=str(output.get("previous_artifact_dir", "")),
-        previous_artifact_status=str(output.get("previous_artifact_status", "")),
+        previous_artifacts=previous,
     )
     paths.validate()
     return paths

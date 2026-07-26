@@ -119,8 +119,7 @@ def test_s1_first_run_smoke_uses_governed_config_and_drive_artifacts() -> None:
     # historical v1 artifact (full_training_readiness: false) is never overwritten.
     assert ('OUTPUT_DIR = DRIVE_ROOT / "artifacts" / '
             'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"') in src
-    assert ('HISTORICAL_SMOKE_ARTIFACT_DIR = DRIVE_ROOT / "artifacts" / '
-            '"s1_mention_first_run_smoke"') in src
+    assert "HISTORICAL_SMOKE_ARTIFACT_DIRS = (" in src
     assert "MODEL_CACHE_DIR = DRIVE_ROOT" in src
     assert "AutoTokenizer.from_pretrained" in src
     assert "AutoModel.from_pretrained" in src

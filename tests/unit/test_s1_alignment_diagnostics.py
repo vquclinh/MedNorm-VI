@@ -16,16 +16,22 @@ import pytest
 from mednorm_vi.training.colab_bootstrap import evaluate_full_training_readiness
 from mednorm_vi.training.phobert_alignment import (
     BOUNDARY_MERGE_POLICY,
+    REASON_EMPTY_SEGMENTED_WORD,
     REASON_GOVERNED_EXCLUSION,
     REASON_NON_SEPARATOR_GAP_INSIDE_WORD,
     REASON_SEGMENTED_SYLLABLE_NOT_FOUND,
+    REASON_SEGMENTER_ALTERED_CHARACTERS,
+    SEGMENTATION_SOURCE_PRE_SEGMENTED,
+    SEGMENTATION_SOURCE_SEGMENTER,
     SEGMENTER_JOIN_CHARACTER,
     STAGE_SUBTOKEN_ENCODING,
     STAGE_WORD_MAPPING,
     AlignmentError,
     entities_touched_by_boundary_merge,
     is_legal_syllable_gap,
+    looks_pre_segmented,
     map_segmented_words,
+    resolve_segmented_text,
     segmented_text_to_words,
 )
 from mednorm_vi.training.s1_mention_smoke import (
@@ -124,13 +130,14 @@ def test_a_genuinely_unmappable_word_still_raises_with_a_reason_code() -> None:
     """The fix must not turn real drift into silent success."""
     with pytest.raises(AlignmentError) as excinfo:
         map_segmented_words("benh nhan khoe", segmented_text_to_words("khong_co_o_day"))
-    assert excinfo.value.reason_code == REASON_SEGMENTED_SYLLABLE_NOT_FOUND
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
 
 
-def test_punctuation_between_syllables_is_still_illegal() -> None:
+def test_a_dropped_punctuation_character_is_still_a_failure() -> None:
+    """Separators may move; a real character may never disappear."""
     with pytest.raises(AlignmentError) as excinfo:
         map_segmented_words("dau, dau nhieu", segmented_text_to_words("dau_dau nhieu"))
-    assert excinfo.value.reason_code == REASON_NON_SEPARATOR_GAP_INSIDE_WORD
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
 
 
 # --- boundary merge: mask, never discard the example --------------------------
@@ -289,3 +296,170 @@ def test_exclusion_policy_carries_no_raw_text_or_verbatim_ids() -> None:
     assert "privacy_safe_example_id" in text
     for verbatim in ("vimq:train:", "vimq:dev:", "vimedner:train:", "vietmed_ner:"):
         assert verbatim not in text, f"policy leaks a verbatim example id: {verbatim}"
+
+
+# --- Audit 0027: the two real smoke-v2 word-mapping failures -------------------
+#
+# Both patterns are reproduced structurally, using the SHAPE of the governed
+# examples (never their text, and never their verbatim ids). Neither test
+# references a privacy-safe id, so nothing here can degrade into a special case.
+
+def test_standalone_join_token_is_mapped_not_treated_as_empty() -> None:
+    """Real failure 1 (vimq / validation / EMPTY_SEGMENTED_WORD).
+
+    RDRSegmenter re-segmenting ALREADY-segmented text splits the join character
+    off as its own token, so the word list contains a bare "_".
+    """
+    original = "Co_the bo_sung vitamin cho tre khong ?"
+    shredded = original.replace("_", " _ ")          # what the segmenter emitted
+    words = map_segmented_words(original, segmented_text_to_words(shredded))
+    # The separator-only tokens carry no characters, so they contribute no words.
+    assert [w.model_text for w in words] == [
+        "Co", "the", "bo", "sung", "vitamin", "cho", "tre", "khong", "?"]
+    for word in words:
+        assert original[word.original_start:word.original_end] == word.model_text
+
+
+def test_segmenter_compound_merge_across_spaces_is_mapped() -> None:
+    """Real failure 2 (vimedner / train / SEGMENTED_SYLLABLE_NOT_FOUND).
+
+    The segmenter pulled a spaced hyphen compound together, so no emitted
+    syllable existed verbatim in the original text.
+    """
+    original = "doan noi tam vi - thuc quan co the gay nuot nghen ."
+    merged = "doan_noi tam_vi-thuc_quan co_the gay nuot_nghen ."
+    words = map_segmented_words(original, segmented_text_to_words(merged))
+    compound = next(w for w in words if "-" in w.model_text)
+    # The word maps back onto the ORIGINAL spacing, exactly.
+    assert original[compound.original_start:compound.original_end] == "tam vi - thuc quan"
+    assert compound.model_text == "tam_vi-thuc_quan"
+
+
+def test_both_real_failure_shapes_encode_end_to_end() -> None:
+    """Both patterns now produce features instead of unalignable examples."""
+    cases = [
+        # (original text, what the segmenter returns, entity span)
+        ("Co_the bo_sung vitamin cho tre", "Co _ the bo _ sung vitamin cho tre", (7, 14)),
+        ("tam vi - thuc quan dau", "tam_vi-thuc_quan dau", (0, 18)),
+    ]
+    for text, segmented, (start, end) in cases:
+        example = {
+            "example_id": "synthetic", "source_dataset": "vimq", "text": text,
+            "entities": [{"start": start, "end": end, "text": text[start:end],
+                          "target_type": "DIAGNOSIS", "mapping_status": "MAP_EXACT"}],
+        }
+        feature = encode_mention_example_slow(
+            example, WhitespaceTokenizer(), coverage_by_source=_coverage(),
+            max_length=64, segmented_text=segmented)
+        diagnosis = ENTITY_TYPE_ORDER.index("DIAGNOSIS")
+        assert any(row[diagnosis] for row in feature["labels"]), text
+        for row, keep in zip(feature["labels"], feature["label_mask"], strict=True):
+            if not keep:
+                assert not any(row)
+
+
+# --- the general policy, not per-example patches ------------------------------
+
+@pytest.mark.parametrize("text,pre_segmented", [
+    ("Co_the bo_sung vitamin", True),          # ViMQ / PhoNER shape
+    ("benh nhan dau bung", False),             # raw clinical text
+    ("tam vi - thuc quan", False),             # spaced punctuation only
+    ("a_1 b", True),                           # digits count as word characters
+    ("_ leading separator", False),            # a bare separator is not segmentation
+    ("trailing _", False),
+    ("double __ join", False),                 # '_' is not a word character
+])
+def test_pre_segmented_detection_is_structural(text, pre_segmented) -> None:
+    assert looks_pre_segmented(text) is pre_segmented
+
+
+def test_pre_segmented_text_is_used_verbatim_and_raw_text_is_segmented() -> None:
+    """One policy covers both source kinds without any per-source table."""
+    calls = []
+
+    def segmenter(text):
+        calls.append(text)
+        return text.replace(" ", "_")
+
+    segmented, source = resolve_segmented_text("Co_the bo_sung", segmenter)
+    assert source == SEGMENTATION_SOURCE_PRE_SEGMENTED
+    assert segmented == "Co_the bo_sung"
+    assert calls == [], "already-segmented text must not be re-segmented"
+
+    segmented, source = resolve_segmented_text("benh nhan dau", segmenter)
+    assert source == SEGMENTATION_SOURCE_SEGMENTER
+    assert segmented == "benh_nhan_dau"
+    assert calls == ["benh nhan dau"]
+
+
+def test_alignment_contains_no_example_specific_special_cases() -> None:
+    """No privacy-safe id or dataset name may steer the alignment backend.
+
+    Dataset names may appear in prose explaining WHY a source is pre-segmented;
+    they must never appear in executable code, which would make the fix a
+    per-corpus patch instead of a general policy.
+    """
+    import ast
+    import io
+    import tokenize
+
+    path = REPO / "src" / "mednorm_vi" / "training" / "phobert_alignment.py"
+    source = path.read_text(encoding="utf-8")
+    for handle in ("6c3b519cd0100bec", "c06995a162f6eb76"):
+        assert handle not in source, "the backend references a specific example"
+
+    # Strip comments and docstrings, leaving only executable code.
+    code_lines = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            continue
+        code_lines.append(token.string)
+    executable = " ".join(code_lines).lower()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            executable = executable.replace(node.value.lower(), " ")
+    for dataset in ("vimq", "vimedner", "vietmed", "phoner"):
+        assert dataset not in executable, f"backend special-cases {dataset}"
+
+
+# --- monotonic offset reconstruction ------------------------------------------
+
+@pytest.mark.parametrize("original,segmented", [
+    ("a b c d", "a_b c_d"),                        # plain merge
+    ("a b c d", "a b c d"),                        # identity
+    ("a_b c_d", "a _ b c _ d"),                    # shredded join characters
+    ("x - y z", "x-y_z"),                          # punctuation pulled together
+    ("p  q\nr", "p_q r"),                          # repeated / newline whitespace
+    ("ab ab ab", "ab_ab ab"),                      # repeated identical surface forms
+])
+def test_offsets_are_monotonic_and_reconstruct_the_original(original, segmented) -> None:
+    words = map_segmented_words(original, segmented_text_to_words(segmented))
+    assert words
+    for word in words:
+        assert 0 <= word.original_start < word.original_end <= len(original)
+        # every span is a real slice of the ORIGINAL text
+        assert original[word.original_start:word.original_end].strip()
+    for left, right in zip(words, words[1:], strict=False):
+        assert left.original_end <= right.original_start, "spans overlap or go backwards"
+    # every non-separator character of the original is covered exactly once
+    covered = "".join(
+        original[w.original_start:w.original_end] for w in words)
+    strip = str.maketrans("", "", " \t\n_")
+    assert covered.translate(strip) == original.translate(strip)
+
+
+def test_segmentation_that_produces_only_separators_fails() -> None:
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words("benh nhan", segmented_text_to_words("_ _ _"))
+    assert excinfo.value.reason_code == REASON_EMPTY_SEGMENTED_WORD
+
+
+def test_structural_mismatch_diagnostics_carry_no_characters() -> None:
+    """The failure message locates the divergence without quoting the text."""
+    with pytest.raises(AlignmentError) as excinfo:
+        map_segmented_words("benh nhan khoe manh", segmented_text_to_words("benh nhon"))
+    message = str(excinfo.value)
+    assert excinfo.value.reason_code == REASON_SEGMENTER_ALTERED_CHARACTERS
+    assert "unicode category" in message and "offset" in message
+    for fragment in ("nhan", "nhon", "khoe", "manh"):
+        assert fragment not in message

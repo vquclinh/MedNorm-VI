@@ -594,10 +594,12 @@ def _s1_index_in(notebook: str, needle: str) -> int:
 
 # --- artifact lifecycle wiring in the notebooks (Audit 0026) ------------------
 
-def test_smoke_notebook_writes_to_a_versioned_directory_not_over_v1() -> None:
+def test_smoke_notebook_writes_to_a_versioned_directory_not_over_history() -> None:
     code = _code(S1_SMOKE)
     assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
-    assert "OUTPUT_DIR.resolve() != HISTORICAL_SMOKE_ARTIFACT_DIR.resolve()" in code
+    # every earlier artifact is protected, not just v1
+    assert "for _historical in HISTORICAL_SMOKE_ARTIFACT_DIRS:" in code
+    assert "OUTPUT_DIR.resolve() != _historical.resolve()" in code
     # the path is tracked in configuration, not only in the notebook
     assert "smoke_artifact_paths_from_config(smoke_config)" in code
     assert "smoke_artifact_paths.artifact_version == SMOKE_ARTIFACT_VERSION" in code
@@ -610,9 +612,9 @@ def test_notebooks_take_the_artifact_dir_and_expected_hash_at_runtime(notebook) 
     assert "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256" in code
     # the expected hash defaults to EMPTY, so nothing is auto-accepted
     assert 'os.environ.get(\n    "MEDNORM_EXPECTED_SMOKE_CHECKPOINT_SHA256", "")' in code
-    # the default artifact directory is v2, never the historical v1
+    # the default artifact directory is v3, never a historical one
     assert 'f"s1_mention_first_run_smoke_{SMOKE_ARTIFACT_VERSION}"' in code
-    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v2"' in code
+    assert 'MEDNORM_SMOKE_ARTIFACT_VERSION", "v3"' in code
 
 
 def test_no_notebook_hardcodes_a_checkpoint_digest() -> None:
@@ -628,9 +630,10 @@ def test_validation_notebook_prints_the_recomputed_hash_for_confirmation() -> No
     assert "No Python source needs to change." in code
 
 
-def test_full_training_notebook_refuses_the_historical_v1_artifact() -> None:
+def test_full_training_notebook_refuses_every_historical_artifact() -> None:
     code = _code(S1_FULL)
-    assert "SMOKE_ARTIFACT_DIR.resolve() != HISTORICAL_SMOKE_ARTIFACT_DIR.resolve()" in code
+    assert "for _historical in HISTORICAL_SMOKE_ARTIFACT_DIRS:" in code
+    assert "SMOKE_ARTIFACT_DIR.resolve() != _historical.resolve()" in code
     assert "must not authorize full training" in code
     # and it passes the validated directory into the training config
     assert "smoke_artifact_dir=SMOKE_ARTIFACT_DIR" in code

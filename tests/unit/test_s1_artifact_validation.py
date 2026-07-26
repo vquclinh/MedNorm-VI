@@ -425,13 +425,18 @@ def test_diagnostics_carrying_content_or_verbatim_ids_fail_validation(tmp_path, 
 
 # --- artifact lifecycle: v1 historical vs v2 corrected (Audit 0026) -----------
 
-def test_v1_and_v2_smoke_output_directories_are_distinct() -> None:
+def test_v1_v2_and_v3_smoke_output_directories_are_all_distinct() -> None:
     paths = smoke_artifact_paths_from_config(SMOKE_CONFIG)
-    assert paths.artifact_version == "v2"
-    assert paths.artifact_dir.endswith("s1_mention_first_run_smoke_v2")
-    assert paths.previous_artifact_dir.endswith("s1_mention_first_run_smoke")
-    assert paths.artifact_dir != paths.previous_artifact_dir
-    assert "FULL_TRAINING_READINESS_FALSE" in paths.previous_artifact_status
+    assert paths.artifact_version == "v3"
+    assert paths.artifact_dir.endswith("s1_mention_first_run_smoke_v3")
+    assert [v for v, _, _ in paths.previous_artifacts] == ["v1", "v2"]
+    all_dirs = [paths.artifact_dir, *paths.previous_artifact_dirs]
+    assert len(set(all_dirs)) == 3, "v1, v2 and v3 must be three distinct directories"
+    assert paths.previous_artifact_dirs[0].endswith("s1_mention_first_run_smoke")
+    assert paths.previous_artifact_dirs[1].endswith("s1_mention_first_run_smoke_v2")
+    statuses = [s for _, _, s in paths.previous_artifacts]
+    assert "FULL_TRAINING_READINESS_FALSE" in statuses[0]
+    assert "UNALIGNABLE" in statuses[1]
 
 
 def test_corrected_smoke_config_cannot_target_the_historical_artifact(tmp_path: Path) -> None:
@@ -440,9 +445,10 @@ def test_corrected_smoke_config_cannot_target_the_historical_artifact(tmp_path: 
     doc = yaml.safe_load(
         (REPO / "configs" / "training" / "s1_mention_first_run_smoke.yaml").read_text(
             encoding="utf-8"))
-    doc["output"]["artifact_dir"] = doc["output"]["previous_artifact_dir"]
-    with pytest.raises(ValueError, match="must differ from the historical"):
-        smoke_artifact_paths_from_config(doc)
+    for previous in doc["output"]["previous_artifacts"]:
+        drifted = {**doc, "output": {**doc["output"], "artifact_dir": previous["path"]}}
+        with pytest.raises(ValueError, match="must differ from the historical"):
+            smoke_artifact_paths_from_config(drifted)
 
 
 def test_smoke_config_output_section_is_required(tmp_path: Path) -> None:

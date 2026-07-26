@@ -26,11 +26,13 @@ All functions are pure and deterministic and never emit raw clinical text.
 
 from __future__ import annotations
 
+import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v2"
+ALIGNMENT_BACKEND = "phobert-slow-char-alignment-v3"
 
 # The character RDRSegmenter uses to join the syllables of one word. Some governed
 # sources (ViMQ, PhoNER-COVID19) are distributed ALREADY word-segmented, so this
@@ -49,6 +51,7 @@ REASON_TOKENIZER_PIECE_ID_MISMATCH = "TOKENIZER_PIECE_ID_MISMATCH"
 REASON_TOKENIZER_NOT_DECOMPOSABLE = "TOKENIZER_NOT_DECOMPOSABLE"
 REASON_ENTITY_OFFSET_INVARIANT_VIOLATED = "ENTITY_OFFSET_INVARIANT_VIOLATED"
 REASON_MAX_LENGTH_TOO_SMALL = "MAX_LENGTH_TOO_SMALL"
+REASON_SEGMENTER_ALTERED_CHARACTERS = "SEGMENTER_ALTERED_CHARACTERS"
 REASON_GOVERNED_EXCLUSION = "GOVERNED_EXCLUSION"
 
 UNEXPECTED_REASON_CODES = (
@@ -59,6 +62,7 @@ UNEXPECTED_REASON_CODES = (
     REASON_TOKENIZER_NOT_DECOMPOSABLE,
     REASON_ENTITY_OFFSET_INVARIANT_VIOLATED,
     REASON_MAX_LENGTH_TOO_SMALL,
+    REASON_SEGMENTER_ALTERED_CHARACTERS,
 )
 EXPECTED_REASON_CODES = (REASON_GOVERNED_EXCLUSION,)
 
@@ -88,6 +92,44 @@ BOUNDARY_MERGE_POLICY = "mask_straddling_word_and_affected_entity_subtokens"
 # subtoken of that entity is masked out (label_mask = 0, labels zeroed) and the
 # entity is counted. Fully dropped entities are counted separately.
 PARTIAL_TRUNCATION_POLICY = "mask_all_retained_subtokens_of_partially_truncated_entity"
+
+
+# How the segmented form of one example was obtained.
+SEGMENTATION_SOURCE_PRE_SEGMENTED = "pre_segmented_source"
+SEGMENTATION_SOURCE_SEGMENTER = "vncorenlp_rdrsegmenter"
+
+# A join character sitting directly between two word characters is the signature
+# of RDRSegmenter output. Some governed sources (ViMQ, PhoNER-COVID19) ship text
+# that is ALREADY segmented this way; ``[^\W_]`` is "word character except the
+# join character itself".
+PRE_SEGMENTED_PATTERN = re.compile(r"[^\W_]_[^\W_]", re.UNICODE)
+
+
+def looks_pre_segmented(text: str) -> bool:
+    """True when ``text`` is already RDRSegmenter output.
+
+    Re-segmenting already-segmented text is destructive: RDRSegmenter splits the
+    join character off as a standalone token, so a single word like a two-syllable
+    compound is shredded into three model tokens and the word-level input
+    ViHealthBERT-Word expects is lost.
+    """
+    return bool(PRE_SEGMENTED_PATTERN.search(str(text)))
+
+
+def resolve_segmented_text(
+    original_text: str, segmenter: Callable[[str], str] | None = None,
+) -> tuple[str, str]:
+    """Return ``(segmented_text, segmentation_source)`` for one example.
+
+    Already-segmented text is used verbatim; everything else goes through the
+    supplied production segmenter. This is the single policy both the smoke and
+    the full-training path use.
+    """
+    if looks_pre_segmented(original_text):
+        return str(original_text), SEGMENTATION_SOURCE_PRE_SEGMENTED
+    if segmenter is None:
+        return str(original_text), SEGMENTATION_SOURCE_PRE_SEGMENTED
+    return str(segmenter(original_text)), SEGMENTATION_SOURCE_SEGMENTER
 
 
 class SlowTokenizerLike(Protocol):
@@ -154,55 +196,81 @@ def segmented_text_to_words(segmented_text: str) -> list[str]:
     return [w for w in segmented_text.split() if w]
 
 
-def is_legal_syllable_gap(gap: str) -> bool:
-    """May ``gap`` separate two syllables of one segmented word?
+def is_separator_character(char: str) -> bool:
+    """Characters a segmenter may freely insert, remove, or move.
 
-    Legal separators are whitespace (the segmenter joined two whitespace-separated
-    syllables) and :data:`SEGMENTER_JOIN_CHARACTER` (the source text was already
-    word-segmented, so the underscore is a literal character of
-    ``original_text``). Anything else means the mapping has drifted.
+    Whitespace and :data:`SEGMENTER_JOIN_CHARACTER` carry no supervision: the
+    segmenter inserts the join character between syllables it groups, and it may
+    add or drop whitespace around punctuation. Every OTHER character must survive
+    segmentation unchanged, which is what makes offset reconstruction possible.
     """
-    return all(char.isspace() or char == SEGMENTER_JOIN_CHARACTER for char in gap)
+    return char.isspace() or char == SEGMENTER_JOIN_CHARACTER
+
+
+def is_legal_syllable_gap(gap: str) -> bool:
+    """May ``gap`` separate two syllables of one segmented word?"""
+    return all(is_separator_character(char) for char in gap)
 
 
 def map_segmented_words(original_text: str, segmented_words: list[str]) -> list[SegmentedWord]:
     """Map each segmented word back to a half-open span of ``original_text``.
 
-    Uses a strictly monotonic cursor: each word's surface form (underscores
-    expanded back to their original separators) is located at or after the
-    previous word's end, so repeated identical words map to distinct, ordered
-    spans. Raises :class:`AlignmentError` when a word cannot be located.
+    A word segmenter is allowed to regroup text: it inserts the join character
+    between syllables it merges, and it may add or drop whitespace (for example
+    pulling a hyphenated compound together, or splitting a standalone join
+    character off as its own token). What it must NOT do is change, add, or drop a
+    real character.
+
+    So the mapping walks both strings with a strictly monotonic cursor and matches
+    them **character by character**, skipping separators on either side. Each
+    word's span runs from its first to its last matched original character. This
+    reconstructs exact offsets without assuming any particular regrouping, and it
+    still fails loudly the moment a real character does not survive.
+
+    Raises :class:`AlignmentError` when the character sequences diverge.
     """
     text = _strip_accents_fold(original_text)
     cursor = 0
     out: list[SegmentedWord] = []
     for index, word in enumerate(segmented_words):
-        syllables = [s for s in word.split("_") if s]
-        if not syllables:
-            raise AlignmentError(
-                f"empty segmented word at index {index}", REASON_EMPTY_SEGMENTED_WORD)
         start: int | None = None
-        end = cursor
-        for position, syllable in enumerate(syllables):
-            found = text.find(syllable, end)
-            if found < 0:
+        end = 0
+        for position, char in enumerate(word):
+            if is_separator_character(char):
+                continue                      # inserted by the segmenter, or a
+                                              # literal separator it may have moved
+            while cursor < len(text) and is_separator_character(text[cursor]):
+                cursor += 1
+            if cursor >= len(text):
                 raise AlignmentError(
-                    f"segmented syllable #{position} of word {index} not found "
-                    "in the original text after the current cursor",
+                    f"segmentation ran past the end of the original text at word "
+                    f"{index}, character {position}",
                     REASON_SEGMENTED_SYLLABLE_NOT_FOUND)
-            if position > 0 and not is_legal_syllable_gap(text[end:found]):
+            if text[cursor] != char:
+                # Structural, text-free detail: WHERE it diverged and WHAT KIND of
+                # character each side had. The characters themselves are never
+                # reported, so no clinical content can leak into a diagnostic.
                 raise AlignmentError(
-                    f"illegal separator inside segmented word {index}: only "
-                    "whitespace or the segmenter join character may separate syllables",
-                    REASON_NON_SEPARATOR_GAP_INSIDE_WORD)
+                    f"segmenter altered a character: word {index} character "
+                    f"{position} (unicode category "
+                    f"{unicodedata.category(char)}) does not match original offset "
+                    f"{cursor} (unicode category {unicodedata.category(text[cursor])})",
+                    REASON_SEGMENTER_ALTERED_CHARACTERS)
             if start is None:
-                start = found
-            end = found + len(syllable)
-        assert start is not None
+                start = cursor
+            end = cursor + 1
+            cursor += 1
+        if start is None:
+            # A token made only of separators - RDRSegmenter emits a standalone
+            # join character when it re-segments already-segmented text. It carries
+            # no characters of its own, so it contributes no word and no label.
+            continue
         out.append(SegmentedWord(
             model_text=word, original_start=start, original_end=end,
             source_word_indices=(index,)))
-        cursor = end
+    if not out:
+        raise AlignmentError(
+            "segmentation produced no mappable words", REASON_EMPTY_SEGMENTED_WORD)
     return out
 
 
@@ -428,6 +496,8 @@ __all__ = [
     "PARTIAL_TRUNCATION_POLICY",
     "ALIGNMENT_BACKEND",
     "EXPECTED_REASON_CODES",
+    "SEGMENTATION_SOURCE_PRE_SEGMENTED",
+    "SEGMENTATION_SOURCE_SEGMENTER",
     "SEGMENTER_JOIN_CHARACTER",
     "STAGE_GOVERNED_EXCLUSION",
     "STAGE_SUBTOKEN_ENCODING",
@@ -440,6 +510,7 @@ __all__ = [
     "REASON_MAX_LENGTH_TOO_SMALL",
     "REASON_NON_SEPARATOR_GAP_INSIDE_WORD",
     "REASON_SEGMENTED_SYLLABLE_NOT_FOUND",
+    "REASON_SEGMENTER_ALTERED_CHARACTERS",
     "REASON_TOKENIZER_NOT_DECOMPOSABLE",
     "REASON_TOKENIZER_PIECE_ID_MISMATCH",
     "AlignmentError",
@@ -455,6 +526,9 @@ __all__ = [
     "entities_touched_by_boundary_merge",
     "find_boundary_violations",
     "is_legal_syllable_gap",
+    "is_separator_character",
+    "looks_pre_segmented",
+    "resolve_segmented_text",
     "map_segmented_words",
     "segmented_text_to_words",
     "verify_tokenizer_equivalence",

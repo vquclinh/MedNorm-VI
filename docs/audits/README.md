@@ -69,3 +69,4 @@ Each audit should record, at minimum:
 - `0024-s1-scoped-dependency-health.md`
 - `0025-s1-smoke-artifact-validation-and-full-training-prep.md`
 - `0026-s1-pre-segmented-source-alignment-fix.md`
+- `0027-s1-character-level-alignment-and-segmentation-policy.md`
