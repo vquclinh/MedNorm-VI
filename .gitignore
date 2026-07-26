@@ -8,6 +8,13 @@
 MedNorm-VI_Architecture_Vietnamese.pdf
 
 # --- Model weights / checkpoints / adapters ---
+# Operator-selected LOCAL checkpoint store. Never committed, never pushed, never
+# Git LFS. The global *.pt rule below already covers the bytes; these two
+# repository-root rules make the intent explicit and also catch a checkpoint
+# dropped at the root by hand.
+/checkpoint/
+/best.pt
+
 models/**
 !models/.gitkeep
 !models/README.md

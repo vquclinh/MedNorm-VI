@@ -20,15 +20,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import os
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from .s1_artifact_validation import SHA256_PATTERN as _SHA256_PATTERN
 from .s1_artifact_validation import is_immutable_revision
 from .s1_mention_smoke import ENTITY_TYPE_ORDER
+from .s1_mention_smoke import sha256_file as _sha256_file
 
 # Full-training artifact layout. Every path is relative to the output directory,
 # which must be distinct from the smoke artifact directory.
@@ -516,6 +520,470 @@ def build_full_training_manifest(
     }
 
 
+# --- checkpoint location contract (Audit 0032) ---------------------------------
+#
+# ONE resolver shared by the CLI and the notebooks, so local and Colab runs can
+# never drift apart. No digest or revision is hardcoded here: the caller supplies
+# what it is accepting, exactly as the full-artifact validator does.
+
+S1_BEST_CHECKPOINT_ENV = "MEDNORM_S1_BEST_CHECKPOINT"
+COLAB_BEST_CHECKPOINT = Path(
+    "/content/drive/MyDrive/MedNorm-VI/artifacts/s1_mention_full_training_v1"
+    "/checkpoints/best.pt")
+LOCAL_BEST_CHECKPOINT_RELATIVE = Path("checkpoint/s1_mention_full_training_v1/best.pt")
+
+ENVIRONMENT_ENV_OVERRIDE = "env_override"
+ENVIRONMENT_COLAB = "colab"
+ENVIRONMENT_LOCAL = "local"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointLocation:
+    """Where the S1 best checkpoint lives, and how that was decided."""
+
+    path: Path
+    environment: str
+    exists: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"checkpoint_path": str(self.path), "environment": self.environment,
+                "exists": self.exists}
+
+    def require(self) -> Path:
+        """The path, or a clear error naming exactly what is missing."""
+        if self.exists:
+            return self.path
+        hint = {
+            ENVIRONMENT_ENV_OVERRIDE: f"{S1_BEST_CHECKPOINT_ENV} points at a missing file",
+            ENVIRONMENT_COLAB: "mount Drive and confirm the full-training artifact exists",
+            ENVIRONMENT_LOCAL: (
+                f"place the checkpoint at {LOCAL_BEST_CHECKPOINT_RELATIVE} "
+                f"or set {S1_BEST_CHECKPOINT_ENV}"),
+        }[self.environment]
+        raise FileNotFoundError(
+            f"S1 best checkpoint not found at {self.path} "
+            f"(environment: {self.environment}). {hint}.")
+
+
+def resolve_s1_best_checkpoint(
+    repository_root: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    in_colab: bool | None = None,
+) -> CheckpointLocation:
+    """Resolve the S1 best checkpoint: env override, then Colab, then local.
+
+    ``in_colab`` defaults to whether ``google.colab`` has been imported, which is
+    how every S1 notebook already detects the runtime.
+    """
+    variables = os.environ if environ is None else environ
+    override = str(variables.get(S1_BEST_CHECKPOINT_ENV, "") or "").strip()
+    if override:
+        path = Path(override).expanduser()
+        return CheckpointLocation(path, ENVIRONMENT_ENV_OVERRIDE, path.is_file())
+    colab = ("google.colab" in sys.modules) if in_colab is None else bool(in_colab)
+    if colab:
+        return CheckpointLocation(
+            COLAB_BEST_CHECKPOINT, ENVIRONMENT_COLAB, COLAB_BEST_CHECKPOINT.is_file())
+    root = Path(repository_root) if repository_root is not None else Path.cwd()
+    path = root / LOCAL_BEST_CHECKPOINT_RELATIVE
+    return CheckpointLocation(path, ENVIRONMENT_LOCAL, path.is_file())
+
+
+# --- best-checkpoint-only validation (Audit 0032) ------------------------------
+#
+# Deliberately SEPARATE from validate_full_training_artifact(). It checks only
+# what a lone best.pt can prove and always reports full_artifact_validated=False,
+# so a local check can never be mistaken for the full-artifact result.
+
+@dataclass(frozen=True, slots=True)
+class BestCheckpointValidationOutcome:
+    passed: bool
+    failures: tuple[str, ...]
+    checkpoint_sha256: str
+    epoch: int | None
+    global_step: int | None
+    pinned_model_revision: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def best_checkpoint_validated(self) -> bool:
+        return self.passed and not self.failures
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            # Stated explicitly and unconditionally: a lone best.pt can never
+            # establish that the complete training artifact is valid.
+            "full_artifact_validated": False,
+            "best_checkpoint_validated": self.best_checkpoint_validated,
+            "failed_conditions": list(self.failures),
+            "failed_condition_count": len(self.failures),
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "epoch": self.epoch,
+            "global_step": self.global_step,
+            "pinned_model_revision": self.pinned_model_revision,
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+def validate_best_checkpoint_only(
+    checkpoint_path: str | Path, *,
+    expected_sha256: str,
+    expected_pinned_revision: str,
+    expected_epoch: int,
+    expected_global_step: int,
+    payload: Mapping[str, Any] | None = None,
+    hasher: Callable[[str | Path], str] | None = None,
+) -> BestCheckpointValidationOutcome:
+    """Validate a lone best checkpoint, read-only.
+
+    ``payload`` is the already-loaded checkpoint mapping (the caller owns Torch).
+    The file is never rewritten and no optimizer state is ever constructed.
+    """
+    path = Path(checkpoint_path)
+    digest = hasher if hasher is not None else _sha256_file
+    failures: list[str] = []
+    if not path.is_file():
+        return BestCheckpointValidationOutcome(
+            passed=False, failures=(f"checkpoint file does not exist: {path}",),
+            checkpoint_sha256="", epoch=None, global_step=None, pinned_model_revision="",
+            diagnostics={"checkpoint_path": str(path), "payload_inspected": False})
+
+    computed = digest(path)
+    wanted = str(expected_sha256 or "").strip().lower()
+    if not _SHA256_PATTERN.match(wanted):
+        failures.append(
+            "expected checkpoint SHA-256 was not supplied (or is malformed): the "
+            f"recomputed digest is {computed!r} (observed: {expected_sha256!r})")
+    elif computed != wanted:
+        failures.append(
+            f"checkpoint SHA-256 does not match the operator-supplied hash "
+            f"(recomputed: {computed!r}, expected: {wanted!r})")
+
+    epoch: int | None = None
+    global_step: int | None = None
+    pinned = ""
+    if payload is None:
+        failures.append("checkpoint payload was not supplied; nothing inside it was checked")
+    else:
+        if not isinstance(payload, Mapping):
+            failures.append(f"checkpoint payload is not a mapping (got {type(payload).__name__})")
+        mode = str(payload.get("mode", ""))
+        if mode == SMOKE_MODE:
+            failures.append("checkpoint carries the SMOKE_ONLY mode")
+        elif mode != FULL_TRAINING_MODE:
+            failures.append(f"checkpoint mode is not {FULL_TRAINING_MODE} (observed: {mode!r})")
+        for key in CHECKPOINT_REQUIRED_KEYS:
+            if key not in payload:
+                failures.append(f"checkpoint is missing the required field {key!r}")
+        epoch = payload.get("epoch") if isinstance(payload.get("epoch"), int) else None
+        global_step = (payload.get("global_step")
+                       if isinstance(payload.get("global_step"), int) else None)
+        if epoch != int(expected_epoch):
+            failures.append(
+                f"epoch does not match (observed: {payload.get('epoch')!r}, "
+                f"expected: {expected_epoch!r})")
+        if global_step != int(expected_global_step):
+            failures.append(
+                f"global_step does not match (observed: {payload.get('global_step')!r}, "
+                f"expected: {expected_global_step!r})")
+        pinned = str(payload.get("pinned_model_revision", ""))
+        if not is_immutable_revision(pinned):
+            failures.append(f"pinned model revision is not immutable (observed: {pinned!r})")
+        elif pinned != str(expected_pinned_revision):
+            failures.append(
+                f"pinned model revision does not match (observed: {pinned!r}, "
+                f"expected: {expected_pinned_revision!r})")
+        if list(payload.get("entity_type_order") or []) != list(ENTITY_TYPE_ORDER):
+            failures.append(
+                "checkpoint label space does not match this repository "
+                f"(observed: {payload.get('entity_type_order')!r})")
+        if not payload.get("model_state_dict"):
+            failures.append("checkpoint has no model_state_dict")
+
+    return BestCheckpointValidationOutcome(
+        passed=not failures, failures=tuple(failures), checkpoint_sha256=computed,
+        epoch=epoch, global_step=global_step, pinned_model_revision=pinned,
+        diagnostics={
+            "checkpoint_path": str(path),
+            "payload_inspected": payload is not None,
+            "checkpoint_bytes": path.stat().st_size,
+            "scope": "best_checkpoint_only",
+            "full_artifact_files_checked": [],
+        },
+    )
+
+
+# --- read-only validation of a completed full-training artifact (Audit 0031) ---
+
+@dataclass(frozen=True, slots=True)
+class FullTrainingValidationOutcome:
+    """Result of validating a completed full-training artifact directory."""
+
+    passed: bool
+    failures: tuple[str, ...]
+    checkpoint_sha256: dict[str, str]
+    best_metric: float | None
+    completed_epochs: int | None
+    completed_optimizer_steps: int | None
+    pinned_model_revision: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def validated(self) -> bool:
+        return self.passed and not self.failures
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "full_training_artifact_validated": self.validated,
+            "failed_conditions": list(self.failures),
+            "failed_condition_count": len(self.failures),
+            "checkpoint_sha256": dict(self.checkpoint_sha256),
+            "best_metric": self.best_metric,
+            "best_metric_key": BEST_METRIC_KEY,
+            "completed_epochs": self.completed_epochs,
+            "completed_optimizer_steps": self.completed_optimizer_steps,
+            "pinned_model_revision": self.pinned_model_revision,
+            "diagnostics": dict(self.diagnostics),
+        }
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_full_training_artifact(
+    artifact_dir: str | Path, *,
+    expected_checkpoint_sha256: Mapping[str, str],
+    expected_pinned_revision: str,
+    checkpoint_payloads: Mapping[str, Mapping[str, Any]] | None = None,
+    hasher: Callable[[str | Path], str] | None = None,
+) -> FullTrainingValidationOutcome:
+    """Validate a completed run **read-only**; nothing is written or regenerated.
+
+    ``expected_checkpoint_sha256`` maps ``"best_checkpoint"`` / ``"latest_checkpoint"``
+    to the digests the operator is accepting, so every hash must agree three ways:
+    recomputed from bytes, recorded in the manifest, and supplied here. No digest
+    is ever baked into source.
+
+    ``checkpoint_payloads`` carries already-loaded ``.pt`` contents (the caller owns
+    Torch, so this module stays free of it). When omitted, file-level checks still
+    run and the schema checks are reported as not performed.
+    """
+    base = Path(artifact_dir)
+    digest = hasher if hasher is not None else _sha256_file
+    failures: list[str] = []
+    paths = full_training_output_paths(base)
+
+    required = {
+        "best_checkpoint": Path(paths["best_checkpoint"]),
+        "latest_checkpoint": Path(paths["latest_checkpoint"]),
+        "training_history": Path(paths["training_history"]),
+        "resolved_config": Path(paths["resolved_config"]),
+        "validation_metrics": Path(paths["validation_metrics"]),
+        "training_manifest": Path(paths["training_manifest"]),
+    }
+    present = {name: path.is_file() for name, path in required.items()}
+    for name, exists in sorted(present.items()):
+        if not exists:
+            failures.append(f"required artifact missing: {name} ({required[name]})")
+    if not present["training_manifest"]:
+        return FullTrainingValidationOutcome(
+            passed=False, failures=tuple(failures), checkpoint_sha256={},
+            best_metric=None, completed_epochs=None, completed_optimizer_steps=None,
+            pinned_model_revision="", diagnostics={"files_present": present})
+
+    manifest = _read_json(required["training_manifest"])
+    if not isinstance(manifest, dict):
+        failures.append("training_manifest.json is not a JSON object")
+        manifest = {}
+
+    def field_of(dotted: str, default: Any = None) -> Any:
+        node: Any = manifest
+        for key in dotted.split("."):
+            if not isinstance(node, Mapping) or key not in node:
+                return default
+            node = node[key]
+        return node
+
+    # --- run identity and completion -----------------------------------------
+    for label, holds, observed in (
+        ("status is FULL_TRAINING", manifest.get("status") == FULL_TRAINING_MODE,
+         manifest.get("status")),
+        ("smoke_only_not_full_training is false",
+         manifest.get("smoke_only_not_full_training") is False,
+         manifest.get("smoke_only_not_full_training")),
+        ("run_completed is true", manifest.get("run_completed") is True,
+         manifest.get("run_completed")),
+        ("interrupted_reason is empty", not str(manifest.get("interrupted_reason", "")),
+         manifest.get("interrupted_reason")),
+        ("safe_to_resume is true", manifest.get("safe_to_resume") is True,
+         manifest.get("safe_to_resume")),
+        ("stage is S1", manifest.get("stage_id") == "S1", manifest.get("stage_id")),
+    ):
+        if not holds:
+            failures.append(f"{label} (observed: {observed!r})")
+
+    # --- epoch / step accounting ---------------------------------------------
+    completed_epochs = field_of("completed_epochs")
+    completed_steps = field_of("completed_optimizer_steps")
+    planned_epochs = field_of("hyperparameters.num_epochs")
+    planned_steps = field_of("schedule.total_optimizer_steps")
+    if completed_epochs != planned_epochs:
+        failures.append(
+            f"completed_epochs does not match the plan (observed: {completed_epochs!r}, "
+            f"planned: {planned_epochs!r})")
+    if completed_steps != planned_steps:
+        failures.append(
+            f"completed_optimizer_steps does not match the plan "
+            f"(observed: {completed_steps!r}, planned: {planned_steps!r})")
+
+    # --- pinned revision and initialization ----------------------------------
+    pinned = str(field_of("model.pinned_model_revision", ""))
+    if not is_immutable_revision(pinned):
+        failures.append(f"pinned model revision is not immutable (observed: {pinned!r})")
+    if pinned != str(expected_pinned_revision):
+        failures.append(
+            f"pinned model revision does not match the expected revision "
+            f"(observed: {pinned!r}, expected: {expected_pinned_revision!r})")
+    if field_of("model.tokenizer_revision") != pinned:
+        failures.append("tokenizer revision does not match the pinned model revision")
+    if field_of("model.initialize_from") != "pretrained_base":
+        failures.append(
+            "full training did not initialize from the pretrained base "
+            f"(observed: {field_of('model.initialize_from')!r})")
+    if field_of("model.initialized_from_smoke_checkpoint") is not False:
+        failures.append(
+            "manifest does not assert that the smoke checkpoint was NOT the initializer "
+            f"(observed: {field_of('model.initialized_from_smoke_checkpoint')!r})")
+
+    # --- best-checkpoint criterion and metric ---------------------------------
+    if field_of("best_checkpoint_criterion.key") != BEST_METRIC_KEY:
+        failures.append(
+            f"best-checkpoint criterion key is not {BEST_METRIC_KEY} "
+            f"(observed: {field_of('best_checkpoint_criterion.key')!r})")
+    if field_of("best_checkpoint_criterion.mode") != BEST_METRIC_MODE:
+        failures.append("best-checkpoint criterion mode is not 'max'")
+    best_metric = field_of(f"validation_metrics.{BEST_METRIC_KEY}")
+    if not isinstance(best_metric, (int, float)) or not 0.0 <= float(best_metric) <= 1.0:
+        failures.append(f"best metric is not a value in [0, 1] (observed: {best_metric!r})")
+        best_metric = None
+    else:
+        best_metric = float(best_metric)
+
+    # --- config hash agreement ------------------------------------------------
+    manifest_config_sha = str(manifest.get("config_sha256", ""))
+    if present["resolved_config"]:
+        resolved = _read_json(required["resolved_config"])
+        recomputed = hashlib.sha256(
+            json.dumps(resolved, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if recomputed != manifest_config_sha:
+            failures.append(
+                "resolved_config.json does not hash to the manifest config_sha256 "
+                f"(recomputed: {recomputed!r}, manifest: {manifest_config_sha!r})")
+        if resolved.get("pinned_revision") != pinned:
+            failures.append("resolved_config.json pins a different model revision")
+
+    # --- validation_metrics.json agrees with the manifest ---------------------
+    if present["validation_metrics"]:
+        metrics = _read_json(required["validation_metrics"])
+        if best_metric is not None and metrics.get(BEST_METRIC_KEY) != best_metric:
+            failures.append(
+                "validation_metrics.json disagrees with the manifest on the best metric "
+                f"(file: {metrics.get(BEST_METRIC_KEY)!r}, manifest: {best_metric!r})")
+
+    # --- training history -----------------------------------------------------
+    history_epochs = 0
+    if present["training_history"]:
+        records = [
+            json.loads(line) for line in
+            required["training_history"].read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        validations = [r for r in records if r.get("event") == "validation"]
+        history_epochs = len(validations)
+        if not validations:
+            failures.append("training_history.jsonl contains no validation records")
+        elif isinstance(completed_epochs, int) and history_epochs != completed_epochs:
+            failures.append(
+                f"training_history.jsonl has {history_epochs} validation record(s) but the "
+                f"manifest reports {completed_epochs} completed epoch(s)")
+
+    # --- three-way checkpoint hash agreement ----------------------------------
+    recorded = field_of("artifacts.checkpoint_sha256", {}) or {}
+    computed: dict[str, str] = {}
+    for name in ("best_checkpoint", "latest_checkpoint"):
+        if not present[name]:
+            continue
+        actual = digest(required[name])
+        computed[name] = actual
+        if actual != str(recorded.get(name, "")):
+            failures.append(
+                f"{name} SHA-256 does not match the manifest (recomputed: {actual!r}, "
+                f"manifest: {recorded.get(name)!r})")
+        wanted = str(expected_checkpoint_sha256.get(name, "") or "").strip().lower()
+        if not _SHA256_PATTERN.match(wanted):
+            failures.append(
+                f"expected {name} SHA-256 was not supplied (or is malformed): the "
+                f"recomputed digest is {actual!r} (observed: "
+                f"{expected_checkpoint_sha256.get(name)!r})")
+        elif actual != wanted:
+            failures.append(
+                f"{name} SHA-256 does not match the operator-supplied hash "
+                f"(recomputed: {actual!r}, expected: {wanted!r})")
+    if computed.get("best_checkpoint") and computed.get("best_checkpoint") == computed.get(
+            "latest_checkpoint"):
+        failures.append("best and latest checkpoints are byte-identical")
+
+    # --- checkpoint payload schema (caller supplies the loaded contents) -------
+    schema_checked = False
+    if checkpoint_payloads:
+        schema_checked = True
+        for name, payload in sorted(checkpoint_payloads.items()):
+            if str(payload.get("mode", "")) == SMOKE_MODE:
+                failures.append(f"{name} carries the SMOKE_ONLY mode")
+            elif str(payload.get("mode", "")) != FULL_TRAINING_MODE:
+                failures.append(f"{name} has an unknown mode {payload.get('mode')!r}")
+            for key in CHECKPOINT_REQUIRED_KEYS:
+                if key not in payload:
+                    failures.append(f"{name} is missing the resume field {key!r}")
+            if str(payload.get("pinned_model_revision", "")) != pinned:
+                failures.append(f"{name} was trained on a different pinned revision")
+            if list(payload.get("entity_type_order") or []) != list(ENTITY_TYPE_ORDER):
+                failures.append(f"{name} has a different label space")
+            if str(payload.get("config_sha256", "")) != manifest_config_sha:
+                failures.append(f"{name} config_sha256 does not match the manifest")
+
+    cache_files = sorted(
+        str(path.relative_to(base)) for path in base.rglob("*")
+        if path.is_file() and path.suffix in (".safetensors", ".h5", ".onnx", ".msgpack")
+    )
+    if cache_files:
+        failures.append(f"base-model cache files inside the artifact: {cache_files!r}")
+
+    return FullTrainingValidationOutcome(
+        passed=not failures,
+        failures=tuple(failures),
+        checkpoint_sha256=computed,
+        best_metric=best_metric,
+        completed_epochs=completed_epochs if isinstance(completed_epochs, int) else None,
+        completed_optimizer_steps=completed_steps if isinstance(completed_steps, int) else None,
+        pinned_model_revision=pinned,
+        diagnostics={
+            "files_present": present,
+            "artifact_dir": str(base),
+            "checkpoint_schema_checked": schema_checked,
+            "history_validation_records": history_epochs,
+            "effective_batch_size": manifest.get("effective_batch_size"),
+            "hf_model_id": field_of("model.hf_model_id", ""),
+            "corpus_manifest_sha256": field_of("corpus.corpus_manifest_sha256", ""),
+            "repository_commit": field_of("repository.resolved_commit", ""),
+            "smoke_artifact_dir": field_of("artifacts.smoke_artifact_dir", ""),
+            "validation_metrics": manifest.get("validation_metrics", {}),
+        },
+    )
+
+
 __all__ = [
     "BEST_CHECKPOINT_NAME",
     "BEST_METRIC_KEY",
@@ -525,7 +993,16 @@ __all__ = [
     "LATEST_CHECKPOINT_NAME",
     "SMOKE_MODE",
     "SUPPORTED_LOSSES",
+    "BestCheckpointValidationOutcome",
+    "CheckpointLocation",
+    "COLAB_BEST_CHECKPOINT",
+    "LOCAL_BEST_CHECKPOINT_RELATIVE",
+    "S1_BEST_CHECKPOINT_ENV",
     "FullTrainingConfig",
+    "resolve_s1_best_checkpoint",
+    "validate_best_checkpoint_only",
+    "FullTrainingValidationOutcome",
+    "validate_full_training_artifact",
     "FullTrainingConfigError",
     "MentionMetrics",
     "TrainingSchedule",

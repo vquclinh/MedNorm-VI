@@ -19,6 +19,7 @@ VIETMED = "MedNorm_Data_VietMed_Preprocess.ipynb"
 S1_SMOKE = "MedNorm_S1_Mention_FirstRun_Smoke.ipynb"
 S1_VALIDATION = "MedNorm_S1_Smoke_Artifact_Validation.ipynb"
 S1_FULL = "MedNorm_S1_Mention_Full_Training.ipynb"
+S1_EVAL = "MedNorm_S1_Mention_InternalTest_Evaluation.ipynb"
 ALL_NOTEBOOKS = sorted(p.name for p in NB.glob("*.ipynb"))
 
 # Notebooks honestly classified as DESIGN_DRAFT in the integrity report. They may
@@ -665,3 +666,74 @@ def test_full_training_manifest_records_the_full_corpus_preflight() -> None:
     code = _code(S1_FULL)
     assert '"full_corpus_alignment_preflight": alignment_preflight_report' in code
     assert "alignment_preflight.as_dict()" in code
+
+
+# --- internal-test evaluation notebook (Audit 0031) ---------------------------
+
+def test_evaluation_notebook_is_read_only_and_never_trains() -> None:
+    code = _code(S1_EVAL)
+    for forbidden in ("loss.backward", "scaled.backward()", "optimizer.step()",
+                      "torch.optim.AdamW(parameter_groups)", "output.zip",
+                      "get_linear_schedule_with_warmup"):
+        assert forbidden not in code, f"evaluation notebook must not contain {forbidden!r}"
+    assert "torch.no_grad()" in code
+    assert "model.eval()" in code
+    assert "requires_grad_(False)" in code
+
+
+def test_evaluation_notebook_gates_on_full_training_artifact_validation() -> None:
+    code = _code(S1_EVAL)
+    assert "validate_full_training_artifact(" in code
+    assert "artifact_outcome.validated" in code
+    assert "evaluation is not authorized" in code
+    gate = _s1_index_in(S1_EVAL, "raise AssertionError(")
+    for later in ("AutoModel.from_pretrained", "model.load_state_dict"):
+        assert gate < _s1_index_in(S1_EVAL, later), f"validation must precede {later}"
+
+
+def test_evaluation_notebook_never_writes_into_the_training_artifact() -> None:
+    code = _code(S1_EVAL)
+    assert "EVAL_OUTPUT_DIR = (" in code
+    # local mode writes under the git-ignored reports/ tree, never into checkpoint/
+    assert 'Path("reports") / "s1_internal_test_eval"' in code
+    assert "checkpoint/" not in code
+    assert "s1_mention_internal_test_eval_v1" in code
+    # the only write target is the separate evaluation directory
+    assert "report_path = EVAL_OUTPUT_DIR" in code
+    assert "FULL_TRAINING_ARTIFACT_DIR /" not in code
+    assert '"training_artifact_modified": False' in code
+
+
+def test_evaluation_notebook_scores_the_governed_internal_test_split() -> None:
+    code = _code(S1_EVAL)
+    assert 'EVAL_SPLIT = "internal_test"' in code
+    assert "run_alignment_preflight(" in code
+    assert "assert eval_preflight.passed" in code
+    assert "MentionMetrics()" in code
+    assert "verify_governed_corpus(" in code
+    assert "assert PRODUCTION_SEGMENTATION" in code
+
+
+def test_evaluation_notebook_takes_hashes_at_runtime_and_hardcodes_none() -> None:
+    import re
+    code = _code(S1_EVAL)
+    assert "MEDNORM_EXPECTED_BEST_CHECKPOINT_SHA256" in code
+    assert "MEDNORM_PINNED_MODEL_REVISION" in code
+    assert not re.search(r"[0-9a-f]{64}", code), "a run-specific digest is hardcoded"
+    assert not re.search(r"[0-9a-f]{40}", code), "a revision is hardcoded"
+
+
+def test_evaluation_notebook_supports_local_and_colab_without_duplication() -> None:
+    """One notebook, two modes, one shared resolver."""
+    code = _code(S1_EVAL)
+    assert 'EXECUTION_MODE = "colab" if IN_COLAB_BOOTSTRAP else "local"' in code
+    assert "resolve_s1_best_checkpoint(" in code
+    # Colab keeps the unweakened full-artifact gate; local uses the narrower one
+    assert "validate_full_training_artifact(" in code
+    assert "validate_best_checkpoint_only(" in code
+    assert "FULL_ARTIFACT_VALIDATED = False" in code
+    assert '"full_artifact_validated": FULL_ARTIFACT_VALIDATED' in code
+    assert '"validation_scope": scope' in code
+    # local model reconstruction must not require downloading base weights
+    assert "AutoModel.from_config(" in code
+    assert "config_only_then_strict_state_dict" in code

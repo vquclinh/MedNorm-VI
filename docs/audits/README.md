@@ -73,3 +73,5 @@ Each audit should record, at minimum:
 - `0028-s1-tone-placement-equivalence.md`
 - `0029-s1-orthographic-equivalence-and-full-corpus-preflight.md`
 - `0030-s1-authoritative-preflight-and-astral-protection.md`
+- `0031-s1-full-training-run-validation-and-internal-test-evaluation.md`
+- `0032-s1-local-checkpoint-and-architecture-progress-review.md`

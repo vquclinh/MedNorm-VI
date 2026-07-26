@@ -18,7 +18,13 @@ from .phobert_alignment import (
     segmented_text_to_words,
     verify_tokenizer_equivalence,
 )
-from .s1_full_training import is_supervised_example
+from .s1_full_training import (
+    full_training_output_paths,
+    is_supervised_example,
+    resolve_s1_best_checkpoint,
+    validate_best_checkpoint_only,
+    validate_full_training_artifact,
+)
 from .s1_mention_smoke import (
     encode_mention_example_slow,
     iter_jsonl,
@@ -161,6 +167,98 @@ def run_local_alignment_preflight(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def run_full_training_validation(args: argparse.Namespace) -> int:
+    """Read-only validation of a completed full-training artifact directory.
+
+    Nothing is written, regenerated or copied. Checkpoint tensors are only opened
+    when ``--load-checkpoints`` is given, which additionally requires Torch; the
+    file-level and manifest checks need neither Torch nor a GPU.
+    """
+    payloads: dict[str, dict[str, Any]] | None = None
+    if args.load_checkpoints:
+        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        paths = full_training_output_paths(args.artifact_dir)
+        payloads = {}
+        for name in ("best_checkpoint", "latest_checkpoint"):
+            if Path(paths[name]).is_file():
+                loaded = torch.load(paths[name], map_location="cpu", weights_only=False)
+                # Keep only the metadata; tensors are never retained or copied.
+                payloads[name] = {k: v for k, v in loaded.items()
+                                  if k not in ("model_state_dict", "optimizer_state_dict",
+                                               "scheduler_state_dict")}
+                payloads[name].update({k: True for k in loaded
+                                       if k.endswith("_state_dict")})
+                del loaded
+
+    outcome = validate_full_training_artifact(
+        args.artifact_dir,
+        expected_checkpoint_sha256={
+            "best_checkpoint": args.expected_best_sha256,
+            "latest_checkpoint": args.expected_latest_sha256,
+        },
+        expected_pinned_revision=args.revision,
+        checkpoint_payloads=payloads,
+    )
+    payload = outcome.as_dict()
+    if args.report:
+        destination = Path(args.report)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if not outcome.validated:
+        print(f"FULL-TRAINING ARTIFACT VALIDATION FAILED - {len(outcome.failures)} condition(s)")
+        for failure in outcome.failures:
+            print("  -", failure)
+        return 1
+    print("FULL-TRAINING ARTIFACT VALIDATED - every condition passed.")
+    return 0
+
+
+def run_best_checkpoint_validation(args: argparse.Namespace) -> int:
+    """Validate ONLY the local best checkpoint, read-only, on CPU.
+
+    Deliberately narrower than ``validate-full-training``: it reports
+    ``full_artifact_validated: false`` because a lone ``best.pt`` cannot prove the
+    complete artifact. Nothing is written and no optimizer state is created.
+    """
+    location = resolve_s1_best_checkpoint(
+        repository_root=args.repository_root, in_colab=args.assume_colab or None)
+    checkpoint = Path(args.checkpoint) if args.checkpoint else location.require()
+
+    payload = None
+    if not args.skip_payload:
+        import torch  # noqa: PLC0415
+
+        loaded = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        # Metadata plus a boolean marker for the tensors; weights are not copied.
+        payload = {k: v for k, v in loaded.items() if not k.endswith("_state_dict")}
+        payload.update({k: bool(loaded[k]) for k in loaded if k.endswith("_state_dict")})
+        del loaded
+
+    outcome = validate_best_checkpoint_only(
+        checkpoint,
+        expected_sha256=args.expected_sha256,
+        expected_pinned_revision=args.revision,
+        expected_epoch=args.expected_epoch,
+        expected_global_step=args.expected_global_step,
+        payload=payload,
+    )
+    result = outcome.as_dict() | {"resolution": location.as_dict()}
+    if args.report:
+        destination = Path(args.report)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if not outcome.best_checkpoint_validated:
+        for failure in outcome.failures:
+            print("  -", failure)
+        return 1
+    print("BEST CHECKPOINT VALIDATED (full_artifact_validated: false - "
+          "run validate-full-training against the complete artifact).")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -181,6 +279,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     preflight.add_argument("--max-sequence-length", type=int, default=256)
     preflight.add_argument("--report", default=DEFAULT_REPORT)
 
+    validate = sub.add_parser(
+        "validate-full-training",
+        help="read-only validation of a completed S1 full-training artifact")
+    validate.add_argument("--artifact-dir", required=True)
+    validate.add_argument("--revision", required=True,
+                          help="pinned immutable 40-hex model revision")
+    validate.add_argument("--expected-best-sha256", default="")
+    validate.add_argument("--expected-latest-sha256", default="")
+    validate.add_argument("--load-checkpoints", action="store_true",
+                          help="also verify checkpoint resume metadata (requires Torch)")
+    validate.add_argument("--report", default=None)
+
+    best = sub.add_parser(
+        "validate-s1-best-checkpoint",
+        help="read-only validation of the local S1 best checkpoint alone (CPU)")
+    best.add_argument("--checkpoint", default=None,
+                      help="override the resolved path entirely")
+    best.add_argument("--repository-root", default=None)
+    best.add_argument("--revision", required=True)
+    best.add_argument("--expected-sha256", default="")
+    best.add_argument("--expected-epoch", type=int, required=True)
+    best.add_argument("--expected-global-step", type=int, required=True)
+    best.add_argument("--assume-colab", action="store_true")
+    best.add_argument("--skip-payload", action="store_true",
+                      help="hash and locate only; do not open the checkpoint (no Torch)")
+    best.add_argument("--report", default=None)
+
     args = parser.parse_args(argv)
     if args.command == "plan":
         print(json.dumps(asdict(build_training_plan(artifact_root=args.artifact_root)),
@@ -188,6 +313,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "align-preflight":
         return run_local_alignment_preflight(args)
+    if args.command == "validate-full-training":
+        return run_full_training_validation(args)
+    if args.command == "validate-s1-best-checkpoint":
+        return run_best_checkpoint_validation(args)
     return 2
 
 
