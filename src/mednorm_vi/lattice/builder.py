@@ -4,10 +4,10 @@ Flow (spec §16 steps 2-4)::
 
     L1 DocumentGraph  ->  L2 route tags  ->  L3 unified span lattice
 
-Only experts that really exist contribute: E1 medication grammar, E2 laboratory
-parser, and E3 the trained ViHealthBERT span/type model. W2NER, MRC-NER, GLiNER
-and the Qwen proposer have no checkpoint in this milestone, so they contribute
-nothing and **nothing is fabricated on their behalf**.
+Only experts that are enabled and have valid local artifacts contribute. E4, E5,
+E6 and E7 use the same generic expert proposal contract as E3 before L4; when a
+checkpoint is unavailable, the arm is reported as unavailable rather than
+simulated.
 
 Merging policy. Two proposals with the *exact* same coordinates become one node
 whose evidence is the union of both sources; every source is kept individually.
@@ -32,6 +32,7 @@ from .models import (
     EXPERT_LABORATORY_PARSER,
     EXPERT_MEDICATION_GRAMMAR,
     EXPERT_VIHEALTHBERT,
+    ExpertSpanProposal,
     LatticeError,
     SourceEvidence,
     SpanLattice,
@@ -145,6 +146,11 @@ def neural_evidence(
     return evidence, type_scores
 
 
+def expert_span_evidence(proposal: ExpertSpanProposal) -> tuple[SourceEvidence, dict[str, float]]:
+    """Adapt one trainable expert proposal to lattice evidence."""
+    return proposal.as_source_evidence(), dict(proposal.type_scores)
+
+
 def build_span_lattice(
     document_id: str,
     original_text: str,
@@ -152,6 +158,7 @@ def build_span_lattice(
     routings: Sequence[NodeRouting] = (),
     specialist_proposals: Sequence[SpecialistProposal] = (),
     neural_spans: Sequence[NeuralSpan] = (),
+    expert_spans: Sequence[ExpertSpanProposal] = (),
     normalized_view: str = "",
     config_hash: str = "",
 ) -> SpanLattice:
@@ -197,6 +204,26 @@ def build_span_lattice(
             span, index, document_id=document_id, ordinal=ordinal)
         register(span.start, span.end, span.text, evidence, type_scores)
 
+    ordered_expert_spans = sorted(
+        expert_spans,
+        key=lambda p: (p.start, p.end, p.expert_id, p.proposal_id),
+    )
+    for expert_proposal in ordered_expert_spans:
+        if expert_proposal.document_id != document_id:
+            raise LatticeError(
+                f"{expert_proposal.expert_id} proposal {expert_proposal.proposal_id} belongs to "
+                f"{expert_proposal.document_id!r}, expected {document_id!r}"
+            )
+        expert_proposal.validate_against(original_text)
+        evidence, type_scores = expert_span_evidence(expert_proposal)
+        register(
+            expert_proposal.start,
+            expert_proposal.end,
+            expert_proposal.text,
+            evidence,
+            type_scores,
+        )
+
     proposals: list[SpanProposal] = []
     merged_groups = 0
     for (start, end) in sorted(merged):
@@ -215,6 +242,10 @@ def build_span_lattice(
                 sum(1 for source in sources if source.family == "deterministic")),
             "neural_sources": float(
                 sum(1 for source in sources if source.family == "neural")),
+            "open_type_sources": float(
+                sum(1 for source in sources if source.family == "open_type")),
+            "llm_interface_sources": float(
+                sum(1 for source in sources if source.family == "llm_interface")),
             "span_length": float(end - start),
         }
         proposals.append(SpanProposal(
@@ -240,6 +271,7 @@ def build_from_phase1b(
     phase1b: Phase1BResult,
     *,
     neural_spans: Sequence[NeuralSpan] = (),
+    expert_spans: Sequence[ExpertSpanProposal] = (),
     config_hash: str = "",
 ) -> SpanLattice:
     """Convenience wiring: an L1 graph plus a Phase 1B run plus decoded E3 spans."""
@@ -248,6 +280,7 @@ def build_from_phase1b(
         routings=phase1b.routings,
         specialist_proposals=phase1b.proposals,
         neural_spans=neural_spans,
+        expert_spans=expert_spans,
         config_hash=config_hash)
 
 
@@ -261,6 +294,7 @@ __all__ = [
     "RouteIndex",
     "build_from_phase1b",
     "build_span_lattice",
+    "expert_span_evidence",
     "lattice_config_hash",
     "neural_evidence",
     "specialist_evidence",

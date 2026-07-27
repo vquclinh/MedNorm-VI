@@ -1,0 +1,29 @@
+version: phobert-w2ner-v1
+expert_id: E4_phobert_w2ner
+status: IMPLEMENTED_UNTRAINED
+enabled: false
+base_model:
+  name: vinai/phobert-large
+  revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+  parameter_count: 370000000
+checkpoint:
+  path: ""
+  sha256: UNAVAILABLE_UNTRAINED
+data:
+  train_split: data/processed/public_ner_train.jsonl
+  validation_split: data/processed/public_ner_validation.jsonl
+  internal_test_allowed_for_training: false
+alignment:
+  word_tokenizer: whitespace_original_offsets_v1
+  subword_offsets_required: true
+  invalid_span_policy: raise
+w2ner:
+  labels: [NONE, NNW, THW:DIAGNOSIS, THW:MEDICATION, THW:SYMPTOM, THW:TEST_NAME, THW:TEST_RESULT]
+  contiguous_only: true
+  discontinuous_entities_supported: false
+  max_words: 256
+  threshold: 0.5
+runtime:
+  no_auto_download: true
+  forward_only: true
+  optimizer_forbidden_in_inference: true

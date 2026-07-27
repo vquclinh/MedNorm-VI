@@ -14,6 +14,7 @@ class ModelRole:
     base_parameter_count: int
     adapter_parameter_count: int = 0
     shared_backbone_id: str = ""
+    model_revision: str = ""
     quantization: str = ""
     checkpoint_hash: str = ""
     tokenizer_hash: str = ""
@@ -32,6 +33,7 @@ class ProfileBudget:
     total_parameters: int
     within_9b: bool
     missing_checkpoints: tuple[str, ...] = field(default_factory=tuple)
+    metadata_errors: tuple[str, ...] = field(default_factory=tuple)
 
 
 def load_registry(path: str | Path) -> tuple[ModelRole, ...]:
@@ -48,6 +50,7 @@ def load_registry(path: str | Path) -> tuple[ModelRole, ...]:
                 base_parameter_count=int(data.get("base_parameter_count", 0)),
                 adapter_parameter_count=int(data.get("adapter_parameter_count", 0)),
                 shared_backbone_id=str(data.get("shared_backbone_id", "")),
+                model_revision=str(data.get("model_revision", "")),
                 quantization=str(data.get("quantization", "")),
                 checkpoint_hash=str(data.get("checkpoint_hash", "")),
                 tokenizer_hash=str(data.get("tokenizer_hash", "")),
@@ -67,18 +70,24 @@ def validate_profile_budget(
     profile: str,
     limit_parameters: int = 9_000_000_000,
     require_local_paths: bool = False,
+    require_metadata: bool = False,
 ) -> ProfileBudget:
     enabled = [role for role in roles if profile in role.enabled_profiles]
     seen_backbones: set[str] = set()
     base = 0
     adapters = 0
     missing: list[str] = []
+    metadata_errors: list[str] = []
     for role in enabled:
         backbone = role.shared_backbone_id or role.model_id
         if backbone not in seen_backbones:
             base += role.base_parameter_count
             seen_backbones.add(backbone)
         adapters += role.adapter_parameter_count
+        if require_metadata and not role.model_revision:
+            metadata_errors.append(f"missing_model_revision:{role.model_id}")
+        if require_metadata and not role.checkpoint_hash:
+            metadata_errors.append(f"missing_checkpoint_hash:{role.model_id}")
         if require_local_paths and role.local_path and not Path(role.local_path).exists():
             missing.append(role.local_path)
     total = base + adapters
@@ -87,8 +96,9 @@ def validate_profile_budget(
         base_parameters=base,
         adapter_parameters=adapters,
         total_parameters=total,
-        within_9b=total <= limit_parameters,
+        within_9b=base <= limit_parameters and not metadata_errors,
         missing_checkpoints=tuple(sorted(missing)),
+        metadata_errors=tuple(sorted(metadata_errors)),
     )
 
 

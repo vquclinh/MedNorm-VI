@@ -1,11 +1,13 @@
-version: 1
+version: 2
 parameter_limit: 9000000000
+active_budget_profile: Safe-8.85B
 models:
   - model_id: deterministic_experts
     role: l1_l2_l3_rule_experts
     base_parameter_count: 0
     adapter_parameter_count: 0
     shared_backbone_id: deterministic
+    model_revision: repository-rules-v1
     quantization: none
     checkpoint_hash: none
     tokenizer_hash: none
@@ -13,69 +15,169 @@ models:
     local_path: ""
     vram_gb: 0.0
     load_order: 1
-    enabled_profiles: [deterministic, specialist, Safe, Lean, No-LLM, full]
+    enabled_profiles: [deterministic, specialist, Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
   - model_id: vihealthbert_span_type
-    role: mention_span_type
+    role: l3_e3_mention_span_type
     base_parameter_count: 135000000
     adapter_parameter_count: 2000000
     shared_backbone_id: vihealthbert
+    model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
     quantization: fp16
-    checkpoint_hash: missing
-    tokenizer_hash: missing
+    checkpoint_hash: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+    tokenizer_hash: CHECK_IN_MANIFEST
     license: REVIEW_REQUIRED
-    local_path: models/checkpoints/full_v1/mention/vihealthbert
+    local_path: checkpoint/s1_mention_full_training_v1/best.pt
     vram_gb: 1.5
     load_order: 10
-    enabled_profiles: [specialist, Safe, full]
-  - model_id: phobert_w2ner
-    role: mention_w2ner
+    enabled_profiles: [specialist, Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: vihealthbert_assertion_head
+    role: l5_assertion_adapter_manifest_only
     base_parameter_count: 135000000
-    adapter_parameter_count: 3000000
-    shared_backbone_id: phobert
+    adapter_parameter_count: 2000000
+    shared_backbone_id: vihealthbert
+    model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
     quantization: fp16
-    checkpoint_hash: missing
-    tokenizer_hash: missing
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
     license: REVIEW_REQUIRED
-    local_path: models/checkpoints/full_v1/mention/phobert_w2ner
-    vram_gb: 1.5
+    local_path: ""
+    vram_gb: 0.0
+    load_order: 11
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: phobert_large_w2ner
+    role: l3_e4_phobert_w2ner
+    base_parameter_count: 370000000
+    adapter_parameter_count: 3000000
+    shared_backbone_id: phobert_large
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: fp16
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
+    vram_gb: 2.5
     load_order: 20
-    enabled_profiles: [full]
-  - model_id: xlmr_mrc_ner
-    role: mrc_ner
-    base_parameter_count: 270000000
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: xlmr_large_mrc_ner
+    role: l3_e5_xlmr_mrc_ner
+    base_parameter_count: 560000000
     adapter_parameter_count: 3000000
-    shared_backbone_id: xlmr_base
+    shared_backbone_id: xlmr_large
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
     quantization: fp16
-    checkpoint_hash: missing
-    tokenizer_hash: missing
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
     license: REVIEW_REQUIRED
-    local_path: models/checkpoints/full_v1/mention/xlmr_mrc
-    vram_gb: 2.0
+    local_path: ""
+    vram_gb: 4.0
     load_order: 30
-    enabled_profiles: [Safe, full]
-  - model_id: gliner_small
-    role: open_label_ner
-    base_parameter_count: 180000000
-    adapter_parameter_count: 1000000
-    shared_backbone_id: gliner_small
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: gliner_medium_v2_1
+    role: l3_e6_gliner_open_type
+    base_parameter_count: 209000000
+    adapter_parameter_count: 0
+    shared_backbone_id: gliner_medium_v2_1
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
     quantization: fp16
-    checkpoint_hash: missing
-    tokenizer_hash: missing
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
     license: REVIEW_REQUIRED
-    local_path: models/checkpoints/full_v1/mention/gliner
-    vram_gb: 1.5
+    local_path: ""
+    vram_gb: 2.0
     load_order: 40
-    enabled_profiles: [full]
-  - model_id: qwen2_5_7b_lora
-    role: critic_adjudicator
-    base_parameter_count: 7615616512
-    adapter_parameter_count: 64000000
-    shared_backbone_id: qwen2_5_7b
+    enabled_profiles: [Safe-8.85B, full]
+
+  - model_id: qwen3_1_7b_proposer
+    role: l3_e7_interface_l7_fast_critic
+    base_parameter_count: 1700000000
+    adapter_parameter_count: 0
+    shared_backbone_id: qwen3_1_7b
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
     quantization: 4bit
-    checkpoint_hash: missing
-    tokenizer_hash: missing
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
     license: REVIEW_REQUIRED
-    local_path: models/checkpoints/full_v1/qwen_lora
+    local_path: ""
+    vram_gb: 3.0
+    load_order: 70
+    enabled_profiles: [Safe-8.85B, full]
+
+  - model_id: qwen3_4b_adjudicator
+    role: l7_hard_case_adjudicator
+    base_parameter_count: 4000000000
+    adapter_parameter_count: 0
+    shared_backbone_id: qwen3_4b
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: 4bit
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
     vram_gb: 6.0
     load_order: 80
-    enabled_profiles: [full]
+    enabled_profiles: [Safe-8.85B, full]
+
+  - model_id: qwen3_embedding_0_6b
+    role: l5_multilingual_dense_retrieval
+    base_parameter_count: 600000000
+    adapter_parameter_count: 0
+    shared_backbone_id: qwen3_embedding_0_6b
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: fp16
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
+    vram_gb: 1.5
+    load_order: 90
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: qwen3_reranker_0_6b
+    role: l5_cross_encoder_reranking
+    base_parameter_count: 600000000
+    adapter_parameter_count: 0
+    shared_backbone_id: qwen3_reranker_0_6b
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: fp16
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
+    vram_gb: 1.5
+    load_order: 91
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: bge_m3
+    role: l5_hybrid_retrieval
+    base_parameter_count: 568000000
+    adapter_parameter_count: 0
+    shared_backbone_id: bge_m3
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: fp16
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
+    vram_gb: 2.0
+    load_order: 92
+    enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
+
+  - model_id: sapbert_ontology_synonym
+    role: l5_ontology_synonym_embedding
+    base_parameter_count: 110000000
+    adapter_parameter_count: 0
+    shared_backbone_id: sapbert
+    model_revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+    quantization: fp16
+    checkpoint_hash: UNAVAILABLE_UNTRAINED
+    tokenizer_hash: CHECK_IN_MANIFEST
+    license: REVIEW_REQUIRED
+    local_path: ""
+    vram_gb: 1.0
+    load_order: 93
+    enabled_profiles: [Safe-8.85B, No-LLM-baseline, full]

@@ -29,6 +29,23 @@ rxnorm_selection:
 checkpoint_root: models/checkpoints/full_v1
 expected_documents: 100
 allow_specialist_fallback: true
+feature_flags:
+  enable_e1_medication_grammar: true
+  enable_e2_laboratory_parser: true
+  # Preserved measured default from Audit 0033: E3 ViHealthBERT remains the only
+  # enabled trained mention expert unless an ablation validates a wider lattice.
+  enable_e3_vihealthbert: true
+  # Phase-2 trainable specialists are implemented but disabled until valid local
+  # checkpoints exist and validation-split ablations support enabling them.
+  enable_e4_phobert_w2ner: false
+  enable_e5_xlmr_mrc: false
+  enable_e6_gliner: false
+  # Interface-only in this milestone. Do not execute or fabricate Qwen proposals.
+  enable_e7_qwen_proposer: false
+  # Audit 0034 measured deterministic L4 v1 below the E3-only baseline.
+  enable_l4_deterministic_v1: false
+  # Implemented in Phase 2, but no trained checkpoint exists yet.
+  enable_l4_learned_v2: false
 specialist_requires_checkpoints:
   - mention/vihealthbert
   - assertion/assertion_hydra
@@ -37,6 +54,8 @@ full_requires_checkpoints:
   - mention/phobert_w2ner
   - mention/xlmr_mrc
   - mention/gliner
+  - mention/qwen3_1_7b_proposer
+  - resolution/learned_l4_v2
   - assertion/assertion_hydra
   - retrieval/icd_dense
   - retrieval/rxnorm_dense
@@ -47,9 +66,29 @@ profiles:
   deterministic:
     neural: false
     requires_checkpoints: false
+    feature_flags:
+      enable_e1_medication_grammar: true
+      enable_e2_laboratory_parser: true
+      enable_e3_vihealthbert: false
+      enable_e4_phobert_w2ner: false
+      enable_e5_xlmr_mrc: false
+      enable_e6_gliner: false
+      enable_e7_qwen_proposer: false
+      enable_l4_deterministic_v1: false
+      enable_l4_learned_v2: false
   specialist:
     neural: optional
     requires_checkpoints: configurable
+    feature_flags:
+      enable_e1_medication_grammar: true
+      enable_e2_laboratory_parser: true
+      enable_e3_vihealthbert: true
+      enable_e4_phobert_w2ner: false
+      enable_e5_xlmr_mrc: false
+      enable_e6_gliner: false
+      enable_e7_qwen_proposer: false
+      enable_l4_deterministic_v1: false
+      enable_l4_learned_v2: false
     # L4 Boundary & Type Resolver v1 — DISABLED, on measured evidence (Audit 0034).
     #
     # The exact four-way ablation on the governed internal_test split scored:
@@ -73,3 +112,13 @@ profiles:
   full:
     neural: true
     requires_checkpoints: true
+    feature_flags:
+      enable_e1_medication_grammar: true
+      enable_e2_laboratory_parser: true
+      enable_e3_vihealthbert: true
+      enable_e4_phobert_w2ner: false
+      enable_e5_xlmr_mrc: false
+      enable_e6_gliner: false
+      enable_e7_qwen_proposer: false
+      enable_l4_deterministic_v1: false
+      enable_l4_learned_v2: false

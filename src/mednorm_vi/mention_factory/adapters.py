@@ -1,9 +1,11 @@
 """Unified L3 neural-expert adapter contracts.
 
-The adapters define how ViHealthBERT, PhoBERT-W2NER, XLM-R MRC-NER, GLiNER, and
-Qwen proposer checkpoints plug into the existing ``SpanProposal`` contract. They
-do not fabricate predictions: missing checkpoints fail unless a caller has
-explicitly configured a fallback-to-empty dry run.
+The adapters define how ViHealthBERT, PhoBERT-W2NER, XLM-R MRC-NER, and GLiNER
+checkpoints plug into the existing ``SpanProposal`` contract. They do not
+fabricate predictions: missing checkpoints fail unless a caller has explicitly
+configured a fallback-to-empty dry run. The production E7 Qwen3 proposer is the
+disabled interface in ``mention_factory.qwen_proposer``; the anchored helper in
+this file is retained only for older unit fixtures.
 """
 
 from __future__ import annotations
@@ -88,7 +90,7 @@ class NeuralExpertAdapter:
 
 @dataclass(frozen=True, slots=True)
 class AnchoredQwenProposer(NeuralExpertAdapter):
-    """Qwen proposer contract: anchored substrings only, never final entities."""
+    """Legacy anchored helper retained for pre-Phase-2 tests, not production E7."""
 
     def from_anchored_substrings(
         self,
@@ -151,13 +153,6 @@ def default_neural_adapters(
         NeuralExpertAdapter(
             "gliner",
             CheckpointManifest("gliner", "open_label_ner", str(root / "gliner")),
-            ("DIAGNOSIS", "SYMPTOM"),
-            ("C3", "C5"),
-            fallback_to_empty,
-        ),
-        AnchoredQwenProposer(
-            "qwen-proposer",
-            CheckpointManifest("qwen-proposer", "anchored_proposer", str(root / "qwen_lora")),
             ("MEDICATION", "DIAGNOSIS", "SYMPTOM", "TEST_NAME", "TEST_RESULT"),
             ("C3", "C4", "C5"),
             fallback_to_empty,

@@ -28,26 +28,43 @@ from typing import Any
 from ..schemas.constants import ENTITY_TYPES
 from ..schemas.spans import Span
 
-# The three experts that actually exist and are executable in this milestone.
-# W2NER (E4), MRC-NER (E5), GLiNER (E6) and the Qwen proposer (E7) are declared in
-# the architecture but have no trained checkpoint, so they contribute nothing here
-# and are never simulated.
+# Every architecture-declared L3 expert has a stable source id. Experts without a
+# valid local checkpoint remain disabled by profile, but their proposal contract
+# is still wired into the lattice so trained checkpoints can be evaluated without
+# changing downstream L4 code.
 EXPERT_MEDICATION_GRAMMAR = "E1_medication_grammar"
 EXPERT_LABORATORY_PARSER = "E2_laboratory_parser"
 EXPERT_VIHEALTHBERT = "E3_vihealthbert_span_type"
+EXPERT_PHOBERT_W2NER = "E4_phobert_w2ner"
+EXPERT_XLMR_MRC = "E5_xlmr_mrc_ner"
+EXPERT_GLINER = "E6_gliner_open_type"
+EXPERT_QWEN_PROPOSER = "E7_qwen3_1_7b_proposer"
 
 AVAILABLE_EXPERTS: tuple[str, ...] = (
-    EXPERT_MEDICATION_GRAMMAR, EXPERT_LABORATORY_PARSER, EXPERT_VIHEALTHBERT)
+    EXPERT_MEDICATION_GRAMMAR,
+    EXPERT_LABORATORY_PARSER,
+    EXPERT_VIHEALTHBERT,
+    EXPERT_PHOBERT_W2NER,
+    EXPERT_XLMR_MRC,
+    EXPERT_GLINER,
+    EXPERT_QWEN_PROPOSER,
+)
 
 # Provenance families, so deterministic and neural contributions stay separable in
 # every report (Audit 0033 grouping).
 FAMILY_DETERMINISTIC = "deterministic"
 FAMILY_NEURAL = "neural"
+FAMILY_OPEN_TYPE = "open_type"
+FAMILY_LLM_INTERFACE = "llm_interface"
 
 EXPERT_FAMILY: dict[str, str] = {
     EXPERT_MEDICATION_GRAMMAR: FAMILY_DETERMINISTIC,
     EXPERT_LABORATORY_PARSER: FAMILY_DETERMINISTIC,
     EXPERT_VIHEALTHBERT: FAMILY_NEURAL,
+    EXPERT_PHOBERT_W2NER: FAMILY_NEURAL,
+    EXPERT_XLMR_MRC: FAMILY_NEURAL,
+    EXPERT_GLINER: FAMILY_OPEN_TYPE,
+    EXPERT_QWEN_PROPOSER: FAMILY_LLM_INTERFACE,
 }
 
 
@@ -83,6 +100,9 @@ class SourceEvidence:
     warnings: tuple[str, ...] = field(default_factory=tuple)
     config_version: str = ""
     lexicon_version: str = ""
+    model_revision: str = ""
+    checkpoint_sha256: str = ""
+    config_sha256: str = ""
 
     @property
     def family(self) -> str:
@@ -110,7 +130,77 @@ class SourceEvidence:
             "warnings": list(self.warnings),
             "config_version": self.config_version,
             "lexicon_version": self.lexicon_version,
+            "model_revision": self.model_revision,
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "config_sha256": self.config_sha256,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ExpertSpanProposal:
+    """Trainable L3 expert output before coordinate-identity lattice merge."""
+
+    document_id: str
+    start: int
+    end: int
+    text: str
+    type_scores: Mapping[str, float]
+    local_score: float
+    expert_id: str
+    proposal_id: str
+    route: str = ""
+    section: str = ""
+    normalized_view: str = ""
+    original_start: int | None = None
+    original_end: int | None = None
+    evidence_ids: tuple[str, ...] = field(default_factory=tuple)
+    features: Mapping[str, float] = field(default_factory=dict)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    config_version: str = ""
+    model_revision: str = ""
+    checkpoint_sha256: str = ""
+    config_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        if self.expert_id not in AVAILABLE_EXPERTS:
+            raise LatticeError(f"unknown expert id: {self.expert_id}")
+        if self.end <= self.start:
+            raise LatticeError(f"invalid expert span offsets: {self.start}:{self.end}")
+        if self.original_start is not None and self.original_start != self.start:
+            raise LatticeError("expert proposal original_start must equal start")
+        if self.original_end is not None and self.original_end != self.end:
+            raise LatticeError("expert proposal original_end must equal end")
+        if not self.proposal_id:
+            raise LatticeError("expert proposal_id is required")
+        for entity_type in self.type_scores:
+            if entity_type not in ENTITY_TYPES:
+                raise LatticeError(f"unsupported proposed type {entity_type!r}")
+
+    def validate_against(self, original_text: str) -> None:
+        if original_text[self.start:self.end] != self.text:
+            raise LatticeError(
+                f"{self.expert_id} proposed [{self.start}, {self.end}) whose text "
+                "does not slice out of original_text (spec §4)"
+            )
+
+    def as_source_evidence(self) -> SourceEvidence:
+        return SourceEvidence(
+            expert_id=self.expert_id,
+            proposal_id=self.proposal_id,
+            local_score=float(self.local_score),
+            type_scores=dict(self.type_scores),
+            route=self.route,
+            section=self.section,
+            normalized_form=self.normalized_view,
+            routes=(self.route,) if self.route else (),
+            evidence_ids=tuple(self.evidence_ids),
+            features=dict(self.features),
+            warnings=tuple(self.warnings),
+            config_version=self.config_version,
+            model_revision=self.model_revision,
+            checkpoint_sha256=self.checkpoint_sha256,
+            config_sha256=self.config_sha256,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,11 +359,18 @@ def order_proposals(proposals: Sequence[SpanProposal]) -> tuple[SpanProposal, ..
 __all__ = [
     "AVAILABLE_EXPERTS",
     "EXPERT_FAMILY",
+    "EXPERT_GLINER",
     "EXPERT_LABORATORY_PARSER",
     "EXPERT_MEDICATION_GRAMMAR",
+    "EXPERT_PHOBERT_W2NER",
+    "EXPERT_QWEN_PROPOSER",
     "EXPERT_VIHEALTHBERT",
+    "EXPERT_XLMR_MRC",
+    "ExpertSpanProposal",
     "FAMILY_DETERMINISTIC",
+    "FAMILY_LLM_INTERFACE",
     "FAMILY_NEURAL",
+    "FAMILY_OPEN_TYPE",
     "LatticeError",
     "SourceEvidence",
     "SpanLattice",

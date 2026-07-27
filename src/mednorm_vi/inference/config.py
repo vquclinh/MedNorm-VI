@@ -6,6 +6,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
+    "enable_e1_medication_grammar": True,
+    "enable_e2_laboratory_parser": True,
+    "enable_e3_vihealthbert": True,
+    "enable_e4_phobert_w2ner": False,
+    "enable_e5_xlmr_mrc": False,
+    "enable_e6_gliner": False,
+    "enable_e7_qwen_proposer": False,
+    "enable_l4_deterministic_v1": False,
+    "enable_l4_learned_v2": False,
+}
+
+CHECKPOINT_BY_FEATURE_FLAG: dict[str, str] = {
+    "enable_e3_vihealthbert": "mention/vihealthbert",
+    "enable_e4_phobert_w2ner": "mention/phobert_w2ner",
+    "enable_e5_xlmr_mrc": "mention/xlmr_mrc",
+    "enable_e6_gliner": "mention/gliner",
+    "enable_e7_qwen_proposer": "mention/qwen3_1_7b_proposer",
+    "enable_l4_learned_v2": "resolution/learned_l4_v2",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:
@@ -21,12 +42,17 @@ class PipelineConfig:
     specialist_requires_checkpoints: tuple[str, ...] = field(default_factory=tuple)
     allow_specialist_fallback: bool = True
     expected_documents: int = 100
+    feature_flags: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_FEATURE_FLAGS))
 
     @staticmethod
     def load(path: str | Path) -> PipelineConfig:
         import yaml
 
         doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        feature_flags = dict(DEFAULT_FEATURE_FLAGS)
+        raw_flags = doc.get("feature_flags", {})
+        if isinstance(raw_flags, dict):
+            feature_flags.update({str(key): bool(value) for key, value in raw_flags.items()})
         return PipelineConfig(
             l1_config=str(doc.get("l1_config", "configs/document_intelligence/base.yaml")),
             router_config=str(doc.get("router_config", "configs/case_router/base.yaml")),
@@ -48,6 +74,7 @@ class PipelineConfig:
             ),
             allow_specialist_fallback=bool(doc.get("allow_specialist_fallback", True)),
             expected_documents=int(doc.get("expected_documents", 100)),
+            feature_flags=feature_flags,
         )
 
 
@@ -61,6 +88,12 @@ def validate_readiness(config: PipelineConfig, *, mode: str) -> tuple[str, ...]:
             path = Path(config.checkpoint_root) / rel
             if not path.exists():
                 errors.append(f"missing_checkpoint:{path}")
+        for flag, rel in CHECKPOINT_BY_FEATURE_FLAG.items():
+            if not config.feature_flags.get(flag, False):
+                continue
+            path = Path(config.checkpoint_root) / rel
+            if not path.exists():
+                errors.append(f"enabled_feature_missing_checkpoint:{flag}:{path}")
     if mode == "specialist" and not config.allow_specialist_fallback:
         for rel in config.specialist_requires_checkpoints:
             path = Path(config.checkpoint_root) / rel
@@ -75,4 +108,9 @@ def validate_readiness(config: PipelineConfig, *, mode: str) -> tuple[str, ...]:
     return tuple(errors)
 
 
-__all__ = ["PipelineConfig", "validate_readiness"]
+__all__ = [
+    "CHECKPOINT_BY_FEATURE_FLAG",
+    "DEFAULT_FEATURE_FLAGS",
+    "PipelineConfig",
+    "validate_readiness",
+]

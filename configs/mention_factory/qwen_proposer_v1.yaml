@@ -1,0 +1,17 @@
+version: qwen3-1.7b-proposer-interface-v1
+expert_id: E7_qwen3_1_7b_proposer
+status: UNAVAILABLE_UNTRAINED
+enabled: false
+model:
+  name: Qwen/Qwen3-1.7B
+  revision: UNPINNED_UNTRAINED_REQUIRES_OPERATOR_PIN
+  parameter_count: 1700000000
+checkpoint:
+  path: ""
+  sha256: UNAVAILABLE_UNTRAINED
+contract:
+  proposal_only: true
+  no_download: true
+  no_execution_in_phase2: true
+  no_fabricated_predictions: true
+  output_contract: SpanProposal
