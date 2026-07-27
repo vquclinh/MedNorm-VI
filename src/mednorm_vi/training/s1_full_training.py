@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from .s1_artifact_validation import SHA256_PATTERN as _SHA256_PATTERN
 from .s1_artifact_validation import is_immutable_revision

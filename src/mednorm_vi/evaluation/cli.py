@@ -30,7 +30,7 @@ DEFAULT_CONFIG = "configs/evaluation/provisional_v1.yaml"
 
 
 def _load_config_mapping(path: str | Path) -> dict[str, Any]:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):

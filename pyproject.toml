@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
     "mypy>=1.8",
+    # PyYAML ships no inline types. Declaring the stub package makes the tracked
+    # `mypy` run identical everywhere, so `warn_unused_ignores` stays meaningful
+    # instead of flipping on whether a local virtualenv happens to have stubs.
+    "types-PyYAML>=6.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -55,3 +59,15 @@ packages = ["mednorm_vi"]
 mypy_path = "src"
 strict = true
 warn_unused_ignores = true
+
+# Heavy model frameworks are deliberately NOT project dependencies (see the
+# `dependencies` note above): they are imported lazily, inside functions, only on
+# the forward-only inference path. When one happens to be installed in a local
+# virtualenv, mypy follows those imports into third-party sources whose stubs
+# target a newer `python_version` than this project declares, and the check fails
+# for an environment reason rather than a code reason. Skip them: their internals
+# are not this repository's contract.
+[[tool.mypy.overrides]]
+module = ["torch.*", "torch", "numpy.*", "numpy", "transformers.*", "transformers", "py_vncorenlp", "py_vncorenlp.*"]
+follow_imports = "skip"
+ignore_missing_imports = true

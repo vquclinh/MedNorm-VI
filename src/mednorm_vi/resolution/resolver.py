@@ -41,7 +41,7 @@ class ResolverConfig:
 
     @staticmethod
     def load(path: str | Path) -> ResolverConfig:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
 
         doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         h = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()

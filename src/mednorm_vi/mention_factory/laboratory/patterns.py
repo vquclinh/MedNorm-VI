@@ -37,11 +37,26 @@ def find_reference(seg: str, lex: LabLexicon) -> LocalMatch | None:
     return None
 
 
+# Preference among value roles that begin at the SAME offset. A percent match is
+# a number plus the unit "%", and "%" is a configured lab unit, so the bare number
+# must win: that keeps the value-only / value+unit boundary alternatives for "%"
+# identical to the ones produced for mmol/L, instead of folding the unit into the
+# value and leaving no value-only alternative at all (found by the synthetic
+# laboratory stress suite).
+_ROLE_PRIORITY: dict[str, int] = {
+    "result_inequality": 0,
+    "result_qualitative": 0,
+    "result_value": 0,
+    "result_percent": 1,
+}
+
+
 def find_value(
     seg: str, lex: LabLexicon, exclude: tuple[int, int] | None = None
 ) -> LocalMatch | None:
     """Find the observed result value (not inside a reference range)."""
-    candidates: list[tuple[int, int, str, str]] = []  # (start, -length, role, text)
+    # (start, role priority, -length, role, text)
+    candidates: list[tuple[int, int, int, str, str]] = []
     for role, pat in (("result_inequality", lex.inequality_re),
                       ("result_percent", lex.percent_re),
                       ("result_qualitative", lex.qualitative_re),
@@ -49,11 +64,12 @@ def find_value(
         for m in pat.finditer(seg):
             if _within(m.start(), exclude):
                 continue
-            candidates.append((m.start(), -(m.end() - m.start()), role, m.group(0)))
+            candidates.append((m.start(), _ROLE_PRIORITY[role],
+                               -(m.end() - m.start()), role, m.group(0)))
     if not candidates:
         return None
     candidates.sort()
-    start, neg_len, role, text = candidates[0]
+    start, _priority, neg_len, role, text = candidates[0]
     end = start + (-neg_len)
     norm = _norm_number(text) if role in ("result_value", "result_percent") else None
     return LocalMatch(role, start, end, text, norm)

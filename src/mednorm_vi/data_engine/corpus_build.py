@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from ..resources.ner import load_ner_manifest
 from ..schemas.constants import ENTITY_TYPES, TYPE_BY_ORGANIZER_LABEL

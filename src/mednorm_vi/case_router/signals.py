@@ -93,7 +93,7 @@ def _hash(obj: Any) -> str:
 
 
 def load_router_config(base_path: str | Path) -> RouterConfig:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     base = Path(base_path)
     base_data: dict[str, Any] = yaml.safe_load(base.read_text(encoding="utf-8")) or {}

@@ -183,7 +183,7 @@ def ner_manifest_from_mapping(d: dict[str, Any]) -> NerDatasetManifest:
 
 
 def load_ner_manifest(path: str | Path) -> NerDatasetManifest:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     p = Path(path)
     return ner_manifest_from_mapping(yaml.safe_load(p.read_text(encoding="utf-8")) or {})

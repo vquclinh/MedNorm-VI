@@ -28,7 +28,7 @@ _HISTORICAL = "historical_policies_v1.yaml"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 

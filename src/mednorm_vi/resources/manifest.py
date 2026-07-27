@@ -24,7 +24,7 @@ from .models import (
 def _load_doc(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     if path.suffix in (".yaml", ".yml"):
-        import yaml  # type: ignore[import-untyped]
+        import yaml
 
         doc = yaml.safe_load(text) or {}
     else:

@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from .normalization import NormalizedIcdRecord
 from .pdf_inspection import PdfInspection

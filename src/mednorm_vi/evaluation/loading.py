@@ -130,7 +130,7 @@ def resolve_ground_truth_provenance(
                 f"manifest.yaml in {directory}",
             )]
         )
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
     prov_str = str(data.get("provenance", ""))

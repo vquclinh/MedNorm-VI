@@ -168,7 +168,7 @@ def validate_parameter_budget(config: dict[str, Any]) -> ValidationResult:
 
 def load_budget_config(path: str | Path) -> dict[str, Any]:
     """Load a parameter-budget YAML file into a dict (requires PyYAML)."""
-    import yaml  # type: ignore[import-untyped]  # local import; stubs optional
+    import yaml  # local import; stubs optional
 
     with open(path, encoding="utf-8") as fh:
         data = yaml.safe_load(fh)

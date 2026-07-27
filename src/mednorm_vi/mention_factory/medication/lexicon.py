@@ -51,7 +51,7 @@ def _forms(entries: list[dict[str, Any]]) -> list[str]:
 
 
 def load_medication_lexicon(config_path: str | Path) -> MedicationLexicon:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     path = Path(config_path)
     cfg: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

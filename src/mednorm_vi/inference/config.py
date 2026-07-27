@@ -24,7 +24,7 @@ class PipelineConfig:
 
     @staticmethod
     def load(path: str | Path) -> PipelineConfig:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
 
         doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         return PipelineConfig(

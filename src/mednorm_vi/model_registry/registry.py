@@ -35,7 +35,7 @@ class ProfileBudget:
 
 
 def load_registry(path: str | Path) -> tuple[ModelRole, ...]:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     roles: list[ModelRole] = []

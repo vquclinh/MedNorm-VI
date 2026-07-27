@@ -35,7 +35,7 @@ def _compile(groups: dict[str, Any]) -> dict[str, tuple[re.Pattern[str], ...]]:
 
 
 def load_analysis_config(path: str | Path) -> AnalysisConfig:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     lab = _compile(doc.get("laboratory", {}))

@@ -50,7 +50,7 @@ class LabLexicon:
 
 
 def load_lab_lexicon(config_path: str | Path) -> LabLexicon:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     path = Path(config_path)
     cfg: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

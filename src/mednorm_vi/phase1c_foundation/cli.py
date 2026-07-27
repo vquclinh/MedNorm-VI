@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from .doctor import DoctorPaths, build_report, render_report
 

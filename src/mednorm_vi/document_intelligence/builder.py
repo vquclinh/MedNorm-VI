@@ -270,7 +270,7 @@ def build_document_graph(
 
 def load_config(path: str | Path) -> tuple[L1Config, SectionLexicon]:
     """Load the L1 config + its section lexicon from a base.yaml path."""
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     base = Path(path)
     data: dict[str, Any] = yaml.safe_load(base.read_text(encoding="utf-8")) or {}

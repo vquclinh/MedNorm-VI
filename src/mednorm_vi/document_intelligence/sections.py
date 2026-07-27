@@ -72,7 +72,7 @@ class SectionHit:
 
 
 def load_lexicon(path: str | Path) -> SectionLexicon:
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     data: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     categories: list[SectionCategory] = []

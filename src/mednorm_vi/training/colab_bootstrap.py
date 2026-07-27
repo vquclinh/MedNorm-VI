@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 # Bootstrap actions.
 INSTALL_AND_RESTART = "INSTALL_AND_RESTART"

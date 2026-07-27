@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from ..data_engine.annotation_coverage import SourceCoverage, example_loss_mask
 from ..schemas.constants import ENTITY_TYPES

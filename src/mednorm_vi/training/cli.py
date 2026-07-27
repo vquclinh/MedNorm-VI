@@ -176,7 +176,7 @@ def run_full_training_validation(args: argparse.Namespace) -> int:
     """
     payloads: dict[str, dict[str, Any]] | None = None
     if args.load_checkpoints:
-        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
+        import torch  # noqa: PLC0415
 
         paths = full_training_output_paths(args.artifact_dir)
         payloads = {}

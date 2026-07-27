@@ -6,13 +6,20 @@ from ..mention_factory.models import SpanProposal
 
 
 def boundary_kind(proposal: SpanProposal) -> str:
-    """Extract the boundary kind from a proposal's ``matched_rule``.
+    """Extract the boundary kind from a proposal's ``matched_rule``."""
+    return boundary_kind_of_rule(proposal.matched_rule or "")
+
+
+def boundary_kind_of_rule(rule: str) -> str:
+    """Extract the boundary kind from a matched-rule string.
 
     Medication: ``med_grammar:<kind>`` -> ``<kind>``.
     Laboratory result: ``lab:test_result:<value_only|value_unit>:...`` -> that token.
     Laboratory name / anything else: a stable fallback token.
+
+    Taking the rule string rather than the proposal lets the L4 v1 resolver reuse
+    the identical classification over lattice source evidence.
     """
-    rule = proposal.matched_rule or ""
     if rule.startswith("med_grammar:"):
         return rule.split(":", 1)[1]
     if ":value_only:" in rule or rule.endswith(":value_only"):
@@ -38,4 +45,4 @@ def width(proposal: SpanProposal) -> int:
     return proposal.end - proposal.start
 
 
-__all__ = ["boundary_kind", "group_key", "width"]
+__all__ = ["boundary_kind", "boundary_kind_of_rule", "group_key", "width"]

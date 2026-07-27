@@ -50,6 +50,26 @@ profiles:
   specialist:
     neural: optional
     requires_checkpoints: configurable
+    # L4 Boundary & Type Resolver v1 — DISABLED, on measured evidence (Audit 0034).
+    #
+    # The exact four-way ablation on the governed internal_test split scored:
+    #   Arm 1  E3 neural only                       exact F1 0.7103
+    #   Arm 3  unified L3 lattice, before L4        exact F1 0.6963  (-0.0139)
+    #   Arm 4  unified lattice, after L4 v1         exact F1 0.7039  (-0.0063)
+    #
+    # The resolver recovers roughly half of what merging E1/E2 into the lattice
+    # costs, but Arm 4 still sits BELOW the neural-only baseline: on this
+    # narrative corpus the deterministic experts contribute only false positives
+    # (Arm 2 exact F1 0.0000, 79 proposals, 0 exact matches). Enabling the
+    # resolver here would therefore lower the only measured score we have.
+    #
+    # Turn this on only when an ablation shows Arm 4 >= Arm 1. Thresholds must be
+    # searched on the VALIDATION split, never on internal_test, which is the
+    # held-out split every reported number depends on.
+    boundary_type_resolver_v1:
+      enabled: false
+      config: configs/resolution/boundary_type_resolver_v1.yaml
+      decided_in: docs/audits/0034-l3-span-lattice-l4-resolver-and-ablation.md
   full:
     neural: true
     requires_checkpoints: true

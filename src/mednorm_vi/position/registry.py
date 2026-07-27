@@ -73,7 +73,7 @@ def _hash(payload: Any) -> str:
 
 def load_position_registry(config_path: str | Path) -> PositionPolicyRegistry:
     """Load the position-policy registry from a YAML config file."""
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     path = Path(config_path)
     doc: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

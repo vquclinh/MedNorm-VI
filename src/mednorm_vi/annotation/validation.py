@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     print("MedNorm-VI annotation validation")
     result = validate_dataset_dir(args.dataset)
     if args.manifest:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
 
         mapping = yaml.safe_load(Path(args.manifest).read_text(encoding="utf-8")) or {}
         result = result.merged_with(validate_manifest(mapping))
