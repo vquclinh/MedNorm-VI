@@ -1302,6 +1302,7 @@ def build_e4_resolved_config(
     weight_format: PhoBERTWeightFormat | None = None,
     accumulation: AccumulationPlan | None = None,
     precision: MixedPrecisionPolicy | None = None,
+    progress: Mapping[str, Any] | None = None,
     learning_rate: float = 2e-5,
     weight_decay: float = 0.0,
     max_grad_norm: float = 1.0,
@@ -1350,6 +1351,12 @@ def build_e4_resolved_config(
         config.update(accumulation.as_dict())
     if precision is not None:
         config.update(precision.as_dict())
+    if progress is not None:
+        # Observability-only settings (Audit 0041). They are recorded here as the
+        # milestone requires, which does change the resolved-config hash; resume
+        # SEMANTICS are unchanged, and no completed full checkpoint exists to
+        # invalidate.
+        config.update(dict(progress))
     return config
 
 

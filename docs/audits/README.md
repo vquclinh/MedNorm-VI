@@ -83,3 +83,4 @@ Each audit should record, at minimum:
 - `0038-e4-atomic-grid-word-alignment-fix.md`
 - `0039-e4-smoke-evidence-and-full-training-hardening.md`
 - `0040-e4-colab-io-and-memory-robustness.md`
+- `0041-e4-training-progress-observability.md`
