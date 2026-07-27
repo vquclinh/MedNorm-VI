@@ -101,11 +101,84 @@ training:
   cpu_precision: fp32
   full_training_requires_cuda: true
 
+  # -------------------------------------------------------------------------
+  # GPU runtime policy (Audit 0040 corrective pass)
+  # -------------------------------------------------------------------------
+  # Full training requires CUDA. It does NOT require any particular GPU model:
+  # a runtime is never rejected because its device name is T4 or L4. The only
+  # gate is `assert_full_training_device(device_type)`, which rejects CPU alone.
+  #
+  # The previously failed real attempt happened to run on an A100, but A100 is
+  # not an architectural requirement. The Audit-0040 streaming design fixes
+  # SYSTEM-RAM growth, which is independent of GPU type.
+  #
+  # A T4 may still fail from GPU VRAM exhaustion, or be substantially slower.
+  # Such a failure is a runtime resource limitation and must be reported as
+  # one — never as a corpus-streaming or system-RAM failure.
+  gpu_runtime_policy:
+    requires_cuda: true
+    requires_specific_gpu_model: false
+    reject_by_device_name: false
+    supported_runtimes: [T4 High-RAM, L4, A100]
+    # Resolved from torch.cuda.is_bf16_supported(), never from the device name.
+    expected_precision_by_runtime:
+      T4: fp16_with_grad_scaler      # compute capability 7.5, no bf16
+      L4: bf16
+      A100: bf16
+    t4_vram_exhaustion_is_a_runtime_resource_limitation: true
+
 data:
   train_split_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
   validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
   resolution_policy: resolve_by_authoritative_sha256_not_filename
   internal_test_allowed: false
+
+  # ---------------------------------------------------------------------------
+  # Runtime I/O policy (Audit 0040)
+  # ---------------------------------------------------------------------------
+  # A real A100 run passed the complete alignment preflight and then died
+  # reopening the governed train split on the long-lived Drive FUSE mount:
+  #   OSError: [Errno 107] Transport endpoint is not connected
+  # Only train and validation are copied to local /content storage, once,
+  # atomically and hash-verified. internal_test is refused by name.
+  local_materialization:
+    runtime_root: /content/mednorm_vi_runtime
+    runtime_train_path: /content/mednorm_vi_runtime/splits/train.jsonl
+    runtime_validation_path: /content/mednorm_vi_runtime/splits/validation.jsonl
+    version: e4-local-split-materialization-v1
+    atomic_replace: true
+    chunked_copy: true
+    verify_size_and_sha256: true
+    reuse_valid_local_copy: true
+    copy_internal_test: false
+
+  drive_health:
+    probe_version: e4-drive-health-probe-v1
+    real_read_probe: true
+    max_remount_attempts: 1
+    remount_on_healthy_drive: false
+    recognizes: [errno_107_ENOTCONN, transport_endpoint_is_not_connected, unavailable_drive_root]
+
+  # The full corpus is streamed. Building all 33,826 train contracts and their
+  # O(n^2) relation grids in one list drove system RAM to roughly 30 GB before
+  # the encoder was even loaded, and a failed attempt left partial objects
+  # reachable through the notebook traceback.
+  contract_streaming:
+    version: e4-governed-contract-stream-v1
+    materialize_all_contracts: false
+    new_iterator_per_epoch: true
+    new_iterator_per_validation_pass: true
+    deterministic_file_order: true
+    bounded_alignment_report_sample_limit: 3
+
+  artifact_persistence:
+    version: e4-local-first-persistence-v1
+    staging_root: /content/mednorm_vi_runtime/staging
+    order: [local_save, local_sha256, local_reload_check, drive_health, temp_copy,
+            atomic_replace, persistent_sha256, require_equal]
+    max_remount_attempts: 1
+    stop_on_persistence_failure: true
+    embed_model_cache_in_artifact: false
 
 # ---------------------------------------------------------------------------
 # Real executed smoke evidence (Audit 0038 run, recorded by Audit 0039)

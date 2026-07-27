@@ -375,6 +375,68 @@ def test_full_training_refuses_cpu_but_bounded_paths_allow_it() -> None:
         assert_full_training_device(DEVICE_CPU)
 
 
+# --- GPU runtime policy: CUDA is required, a specific GPU model is not --------
+
+
+def test_no_runtime_is_rejected_because_of_its_gpu_name() -> None:
+    """T4 High-RAM, L4 and A100 are all acceptable; only CPU is refused."""
+    for _gpu_name in ("Tesla T4", "NVIDIA L4", "NVIDIA A100-SXM4-40GB", "unknown"):
+        assert_full_training_device(DEVICE_CUDA)
+
+
+def test_precision_resolves_from_capability_not_from_the_device_name() -> None:
+    # T4 (compute capability 7.5) has no bf16 -> fp16 with a GradScaler.
+    t4 = resolve_mixed_precision_policy(
+        PRECISION_BF16, device_type=DEVICE_CUDA, bf16_supported=False)
+    assert t4.mode == PRECISION_FP16
+    assert t4.use_grad_scaler is True
+    assert t4.autocast_enabled is True
+    # L4 / A100 support bf16 -> bf16, no scaler needed.
+    for _runtime in ("L4", "A100"):
+        policy = resolve_mixed_precision_policy(
+            PRECISION_BF16, device_type=DEVICE_CUDA, bf16_supported=True)
+        assert policy.mode == PRECISION_BF16
+        assert policy.use_grad_scaler is False
+
+
+def test_no_source_or_test_file_gates_on_a_gpu_model_name() -> None:
+    """A100/T4/L4 may appear in prose, never in an executable comparison."""
+    import re
+
+    sources = [
+        REPO / "src" / "mednorm_vi" / "training" / "phase2" / "e4_w2ner_training.py",
+        REPO / "src" / "mednorm_vi" / "training" / "phase2" / "e4_runtime_io.py",
+    ]
+    gate = re.compile(r"(get_device_name|device_name|gpu_name)\s*\(?[^\n]*[=!]=")
+    for path in sources:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            code = line.split("#", 1)[0]
+            assert not gate.search(code), f"{path.name}: GPU-name gate: {line!r}"
+
+
+def test_notebook_reports_the_gpu_name_without_gating_on_it() -> None:
+    joined = "\n".join(_notebook_code())
+    assert '"gpu_name": GPU_NAME' in joined
+    assert '"gpu_name_used_as_gate": False' in joined
+    executable = "\n".join(_notebook_executable_lines())
+    for forbidden in ('GPU_NAME == "', 'GPU_NAME != "', '"A100" in', '"T4" in'):
+        assert forbidden not in executable
+
+
+def test_tracked_config_declares_the_gpu_runtime_policy() -> None:
+    policy = _config()["training"]["gpu_runtime_policy"]
+    assert policy["requires_cuda"] is True
+    assert policy["requires_specific_gpu_model"] is False
+    assert policy["reject_by_device_name"] is False
+    assert policy["supported_runtimes"] == ["T4 High-RAM", "L4", "A100"]
+    assert policy["expected_precision_by_runtime"]["T4"] == "fp16_with_grad_scaler"
+    assert policy["expected_precision_by_runtime"]["L4"] == "bf16"
+    assert policy["expected_precision_by_runtime"]["A100"] == "bf16"
+    assert policy["t4_vram_exhaustion_is_a_runtime_resource_limitation"] is True
+    # The CUDA requirement itself is unchanged.
+    assert _config()["training"]["full_training_requires_cuda"] is True
+
+
 def test_resolved_config_records_the_precision_policy() -> None:
     plan = plan_gradient_accumulation(
         8, micro_batch_size=1, accumulation_steps=8, epochs=1)
