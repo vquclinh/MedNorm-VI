@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,10 @@ from typing import Any
 from ..lattice.models import EXPERT_PHOBERT_W2NER, ExpertSpanProposal
 from ..schemas.constants import ENTITY_TYPES
 
-W2NER_CONFIG_VERSION = "phobert-w2ner-v1"
+# v2 (Audit 0038): the W2NER relation grid is indexed by ATOMIC ORIGINAL-TEXT
+# words, not by VnCoreNLP segmented model words. The two coordinate systems are
+# decoupled; see ``tokenize_atomic_words``.
+W2NER_CONFIG_VERSION = "phobert-w2ner-v2"
 W2NER_NONE = "NONE"
 W2NER_NEXT_NEIGHBORING_WORD = "NNW"
 W2NER_TAIL_HEAD_WORD_PREFIX = "THW:"
@@ -189,6 +193,108 @@ def tokenize_words(original_text: str) -> tuple[WordToken, ...]:
     return tuple(words)
 
 
+# ------------------------------------------------------------------------------
+# Atomic original-text W2NER words (Audit 0038)
+# ------------------------------------------------------------------------------
+#
+# The W2NER relation grid must be indexed by words that a gold entity boundary can
+# always land on. VnCoreNLP segmented model words cannot serve that role: the
+# segmenter legitimately merges syllables across a gold boundary. The governed
+# validation split contains a real case —
+#
+#     vimedner:train:train-000054
+#     gold SYMPTOM 85:102 "rối loạn nhịp tim"
+#     VnCoreNLP model word "gây_rối" spanning 81:88
+#
+# — where the entity starts at 85, three characters inside a single model word.
+# The gold span is correct; the grid coordinate system was wrong.
+#
+# Atomic words are therefore derived from ``original_text`` ALONE, deterministically
+# and without any reference to gold entities.
+ATOMIC_WORD_POLICY_VERSION = "atomic-original-word-v1"
+
+# A punctuation or symbol character is its own atomic word, so a gold boundary that
+# abuts punctuation always has a word edge to land on.
+#
+# The one documented exception is the segmenter join character. Several governed
+# sources (ViMQ, PhoNER-COVID19) ship text that is ALREADY RDRSegmenter output, so
+# ``_`` occurs literally inside ``original_text`` and inside gold entity text; it is
+# a word-internal character there, not punctuation. Measured over the complete
+# governed train + validation splits (34,871 examples, 13,711 entities), treating
+# ``_`` as word-internal aligns every entity — identically to splitting on it — while
+# capping the atomic word count at 162 instead of 244. The relation grid is O(n²),
+# so the smaller surface is preferred.
+ATOMIC_WORD_INTERNAL_CHARACTERS = frozenset({"_"})
+
+
+def is_atomic_boundary_character(character: str) -> bool:
+    """True when ``character`` is punctuation/symbol that forms its own atomic word."""
+    if character in ATOMIC_WORD_INTERNAL_CHARACTERS:
+        return False
+    return unicodedata.category(character)[:1] in {"P", "S"}
+
+
+def tokenize_atomic_words(original_text: str) -> tuple[WordToken, ...]:
+    """Deterministic atomic W2NER grid words over exact original offsets.
+
+    Rules, applied to ``original_text`` only:
+
+    * whitespace separates words and never belongs to one, so repeated spaces and
+      newlines shift offsets without changing which words exist;
+    * every punctuation/symbol character except :data:`ATOMIC_WORD_INTERNAL_CHARACTERS`
+      is its own atomic word — punctuation is represented explicitly;
+    * every other maximal run of characters is one atomic word.
+
+    Combining marks are ordinary characters here, so decomposed Unicode is preserved
+    exactly: no normalized copy is ever built and no offset is computed against one.
+
+    Nothing about this function depends on gold entities. There is no snapping, no
+    trimming, and no entity-boundary-driven splitting: the same text always produces
+    the same atomic words during training and inference.
+    """
+    words: list[WordToken] = []
+    index = 0
+    cursor = 0
+    length = len(original_text)
+    while cursor < length:
+        character = original_text[cursor]
+        if character.isspace():
+            cursor += 1
+            continue
+        if is_atomic_boundary_character(character):
+            token = WordToken(index, character, cursor, cursor + 1)
+            token.validate_against(original_text)
+            words.append(token)
+            index += 1
+            cursor += 1
+            continue
+        start = cursor
+        while cursor < length:
+            current = original_text[cursor]
+            if current.isspace() or is_atomic_boundary_character(current):
+                break
+            cursor += 1
+        token = WordToken(index, original_text[start:cursor], start, cursor)
+        token.validate_against(original_text)
+        words.append(token)
+        index += 1
+    return tuple(words)
+
+
+def entity_atomic_alignment(
+    words: Sequence[WordToken], entity: EntitySpan,
+) -> tuple[bool, bool]:
+    """``(left_aligned, right_aligned)`` of a gold entity against a word surface.
+
+    Reported rather than repaired: an entity that does not align is a fact about
+    the word surface, never a reason to move the entity.
+    """
+    return (
+        any(word.start == entity.start for word in words),
+        any(word.end == entity.end for word in words),
+    )
+
+
 def align_words_to_subwords(
     words: Sequence[WordToken],
     subword_offsets: Sequence[tuple[int, int]],
@@ -213,8 +319,21 @@ def _word_bounds_for_entity(words: Sequence[WordToken], entity: EntitySpan) -> t
     start_word = next((word.index for word in words if word.start == entity.start), None)
     end_word = next((word.index for word in words if word.end == entity.end), None)
     if start_word is None or end_word is None or end_word < start_word:
+        # Name WHICH edge failed and which word swallowed it. Audit 0037's message
+        # said only "is not word-aligned", which cost a full Colab round trip to
+        # diagnose. The entity is never moved to make this pass.
+        straddling = next(
+            (word for word in words
+             if word.start < entity.start < word.end or word.start < entity.end < word.end),
+            None)
+        detail = (
+            f" (left_aligned={start_word is not None}, right_aligned={end_word is not None}"
+            + (f", straddling word {straddling.index} {straddling.start}:{straddling.end}"
+               if straddling is not None else "")
+            + ")"
+        )
         raise W2NERError(
-            f"entity {entity.entity_type} {entity.start}:{entity.end} is not word-aligned"
+            f"entity {entity.entity_type} {entity.start}:{entity.end} is not word-aligned{detail}"
         )
     return start_word, end_word
 
@@ -227,8 +346,12 @@ def build_w2ner_grid(
     words: Sequence[WordToken] | None = None,
     vocab: W2NERLabelVocab | None = None,
 ) -> W2NERGrid:
-    """Create W2NER NNW/THW labels for contiguous governed spans."""
-    word_tokens = tuple(words) if words is not None else tokenize_words(original_text)
+    """Create W2NER NNW/THW labels for contiguous governed spans.
+
+    When ``words`` is omitted the atomic original-text surface is used, because it
+    is the only surface a gold boundary is guaranteed to land on.
+    """
+    word_tokens = tuple(words) if words is not None else tokenize_atomic_words(original_text)
     label_vocab = vocab or W2NERLabelVocab()
     size = len(word_tokens)
     labels = [[label_vocab.none_id for _ in range(size)] for _ in range(size)]
@@ -418,8 +541,13 @@ class W2NERCheckpointMetadata:
 
 
 __all__ = [
+    "ATOMIC_WORD_INTERNAL_CHARACTERS",
+    "ATOMIC_WORD_POLICY_VERSION",
     "DEFAULT_TYPE_ORDER",
     "EXPERT_PHOBERT_W2NER",
+    "entity_atomic_alignment",
+    "is_atomic_boundary_character",
+    "tokenize_atomic_words",
     "EntitySpan",
     "PhoBERTW2NERConfig",
     "W2NERCheckpointMetadata",

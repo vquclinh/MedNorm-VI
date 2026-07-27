@@ -79,3 +79,5 @@ Each audit should record, at minimum:
 - `0034-l3-span-lattice-l4-resolver-and-ablation.md`
 - `0035-multi-expert-mention-ensemble-and-learned-l4-v2.md`
 - `0036-phase2-training-readiness-and-artifact-validation.md`
+- `0037-e4-colab-bootstrap-and-phobert-alignment-fix.md`
+- `0038-e4-atomic-grid-word-alignment-fix.md`

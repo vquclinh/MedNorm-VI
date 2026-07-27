@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ...mention_factory.w2ner import (
+    ATOMIC_WORD_POLICY_VERSION,
+    W2NER_CONFIG_VERSION,
     EntitySpan,
     W2NERGrid,
     W2NERLabelVocab,
@@ -16,6 +18,7 @@ from ...mention_factory.w2ner import (
     build_w2ner_grid,
     decode_w2ner_grid,
     mask_padded_pairs,
+    tokenize_atomic_words,
 )
 from ..phobert_alignment import SegmentedWord as GovernedSegmentedWord
 from .artifacts import (
@@ -26,7 +29,24 @@ from .artifacts import (
 )
 from .common import canonical_json_sha256, sha256_file
 
-E4_STAGE_ID = "phase2-e4-phobert-w2ner-v1"
+E4_STAGE_ID = "phase2-e4-phobert-w2ner-v2"
+
+# Audit 0038 changed the W2NER grid coordinate system from VnCoreNLP segmented
+# model words to atomic original-text words. Any checkpoint, resolved config, or
+# artifact produced under the Audit-0037 contract describes a different input
+# space and MUST NOT be resumed from or validated as compatible.
+E4_INPUT_CONTRACT_VERSION = "e4-atomic-grid-word-v1"
+E4_SUPERSEDED_INPUT_CONTRACT_VERSIONS = ("e4-segmented-model-word-v1", "")
+# Scoped to E4 on purpose: the shared ``CHECKPOINT_SCHEMA_VERSION`` also covers E5
+# and L4, whose input contracts did not change, so bumping it would invalidate
+# artifacts this milestone did not touch.
+E4_CHECKPOINT_SCHEMA_VERSION = "phase2-e4-checkpoint-v2"
+E4_SUPERSEDED_CHECKPOINT_SCHEMA_VERSIONS = ("phase2-e4-checkpoint-v1", "")
+
+# Deterministic per-atomic-word features appended to the pooled model-word vector
+# so that two atomic words sharing one merged model token are never identical.
+ATOMIC_PROJECTION_VERSION = "atomic-projection-v1"
+ATOMIC_FEATURE_DIM = 3
 E4_MODEL_ID = "vinai/phobert-large"
 E4_FULL_AUTHORIZATION = "I_AUTHORIZE_E4_FULL_TRAINING"
 E4_GOVERNED_TRAIN_SHA256 = "892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a"
@@ -111,19 +131,106 @@ class GovernedSplitResolution:
 
 
 @dataclass(frozen=True, slots=True)
+class AtomicWordProjection:
+    """Deterministic PhoBERT subtoken -> model word -> atomic grid word mapping.
+
+    The W2NER grid is indexed by ``atomic_words``; PhoBERT sees ``model words``.
+    **Neither surface is a refinement of the other**, which the full-corpus scan
+    proved rather than assumed:
+
+    * one model word may cover several atomic words — ``gây_rối`` covers ``gây``
+      and ``rối`` (the Audit-0037 failure);
+    * one atomic word may span several model words — VnCoreNLP splits at
+      letter/digit transitions, so ``beta1`` becomes ``beta`` + ``1`` while the
+      atomic surface keeps it whole (31 such cases in the governed corpus).
+
+    The projection is therefore **overlap-based**: an atomic word maps to every
+    model word it overlaps, and pools the union of their subtokens. That needs no
+    assumption about which tokenizer is finer, so a segmenter change cannot silently
+    break it.
+
+    **Pooling rule** (:data:`ATOMIC_PROJECTION_VERSION`), stated explicitly because
+    it is a modelling decision and not an implementation detail: an atomic word's
+    representation is the mean of the subtoken states of **every model word it
+    overlaps**, with three deterministic features appended:
+
+    ``start_ratio``   the atomic word's start, relative to its primary model word
+    ``end_ratio``     the atomic word's end, relative to its primary model word
+    ``index_ratio``   the atomic word's ordinal among those sharing that primary
+
+    The *primary* model word is the one sharing the most characters with the atomic
+    word, ties broken by the earliest index — fully deterministic.
+
+    Atomic words that share a merged model token therefore share contextual content
+    but are **not** identical: the appended features separate them, and a test
+    asserts that separation. When a model word contains exactly one atomic word
+    (the overwhelming majority) the features are ``(0.0, 1.0, 0.0)`` and the
+    representation reduces to plain mean pooling.
+
+    The subtoken-level alternative was rejected deliberately: the official slow
+    ``PhobertTokenizer`` provides no subtoken character offsets, so slicing a merged
+    word's subtokens per atomic word would require reconstructing BPE piece
+    boundaries from the ``@@`` continuation marker — undocumented and fragile.
+    """
+
+    atomic_words: tuple[WordToken, ...]
+    model_word_index_by_atomic: tuple[int, ...]
+    overlapping_model_word_indices: tuple[tuple[int, ...], ...]
+    atomic_indices_by_model_word: tuple[tuple[int, ...], ...]
+    subtoken_indices_by_atomic: tuple[tuple[int, ...], ...]
+    atomic_features: tuple[tuple[float, float, float], ...]
+    projection_version: str = ATOMIC_PROJECTION_VERSION
+
+    def __post_init__(self) -> None:
+        count = len(self.atomic_words)
+        if len(self.model_word_index_by_atomic) != count:
+            raise E4TrainingContractError("atomic->model index length mismatch")
+        if len(self.overlapping_model_word_indices) != count:
+            raise E4TrainingContractError("atomic->overlap index length mismatch")
+        if len(self.subtoken_indices_by_atomic) != count:
+            raise E4TrainingContractError("atomic->subtoken index length mismatch")
+        if len(self.atomic_features) != count:
+            raise E4TrainingContractError("atomic feature length mismatch")
+        for indices in self.subtoken_indices_by_atomic:
+            if not indices:
+                raise E4TrainingContractError("atomic word has no PhoBERT subtokens")
+
+    @property
+    def multi_model_word_atomic_count(self) -> int:
+        """Atomic words spanning more than one model word (``beta1`` style)."""
+        return sum(1 for group in self.overlapping_model_word_indices if len(group) > 1)
+
+    @property
+    def atomic_word_count(self) -> int:
+        return len(self.atomic_words)
+
+    @property
+    def merged_model_word_count(self) -> int:
+        """Model words covering more than one atomic word."""
+        return sum(1 for group in self.atomic_indices_by_model_word if len(group) > 1)
+
+
+@dataclass(frozen=True, slots=True)
 class W2NERBatchContract:
     grid: W2NERGrid
     padded_labels: tuple[tuple[int, ...], ...]
     padded_pair_mask: tuple[tuple[bool, ...], ...]
     label_count: int
     segmented_words: tuple[E4SegmentedWord, ...] = ()
+    atomic_words: tuple[WordToken, ...] = ()
+    input_contract_version: str = E4_INPUT_CONTRACT_VERSION
 
     @property
     def word_count(self) -> int:
         return len(self.grid.words)
 
 
-def _pad_grid(grid: W2NERGrid, max_words: int) -> W2NERBatchContract:
+def _pad_grid(
+    grid: W2NERGrid,
+    max_words: int,
+    *,
+    segmented_words: tuple[E4SegmentedWord, ...] = (),
+) -> W2NERBatchContract:
     if len(grid.words) > max_words:
         raise E4TrainingContractError("W2NER document exceeds configured max_words")
     padded_mask = mask_padded_pairs(len(grid.words), max_words)
@@ -134,22 +241,25 @@ def _pad_grid(grid: W2NERGrid, max_words: int) -> W2NERBatchContract:
     labels.extend(
         [[grid.vocab.none_id for _ in range(max_words)] for _ in range(max_words - len(labels))]
     )
-    segmented_words = tuple(
-        E4SegmentedWord(
-            index=word.index,
-            model_text=word.text,
-            original_text=grid.original_text,
-            start=word.start,
-            end=word.end,
+    if not segmented_words:
+        # No segmenter was supplied: each atomic grid word is its own model word.
+        segmented_words = tuple(
+            E4SegmentedWord(
+                index=word.index,
+                model_text=word.text,
+                original_text=grid.original_text,
+                start=word.start,
+                end=word.end,
+            )
+            for word in grid.words
         )
-        for word in grid.words
-    )
     return W2NERBatchContract(
         grid=grid,
         padded_labels=tuple(tuple(row) for row in labels),
         padded_pair_mask=padded_mask,
         label_count=len(grid.vocab.labels),
         segmented_words=segmented_words,
+        atomic_words=grid.words,
     )
 
 
@@ -161,7 +271,14 @@ def build_w2ner_batch_contract(
     max_words: int,
     vocab: W2NERLabelVocab | None = None,
 ) -> W2NERBatchContract:
-    grid = build_w2ner_grid(document_id, original_text, entities, vocab=vocab)
+    """Build the grid over atomic original-text words with no segmenter available."""
+    grid = build_w2ner_grid(
+        document_id,
+        original_text,
+        entities,
+        words=tokenize_atomic_words(original_text),
+        vocab=vocab,
+    )
     return _pad_grid(grid, max_words)
 
 
@@ -195,11 +312,16 @@ def build_w2ner_batch_contract_from_segmented_words(
     max_words: int,
     vocab: W2NERLabelVocab | None = None,
 ) -> W2NERBatchContract:
-    """Build W2NER labels over governed VnCoreNLP segmented words.
+    """Build the W2NER grid over ATOMIC original-text words (Audit 0038).
 
-    The tokenizer-facing ``model_text`` may contain segmenter join characters
-    (for example ``suy_tim``), but the W2NER grid stores exact original slices so
-    decoding always returns ``original_text[start:end]``.
+    The VnCoreNLP segmented words are retained verbatim — including their
+    ``model_text`` join characters — because PhoBERT consumes them. They are **not**
+    the grid coordinate system: the segmenter may merge syllables across a gold
+    entity boundary (``gây_rối`` versus a gold span starting at ``rối``), which made
+    a correct governed entity unrepresentable under the Audit-0037 contract.
+
+    Gold entities are used only to create labels. They never influence how atomic
+    words are built.
     """
     e4_words = tuple(
         _coerce_segmented_word(original_text=original_text, index=index, word=word)
@@ -207,23 +329,94 @@ def build_w2ner_batch_contract_from_segmented_words(
     )
     if not e4_words:
         raise E4TrainingContractError("W2NER segmented contract has no words")
-    if len(e4_words) > max_words:
+    atomic_words = tokenize_atomic_words(original_text)
+    if not atomic_words:
+        raise E4TrainingContractError("W2NER atomic contract has no words")
+    if len(atomic_words) > max_words:
         raise E4TrainingContractError("W2NER document exceeds configured max_words")
-    word_tokens = tuple(word.to_word_token() for word in e4_words)
     grid = build_w2ner_grid(
         document_id,
         original_text,
         entities,
-        words=word_tokens,
+        words=atomic_words,
         vocab=vocab,
     )
-    contract = _pad_grid(grid, max_words)
-    return W2NERBatchContract(
-        grid=contract.grid,
-        padded_labels=contract.padded_labels,
-        padded_pair_mask=contract.padded_pair_mask,
-        label_count=contract.label_count,
-        segmented_words=e4_words,
+    return _pad_grid(grid, max_words, segmented_words=e4_words)
+
+
+def build_atomic_projection(
+    original_text: str,
+    segmented_words: Sequence[E4SegmentedWord],
+    encoding: PhoBERTWordEncoding,
+    *,
+    atomic_words: Sequence[WordToken] | None = None,
+) -> AtomicWordProjection:
+    """Project PhoBERT subtokens through model words onto atomic grid words.
+
+    Every atomic word must fall inside exactly one segmented model word; anything
+    else means the two surfaces disagree about the original text and is a loud
+    failure rather than a silent re-association.
+    """
+    words = tuple(atomic_words) if atomic_words is not None else tokenize_atomic_words(
+        original_text)
+    if not words:
+        raise E4TrainingContractError("atomic projection requires at least one atomic word")
+    if len(encoding.subword_indices_by_word) != len(segmented_words):
+        raise E4TrainingContractError(
+            "encoding subtoken buckets do not match the segmented word count")
+
+    primary_index: list[int] = []
+    overlapping_indices: list[tuple[int, ...]] = []
+    atomic_by_model: list[list[int]] = [[] for _ in segmented_words]
+    subtokens_by_atomic: list[tuple[int, ...]] = []
+    raw_features: list[tuple[float, float]] = []
+
+    for atomic_index, word in enumerate(words):
+        overlaps = [
+            model_index
+            for model_index, model_word in enumerate(segmented_words)
+            if model_word.start < word.end and word.start < model_word.end
+        ]
+        if not overlaps:
+            raise E4TrainingContractError(
+                f"atomic word {word.index} {word.start}:{word.end} overlaps no "
+                "VnCoreNLP segmented model word")
+        # Primary owner: the model word sharing the most characters with this
+        # atomic word; ties resolve to the earliest, so the choice is deterministic.
+        primary = min(
+            overlaps,
+            key=lambda model_index: (
+                -(min(segmented_words[model_index].end, word.end)
+                  - max(segmented_words[model_index].start, word.start)),
+                model_index))
+        model_word = segmented_words[primary]
+        primary_index.append(primary)
+        overlapping_indices.append(tuple(overlaps))
+        atomic_by_model[primary].append(atomic_index)
+        subtokens: list[int] = []
+        for model_index in overlaps:
+            subtokens.extend(encoding.subword_indices_by_word[model_index])
+        subtokens_by_atomic.append(tuple(sorted(set(subtokens))))
+        span = max(1, model_word.end - model_word.start)
+        raw_features.append((
+            round(min(1.0, max(0.0, (word.start - model_word.start) / span)), 6),
+            round(min(1.0, max(0.0, (word.end - model_word.start) / span)), 6),
+        ))
+
+    features: list[tuple[float, float, float]] = []
+    for atomic_index, (start_ratio, end_ratio) in enumerate(raw_features):
+        group = atomic_by_model[primary_index[atomic_index]]
+        ordinal = group.index(atomic_index)
+        denominator = max(1, len(group) - 1)
+        features.append((start_ratio, end_ratio, round(ordinal / denominator, 6)))
+
+    return AtomicWordProjection(
+        atomic_words=words,
+        model_word_index_by_atomic=tuple(primary_index),
+        overlapping_model_word_indices=tuple(overlapping_indices),
+        atomic_indices_by_model_word=tuple(tuple(group) for group in atomic_by_model),
+        subtoken_indices_by_atomic=tuple(subtokens_by_atomic),
+        atomic_features=tuple(features),
     )
 
 
@@ -471,13 +664,68 @@ def prepare_phobert_word_inputs(
 
 
 def pool_subtoken_embeddings(sequence_output: Any, encoding: PhoBERTWordEncoding) -> Any:
-    """Mean-pool encoder states into W2NER word embeddings."""
+    """Mean-pool encoder states into one vector per VnCoreNLP model word."""
     import torch
 
     pooled = []
     for indices in encoding.subword_indices_by_word:
         pooled.append(sequence_output[list(indices)].mean(dim=0))
     return torch.stack(pooled).unsqueeze(0)
+
+
+def project_to_atomic_word_embeddings(
+    sequence_output: Any, projection: AtomicWordProjection,
+) -> Any:
+    """One representation per ATOMIC grid word: ``[1, atomic_words, hidden + 3]``.
+
+    Implements :data:`ATOMIC_PROJECTION_VERSION` exactly as documented on
+    :class:`AtomicWordProjection`: the model word's mean-pooled subtoken states,
+    concatenated with the atomic word's three deterministic position features. Two
+    atomic words under one merged model token therefore differ in the final
+    :data:`ATOMIC_FEATURE_DIM` dimensions and are never indistinguishable.
+    """
+    import torch
+
+    pooled = []
+    for atomic_index, indices in enumerate(projection.subtoken_indices_by_atomic):
+        context = sequence_output[list(indices)].mean(dim=0)
+        extras = torch.tensor(
+            projection.atomic_features[atomic_index],
+            dtype=context.dtype, device=context.device)
+        pooled.append(torch.cat((context, extras), dim=-1))
+    return torch.stack(pooled).unsqueeze(0)
+
+
+def atomic_relation_head_input_dim(hidden_size: int) -> int:
+    """Hidden size the relation-grid head must be built with under v2."""
+    if hidden_size <= 0:
+        raise E4TrainingContractError("hidden_size must be positive")
+    return hidden_size + ATOMIC_FEATURE_DIM
+
+
+def reject_incompatible_e4_checkpoint(payload: Mapping[str, Any]) -> None:
+    """Refuse a checkpoint or artifact built under the Audit-0037 input contract.
+
+    The W2NER grid coordinate system changed, so an Audit-0037 checkpoint describes
+    a different input space entirely. Resuming from one would silently train a head
+    whose word indices mean something else.
+    """
+    contract = str(payload.get("e4_input_contract_version", ""))
+    if contract != E4_INPUT_CONTRACT_VERSION:
+        raise E4TrainingContractError(
+            f"E4 checkpoint input contract {contract!r} is incompatible with "
+            f"{E4_INPUT_CONTRACT_VERSION!r}; the W2NER grid word surface changed in "
+            "Audit 0038 and an Audit-0037 artifact may not be resumed or validated")
+    schema = str(payload.get("e4_checkpoint_schema_version", ""))
+    if schema != E4_CHECKPOINT_SCHEMA_VERSION:
+        raise E4TrainingContractError(
+            f"E4 checkpoint schema {schema!r} is incompatible with "
+            f"{E4_CHECKPOINT_SCHEMA_VERSION!r}")
+    projection = str(payload.get("atomic_projection_version", ""))
+    if projection != ATOMIC_PROJECTION_VERSION:
+        raise E4TrainingContractError(
+            f"E4 atomic projection {projection!r} is incompatible with "
+            f"{ATOMIC_PROJECTION_VERSION!r}")
 
 
 def validate_phobert_encoder_load_report(
@@ -650,6 +898,14 @@ def build_e4_resolved_config(
         "max_words": max_words,
         "effective_batch_size": effective_batch_size,
         "label_space": list(W2NERLabelVocab().type_order),
+        # Audit-0038 contract identity. These fields change the resolved-config
+        # hash, so an Audit-0037 artifact can never validate against a v2 run.
+        "e4_input_contract_version": E4_INPUT_CONTRACT_VERSION,
+        "e4_checkpoint_schema_version": E4_CHECKPOINT_SCHEMA_VERSION,
+        "grid_word_surface": ATOMIC_WORD_POLICY_VERSION,
+        "atomic_projection_version": ATOMIC_PROJECTION_VERSION,
+        "atomic_feature_dim": ATOMIC_FEATURE_DIM,
+        "w2ner_config_version": W2NER_CONFIG_VERSION,
         "internal_test_accessed": False,
     }
 
@@ -663,6 +919,31 @@ def write_e4_checkpoint_stub(
     tokenizer_revision: str,
     parameter_count: int,
 ) -> str:
+    payload = e4_checkpoint_payload(
+        mode=mode,
+        config_sha256=config_sha256,
+        model_revision=model_revision,
+        tokenizer_revision=tokenizer_revision,
+        parameter_count=parameter_count,
+    )
+    write_checkpoint_payload(path, payload)
+    return sha256_file(path)
+
+
+def e4_checkpoint_payload(
+    *,
+    mode: str,
+    config_sha256: str,
+    model_revision: str,
+    tokenizer_revision: str,
+    parameter_count: int,
+) -> dict[str, Any]:
+    """Shared Phase-2 payload plus the Audit-0038 E4 contract identity.
+
+    ``reject_incompatible_e4_checkpoint`` reads these fields, so every checkpoint
+    written by the v2 path is self-describing and an Audit-0037 payload (which has
+    none of them) is refused rather than silently resumed.
+    """
     payload = checkpoint_payload(
         expert_id="E4_phobert_w2ner",
         mode=mode,
@@ -672,8 +953,12 @@ def write_e4_checkpoint_stub(
         parameter_count=parameter_count,
         label_space=W2NERLabelVocab().type_order,
     )
-    write_checkpoint_payload(path, payload)
-    return sha256_file(path)
+    payload["e4_input_contract_version"] = E4_INPUT_CONTRACT_VERSION
+    payload["e4_checkpoint_schema_version"] = E4_CHECKPOINT_SCHEMA_VERSION
+    payload["atomic_projection_version"] = ATOMIC_PROJECTION_VERSION
+    payload["grid_word_surface"] = ATOMIC_WORD_POLICY_VERSION
+    payload["atomic_feature_dim"] = ATOMIC_FEATURE_DIM
+    return payload
 
 
 def build_e4_manifest(
@@ -742,6 +1027,13 @@ def build_e4_manifest(
 
 
 __all__ = [
+    "ATOMIC_FEATURE_DIM",
+    "ATOMIC_PROJECTION_VERSION",
+    "AtomicWordProjection",
+    "E4_CHECKPOINT_SCHEMA_VERSION",
+    "E4_INPUT_CONTRACT_VERSION",
+    "E4_SUPERSEDED_CHECKPOINT_SCHEMA_VERSIONS",
+    "E4_SUPERSEDED_INPUT_CONTRACT_VERSIONS",
     "E4_GOVERNED_TRAIN_SHA256",
     "E4_GOVERNED_VALIDATION_SHA256",
     "E4_FULL_AUTHORIZATION",
@@ -755,12 +1047,17 @@ __all__ = [
     "assert_full_not_initialized_from_smoke",
     "build_e4_manifest",
     "build_e4_resolved_config",
+    "atomic_relation_head_input_dim",
+    "build_atomic_projection",
     "build_w2ner_batch_contract",
     "build_w2ner_batch_contract_from_segmented_words",
+    "e4_checkpoint_payload",
     "decode_argmax_relation_grid",
     "decode_w2ner_logits",
     "pool_subtoken_embeddings",
     "prepare_phobert_word_inputs",
+    "project_to_atomic_word_embeddings",
+    "reject_incompatible_e4_checkpoint",
     "resolve_e4_governed_splits",
     "resolve_governed_split_by_sha256",
     "validate_phobert_encoder_load_report",

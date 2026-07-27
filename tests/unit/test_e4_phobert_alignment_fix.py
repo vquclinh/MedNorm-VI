@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from mednorm_vi.mention_factory.w2ner import EntitySpan
+from mednorm_vi.mention_factory.w2ner import EntitySpan, decode_w2ner_grid
 from mednorm_vi.training.phase2.common import sha256_file
 from mednorm_vi.training.phase2.e4_w2ner_training import (
     E4TrainingContractError,
@@ -118,6 +118,13 @@ def test_slow_phobert_contract_uses_per_word_subtokens_without_offsets() -> None
 
 
 def test_segmented_underscore_word_decodes_to_exact_original_slice() -> None:
+    """Model words keep their join characters; the grid is atomic (Audit 0038).
+
+    Updated from the Audit-0037 form of this test, which asserted that a grid word
+    *was* a segmented model word. That coupling is exactly what Audit 0038 removed,
+    so the assertions now check the two surfaces separately and additionally verify
+    the decode round trip the original test only implied.
+    """
     text = "Bệnh nhân suy tim"
     words = _segmented(text, "Bệnh_nhân suy_tim")
     contract = build_w2ner_batch_contract_from_segmented_words(
@@ -127,9 +134,16 @@ def test_segmented_underscore_word_decodes_to_exact_original_slice() -> None:
         words,
         max_words=8,
     )
+    # PhoBERT still sees the underscore-joined model word.
     assert contract.segmented_words[1].model_text == "suy_tim"
-    assert contract.grid.words[1].text == "suy tim"
-    assert text[contract.grid.words[1].start:contract.grid.words[1].end] == "suy tim"
+    assert text[contract.segmented_words[1].start:contract.segmented_words[1].end] == "suy tim"
+    # The grid is indexed by atomic original-text words.
+    assert [word.text for word in contract.grid.words] == ["Bệnh", "nhân", "suy", "tim"]
+    for word in contract.grid.words:
+        assert text[word.start:word.end] == word.text
+    # The entity still decodes back to the exact original slice.
+    decoded = {(span.start, span.end, span.text) for span in decode_w2ner_grid(contract.grid)}
+    assert (10, 17, "suy tim") in decoded
 
 
 def test_repeated_whitespace_newlines_and_decomposed_unicode_offsets() -> None:
