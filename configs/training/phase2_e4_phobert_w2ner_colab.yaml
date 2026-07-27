@@ -1,0 +1,39 @@
+version: phase2-e4-phobert-w2ner-colab-v1
+stage_id: phase2-e4-phobert-w2ner-v1
+expert_id: E4_phobert_w2ner
+status: READY_FOR_COLAB_SMOKE
+enabled_by_default: false
+environment:
+  intended_runtime: Colab GPU
+  repository_dir: /content/MedNorm-VI
+  drive_root: /content/drive/MyDrive/MedNorm-VI
+  model_cache_dir: /content/drive/MyDrive/MedNorm-VI/model_cache/huggingface
+authorization:
+  full_training: I_AUTHORIZE_E4_FULL_TRAINING
+artifacts:
+  smoke_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_smoke_v1
+  full_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_full_v1
+  required_files:
+    - checkpoints/best.pt
+    - checkpoints/latest.pt
+    - logs/training_history.jsonl
+    - resolved_config.json
+    - validation_metrics.json
+    - training_manifest.json
+model:
+  id: vinai/phobert-large
+  revision_policy: resolve_40_hex_in_colab_bootstrap_before_full_training
+  local_revision_status: operator_colab_required
+training:
+  smoke_max_epochs: 1
+  full_max_epochs: 12
+  full_initialization_source: pinned_pretrained_base
+  reject_smoke_checkpoint_as_full_initializer: true
+  validation_after_every_epoch: true
+  best_criterion: max_validation_exact_f1_governed_validation_only
+data:
+  train_split: data/processed/public_ner_train.jsonl
+  validation_split: data/processed/public_ner_validation.jsonl
+  internal_test_allowed: false
+validator:
+  cli: env PYTHONPATH=src python -m mednorm_vi.training.phase2.cli validate-artifact --kind e4 --artifact-dir ARTIFACT_DIR --mode full

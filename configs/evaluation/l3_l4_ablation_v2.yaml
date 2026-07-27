@@ -8,6 +8,7 @@ arms:
   - E3_plus_E4_phobert_w2ner
   - E3_plus_E5_xlmr_mrc
   - E3_plus_E6_gliner
+  - E3_plus_E4_plus_E5
   - all_available_l3_experts
   - deterministic_l4_v1
   - learned_l4_v2

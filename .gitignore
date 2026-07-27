@@ -22,8 +22,16 @@ models/**
 *.bin
 *.pt
 *.pth
+*.ckpt
 *.gguf
 *.onnx
+
+# Phase-2 Colab/operator artifact roots. Notebooks write these to Drive by
+# default, but local dry-runs must also stay out of Git.
+artifacts/**
+!artifacts/.gitkeep
+weights/**
+caches/**
 
 # --- Raw / private competition data & KB snapshots ---
 # Namespaced by trust level. Organizer test inputs are INPUT ONLY and never

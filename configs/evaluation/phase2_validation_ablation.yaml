@@ -1,0 +1,35 @@
+version: phase2-validation-ablation-v1
+status: READY_FOR_COLAB_SMOKE
+split: governed_validation_only
+internal_test_allowed: false
+authorization:
+  validation_ablation: I_AUTHORIZE_PHASE2_VALIDATION_ABLATION
+  future_internal_test_gate: I_AUTHORIZE_ONE_SHOT_INTERNAL_TEST_PHASE2
+arms:
+  - E3_only
+  - E3_plus_E4_phobert_w2ner
+  - E3_plus_E5_xlmr_mrc
+  - E3_plus_E4_plus_E5
+  - all_available_l3_experts
+  - deterministic_l4_v1
+  - learned_l4_v2
+unavailable_policy: UNAVAILABLE_UNTRAINED
+required_metrics:
+  - exact_precision
+  - exact_recall
+  - exact_f1
+  - per_type
+  - boundary_errors
+  - wrong_type_errors
+  - proposal_count
+  - final_count
+  - deltas
+outputs:
+  report_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/phase2_validation_ablation_v1
+  ignored_locally: reports/phase2_validation_ablation/
+freeze_gate:
+  require_artifact_validation: true
+  require_config_hashes: true
+  require_checkpoint_hashes: true
+  require_validation_ablation_hash: true
+  forbid_internal_test_without_authorization: true

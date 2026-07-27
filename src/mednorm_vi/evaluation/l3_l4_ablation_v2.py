@@ -28,6 +28,7 @@ ARM_E3_ONLY = "E3_only"
 ARM_E3_E4 = "E3_plus_E4_phobert_w2ner"
 ARM_E3_E5 = "E3_plus_E5_xlmr_mrc"
 ARM_E3_E6 = "E3_plus_E6_gliner"
+ARM_E3_E4_E5 = "E3_plus_E4_plus_E5"
 ARM_ALL_L3 = "all_available_l3_experts"
 ARM_L4_V1 = "deterministic_l4_v1"
 ARM_L4_V2 = "learned_l4_v2"
@@ -84,6 +85,12 @@ PHASE2_ABLATION_ARMS: tuple[AblationArmSpec, ...] = (
         (EXPERT_VIHEALTHBERT, EXPERT_GLINER),
         ("enable_e3_vihealthbert", "enable_e6_gliner"),
         ("e3_vihealthbert", "e6_gliner"),
+    ),
+    AblationArmSpec(
+        ARM_E3_E4_E5,
+        (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER, EXPERT_XLMR_MRC),
+        ("enable_e3_vihealthbert", "enable_e4_phobert_w2ner", "enable_e5_xlmr_mrc"),
+        ("e3_vihealthbert", "e4_phobert_w2ner", "e5_xlmr_mrc"),
     ),
     AblationArmSpec(
         ARM_ALL_L3,
@@ -168,6 +175,7 @@ __all__ = [
     "ARM_E3_E4",
     "ARM_E3_E5",
     "ARM_E3_E6",
+    "ARM_E3_E4_E5",
     "ARM_E3_ONLY",
     "ARM_L4_V1",
     "ARM_L4_V2",
