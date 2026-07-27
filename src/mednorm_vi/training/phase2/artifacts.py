@@ -102,6 +102,11 @@ class Phase2TrainingManifest:
     artifact_schema_version: str = ARTIFACT_SCHEMA_VERSION
     best_latest_identical_allowed: bool = False
     best_latest_identical_reason: str = ""
+    # Optional per-expert accounting (Audit 0039). E4 records real optimizer-step,
+    # gradient-accumulation, precision and weight-format accounting here so a
+    # manifest cannot merely relabel a batch size. Experts that do not use it
+    # leave it empty, so E5 and L4 manifests are unaffected.
+    training_accounting: Mapping[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
         required = {
@@ -143,6 +148,7 @@ class Phase2TrainingManifest:
         payload["boundary_action_space"] = list(self.boundary_action_space)
         payload["type_action_space"] = list(self.type_action_space)
         payload["threshold_config"] = dict(self.threshold_config)
+        payload["training_accounting"] = dict(self.training_accounting)
         return payload
 
     def write(self, path: str | Path) -> None:

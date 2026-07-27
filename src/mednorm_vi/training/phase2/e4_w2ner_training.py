@@ -48,6 +48,74 @@ E4_SUPERSEDED_CHECKPOINT_SCHEMA_VERSIONS = ("phase2-e4-checkpoint-v1", "")
 ATOMIC_PROJECTION_VERSION = "atomic-projection-v1"
 ATOMIC_FEATURE_DIM = 3
 E4_MODEL_ID = "vinai/phobert-large"
+
+# ---------------------------------------------------------------------------
+# Pretrained weight format (Audit 0039)
+# ---------------------------------------------------------------------------
+#
+# The pinned official `vinai/phobert-large` revision publishes `pytorch_model.bin`
+# and does NOT publish `model.safetensors`. Requesting safetensors raises:
+#
+#     OSError: vinai/phobert-large does not appear to have model.safetensors or
+#     model.safetensors.index.json and cannot be loaded with safetensors.
+#
+# This is purely a serialization-format fact about the official repository. The
+# model, architecture, tensor values and revision are identical; loading `.bin`
+# is NOT a lower-quality model.
+E4_WEIGHT_FORMAT_BIN = "pytorch_model.bin"
+E4_WEIGHT_FORMAT_SAFETENSORS = "model.safetensors"
+E4_SAFETENSORS_INDEX = "model.safetensors.index.json"
+
+# The revision the real Colab smoke run resolved and trained against.
+E4_PINNED_MODEL_REVISION = "1c7880f20db59c0054c6de5afd71b012369f6ee4"
+
+# Revisions known from real execution not to publish safetensors. Listed so the
+# resolver reaches the correct answer even when a repository file listing is not
+# available (for example offline, or before the hub is queried).
+E4_KNOWN_BIN_ONLY_REVISIONS: tuple[str, ...] = (E4_PINNED_MODEL_REVISION,)
+
+# ---------------------------------------------------------------------------
+# Mixed precision (Audit 0039)
+# ---------------------------------------------------------------------------
+PRECISION_FP32 = "fp32"
+PRECISION_FP16 = "fp16"
+PRECISION_BF16 = "bf16"
+SUPPORTED_PRECISION_MODES: tuple[str, ...] = (PRECISION_FP32, PRECISION_FP16, PRECISION_BF16)
+
+DEVICE_CUDA = "cuda"
+DEVICE_CPU = "cpu"
+
+# ---------------------------------------------------------------------------
+# Initialization sources
+# ---------------------------------------------------------------------------
+INITIALIZATION_PINNED_BASE = "pinned_pretrained_base"
+INITIALIZATION_PINNED_BASE_SMOKE = "pinned_pretrained_base_bounded_smoke"
+INITIALIZATION_FULL_RESUME = "compatible_full_training_checkpoint"
+
+# Fields a full-training checkpoint must match exactly before it may be resumed.
+FULL_RESUME_COMPATIBILITY_FIELDS: tuple[str, ...] = (
+    "e4_input_contract_version",
+    "e4_checkpoint_schema_version",
+    "atomic_projection_version",
+    "config_sha256",
+    "model_revision",
+    "tokenizer_revision",
+    "pretrained_weight_format",
+    "precision_mode",
+    "optimizer_signature",
+    "accumulation_signature",
+)
+
+# State a full-training checkpoint must carry for an exact resume.
+REQUIRED_FULL_RESUME_KEYS: tuple[str, ...] = (
+    "model_state",
+    "optimizer_state",
+    "scaler_state",
+    "epoch",
+    "optimizer_steps",
+    "best_metric",
+    "best_checkpoint_sha256",
+)
 E4_FULL_AUTHORIZATION = "I_AUTHORIZE_E4_FULL_TRAINING"
 E4_GOVERNED_TRAIN_SHA256 = "892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a"
 E4_GOVERNED_VALIDATION_SHA256 = "ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103"
@@ -703,6 +771,351 @@ def atomic_relation_head_input_dim(hidden_size: int) -> int:
     return hidden_size + ATOMIC_FEATURE_DIM
 
 
+# ---------------------------------------------------------------------------
+# Pretrained weight format
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PhoBERTWeightFormat:
+    """Which serialization the pinned revision actually publishes."""
+
+    filename: str
+    use_safetensors: bool
+    model_revision: str
+    resolved_by: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "pretrained_weight_format": self.filename,
+            "use_safetensors": self.use_safetensors,
+            "model_revision": self.model_revision,
+            "weight_format_resolved_by": self.resolved_by,
+        }
+
+
+def resolve_phobert_weight_format(
+    model_id: str,
+    model_revision: str,
+    *,
+    repository_files: Sequence[str] | None = None,
+) -> PhoBERTWeightFormat:
+    """Decide the weight format for a pinned revision, deterministically.
+
+    When ``repository_files`` is supplied the decision is a plain file inspection.
+    Without it, a revision known from real execution to be ``.bin``-only resolves
+    to ``.bin``; anything else is also resolved to ``.bin``, because that is the
+    format the official PhoBERT repository publishes and requesting safetensors is
+    what broke the real Colab run.
+
+    The resolution happens **before** training starts and does not change
+    afterwards: there is no mid-run fallback across unrelated files.
+    """
+    if repository_files is not None:
+        listing = {str(name) for name in repository_files}
+        if E4_WEIGHT_FORMAT_SAFETENSORS in listing or E4_SAFETENSORS_INDEX in listing:
+            return PhoBERTWeightFormat(
+                filename=E4_WEIGHT_FORMAT_SAFETENSORS, use_safetensors=True,
+                model_revision=model_revision, resolved_by="repository_file_listing")
+        if E4_WEIGHT_FORMAT_BIN not in listing:
+            raise E4TrainingContractError(
+                f"{model_id}@{model_revision} publishes neither "
+                f"{E4_WEIGHT_FORMAT_SAFETENSORS} nor {E4_WEIGHT_FORMAT_BIN}")
+        return PhoBERTWeightFormat(
+            filename=E4_WEIGHT_FORMAT_BIN, use_safetensors=False,
+            model_revision=model_revision, resolved_by="repository_file_listing")
+    resolved_by = (
+        "known_bin_only_revision"
+        if model_revision in E4_KNOWN_BIN_ONLY_REVISIONS
+        else "official_phobert_default")
+    return PhoBERTWeightFormat(
+        filename=E4_WEIGHT_FORMAT_BIN, use_safetensors=False,
+        model_revision=model_revision, resolved_by=resolved_by)
+
+
+def assert_weight_format_loadable(weight_format: PhoBERTWeightFormat) -> None:
+    """Refuse a safetensors request for a revision that does not publish it."""
+    if (weight_format.use_safetensors
+            and weight_format.model_revision in E4_KNOWN_BIN_ONLY_REVISIONS):
+        raise E4TrainingContractError(
+            f"{E4_MODEL_ID}@{weight_format.model_revision} does not publish "
+            f"{E4_WEIGHT_FORMAT_SAFETENSORS}; use_safetensors must be False")
+    if weight_format.use_safetensors != (
+            weight_format.filename == E4_WEIGHT_FORMAT_SAFETENSORS):
+        raise E4TrainingContractError(
+            "use_safetensors disagrees with the resolved weight-format filename")
+
+
+# ---------------------------------------------------------------------------
+# Gradient accumulation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AccumulationPlan:
+    """Real optimizer-step accounting for one training run.
+
+    Audit 0037/0038's loop called ``optimizer.step()`` after **every document**
+    while the notebook declared ``EFFECTIVE_BATCH_SIZE = 8``, so the effective
+    batch was one document and the recorded optimizer-step count was the document
+    count. Everything below is derived arithmetic, never a relabelled constant.
+    """
+
+    example_count: int
+    micro_batch_size: int
+    accumulation_steps: int
+    epochs: int
+
+    @property
+    def effective_batch_size(self) -> int:
+        return self.micro_batch_size * self.accumulation_steps
+
+    @property
+    def micro_batches_per_epoch(self) -> int:
+        return _ceil_div(self.example_count, self.micro_batch_size)
+
+    @property
+    def optimizer_steps_per_epoch(self) -> int:
+        """Ceiling division: the trailing partial group still takes one step."""
+        return _ceil_div(self.micro_batches_per_epoch, self.accumulation_steps)
+
+    @property
+    def expected_optimizer_steps(self) -> int:
+        return self.optimizer_steps_per_epoch * self.epochs
+
+    @property
+    def expected_backward_passes(self) -> int:
+        return self.micro_batches_per_epoch * self.epochs
+
+    @property
+    def final_partial_group_size(self) -> int:
+        """Micro-batches in the last group; equals ``accumulation_steps`` if exact."""
+        remainder = self.micro_batches_per_epoch % self.accumulation_steps
+        return remainder or self.accumulation_steps
+
+    @property
+    def has_partial_final_group(self) -> bool:
+        return self.micro_batches_per_epoch % self.accumulation_steps != 0
+
+    def group_size_for(self, micro_batch_index: int) -> int:
+        """Number of micro-batches in the accumulation group containing this index.
+
+        The final group may be smaller, and the loss for every micro-batch in it
+        must be divided by this size rather than by ``accumulation_steps`` —
+        otherwise the last group's gradient is silently under-scaled.
+        """
+        if micro_batch_index < 0 or micro_batch_index >= self.micro_batches_per_epoch:
+            raise E4TrainingContractError("micro-batch index outside the epoch")
+        group_index = micro_batch_index // self.accumulation_steps
+        remaining = self.micro_batches_per_epoch - group_index * self.accumulation_steps
+        return min(self.accumulation_steps, remaining)
+
+    def loss_scale_for(self, micro_batch_index: int) -> float:
+        return 1.0 / self.group_size_for(micro_batch_index)
+
+    def is_optimizer_step_boundary(self, micro_batch_index: int) -> bool:
+        """True on the last micro-batch of its accumulation group."""
+        if micro_batch_index < 0 or micro_batch_index >= self.micro_batches_per_epoch:
+            raise E4TrainingContractError("micro-batch index outside the epoch")
+        is_group_end = (micro_batch_index + 1) % self.accumulation_steps == 0
+        is_epoch_end = micro_batch_index + 1 == self.micro_batches_per_epoch
+        return is_group_end or is_epoch_end
+
+    @property
+    def signature(self) -> str:
+        """Compact identity used for resume compatibility."""
+        return (f"micro{self.micro_batch_size}"
+                f"-accum{self.accumulation_steps}"
+                f"-effective{self.effective_batch_size}")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "example_count": self.example_count,
+            "micro_batch_size": self.micro_batch_size,
+            "accumulation_steps": self.accumulation_steps,
+            "effective_batch_size": self.effective_batch_size,
+            "epochs": self.epochs,
+            "micro_batches_per_epoch": self.micro_batches_per_epoch,
+            "optimizer_steps_per_epoch": self.optimizer_steps_per_epoch,
+            "expected_optimizer_steps": self.expected_optimizer_steps,
+            "expected_backward_passes": self.expected_backward_passes,
+            "final_partial_group_size": self.final_partial_group_size,
+            "has_partial_final_group": self.has_partial_final_group,
+            "accumulation_signature": self.signature,
+        }
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    if denominator <= 0:
+        raise E4TrainingContractError("denominator must be positive")
+    return -(-numerator // denominator)
+
+
+def plan_gradient_accumulation(
+    example_count: int, *, micro_batch_size: int, accumulation_steps: int, epochs: int,
+) -> AccumulationPlan:
+    if example_count <= 0:
+        raise E4TrainingContractError("example_count must be positive")
+    if micro_batch_size <= 0:
+        raise E4TrainingContractError("micro_batch_size must be positive")
+    if accumulation_steps <= 0:
+        raise E4TrainingContractError("accumulation_steps must be positive")
+    if epochs <= 0:
+        raise E4TrainingContractError("epochs must be positive")
+    return AccumulationPlan(
+        example_count=example_count, micro_batch_size=micro_batch_size,
+        accumulation_steps=accumulation_steps, epochs=epochs)
+
+
+def assert_optimizer_step_accounting(plan: AccumulationPlan, observed_steps: int) -> None:
+    """Fail when recorded optimizer steps do not match real ``optimizer.step()`` calls."""
+    if observed_steps != plan.expected_optimizer_steps:
+        raise E4TrainingContractError(
+            f"optimizer step accounting mismatch: expected "
+            f"{plan.expected_optimizer_steps}, observed {observed_steps}")
+
+
+# ---------------------------------------------------------------------------
+# Mixed precision
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MixedPrecisionPolicy:
+    """Tracked autocast/GradScaler policy for one run."""
+
+    mode: str
+    device_type: str
+    autocast_enabled: bool
+    use_grad_scaler: bool
+
+    @property
+    def autocast_dtype_name(self) -> str:
+        if not self.autocast_enabled:
+            return ""
+        return "torch.bfloat16" if self.mode == PRECISION_BF16 else "torch.float16"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "precision_mode": self.mode,
+            "precision_device_type": self.device_type,
+            "autocast_enabled": self.autocast_enabled,
+            "autocast_dtype": self.autocast_dtype_name,
+            "use_grad_scaler": self.use_grad_scaler,
+        }
+
+
+def resolve_mixed_precision_policy(
+    requested_mode: str, *, device_type: str, bf16_supported: bool = False,
+) -> MixedPrecisionPolicy:
+    """Resolve a safe precision policy for the runtime actually present.
+
+    * CUDA + ``bf16`` needs no loss scaling, so no ``GradScaler``;
+    * CUDA + ``fp16`` requires a ``GradScaler``;
+    * CUDA + ``bf16`` requested on hardware without bf16 support degrades to
+      ``fp16`` with a scaler rather than silently running an unsupported dtype;
+    * CPU always resolves to fp32 — autocast on CPU is not used for E4, and full
+      training on CPU is refused outright by
+      :func:`assert_full_training_device`.
+    """
+    if requested_mode not in SUPPORTED_PRECISION_MODES:
+        raise E4TrainingContractError(
+            f"unsupported precision mode {requested_mode!r}; "
+            f"expected one of {SUPPORTED_PRECISION_MODES}")
+    if device_type != DEVICE_CUDA:
+        return MixedPrecisionPolicy(
+            mode=PRECISION_FP32, device_type=device_type,
+            autocast_enabled=False, use_grad_scaler=False)
+    if requested_mode == PRECISION_FP32:
+        return MixedPrecisionPolicy(
+            mode=PRECISION_FP32, device_type=DEVICE_CUDA,
+            autocast_enabled=False, use_grad_scaler=False)
+    if requested_mode == PRECISION_BF16 and bf16_supported:
+        return MixedPrecisionPolicy(
+            mode=PRECISION_BF16, device_type=DEVICE_CUDA,
+            autocast_enabled=True, use_grad_scaler=False)
+    return MixedPrecisionPolicy(
+        mode=PRECISION_FP16, device_type=DEVICE_CUDA,
+        autocast_enabled=True, use_grad_scaler=True)
+
+
+def assert_full_training_device(device_type: str) -> None:
+    """Full training must not run on CPU; bounded tests and smoke may."""
+    if device_type != DEVICE_CUDA:
+        raise E4TrainingContractError(
+            "E4 full training requires a CUDA device; the CPU path is valid only "
+            "for bounded smoke and local contract tests")
+
+
+def optimizer_signature(*, name: str, learning_rate: float, weight_decay: float,
+                        max_grad_norm: float) -> str:
+    """Compact optimizer identity used for resume compatibility."""
+    return f"{name}-lr{learning_rate:g}-wd{weight_decay:g}-clip{max_grad_norm:g}"
+
+
+# ---------------------------------------------------------------------------
+# Initialization and resume
+# ---------------------------------------------------------------------------
+
+
+def assert_full_initialization_source(
+    *, run_full_training: bool, resume_from_smoke_checkpoint: bool,
+    resume_from_full_checkpoint: bool, checkpoint_mode: str = "",
+) -> str:
+    """Return the initialization source for a full run, or fail loudly.
+
+    A smoke checkpoint is bounded execution evidence, never an initializer.
+    """
+    if not run_full_training:
+        return INITIALIZATION_PINNED_BASE_SMOKE
+    if resume_from_smoke_checkpoint:
+        raise E4TrainingContractError(
+            "E4 full training may not resume from or initialize with a smoke checkpoint")
+    if resume_from_full_checkpoint:
+        if checkpoint_mode and checkpoint_mode != "full":
+            raise E4TrainingContractError(
+                f"full resume requires a full-training checkpoint, got mode "
+                f"{checkpoint_mode!r}")
+        return INITIALIZATION_FULL_RESUME
+    return INITIALIZATION_PINNED_BASE
+
+
+def assert_full_checkpoint_custody(payload: Mapping[str, Any]) -> None:
+    """A full checkpoint must carry everything an exact resume needs."""
+    missing = tuple(key for key in REQUIRED_FULL_RESUME_KEYS if key not in payload)
+    if missing:
+        raise E4TrainingContractError(
+            "E4 full checkpoint is missing resume state: " + ", ".join(sorted(missing)))
+    if not isinstance(payload.get("model_state"), Mapping):
+        raise E4TrainingContractError("E4 checkpoint model_state must be a mapping")
+    for key in ("base_model", "w2ner_head"):
+        if key not in payload["model_state"]:
+            raise E4TrainingContractError(f"E4 checkpoint model_state lacks {key!r}")
+
+
+def assert_compatible_full_resume(
+    payload: Mapping[str, Any], *, expected: Mapping[str, Any],
+) -> None:
+    """Refuse a resume whose training contract differs in any tracked field.
+
+    Precision and accumulation are included on purpose: silently changing either
+    mid-run makes the recorded optimizer-step accounting meaningless.
+    """
+    reject_incompatible_e4_checkpoint(payload)
+    assert_full_checkpoint_custody(payload)
+    if str(payload.get("mode", "")) != "full":
+        raise E4TrainingContractError(
+            "only a full-training checkpoint may initialize a full-training resume")
+    differences = [
+        f"{field}: checkpoint={payload.get(field)!r} expected={expected.get(field)!r}"
+        for field in FULL_RESUME_COMPATIBILITY_FIELDS
+        if str(payload.get(field, "")) != str(expected.get(field, ""))
+    ]
+    if differences:
+        raise E4TrainingContractError(
+            "E4 full resume is incompatible: " + "; ".join(differences))
+
+
 def reject_incompatible_e4_checkpoint(payload: Mapping[str, Any]) -> None:
     """Refuse a checkpoint or artifact built under the Audit-0037 input contract.
 
@@ -886,8 +1299,19 @@ def build_e4_resolved_config(
     seed: int,
     max_words: int,
     effective_batch_size: int,
+    weight_format: PhoBERTWeightFormat | None = None,
+    accumulation: AccumulationPlan | None = None,
+    precision: MixedPrecisionPolicy | None = None,
+    learning_rate: float = 2e-5,
+    weight_decay: float = 0.0,
+    max_grad_norm: float = 1.0,
+    optimizer_name: str = "AdamW",
 ) -> dict[str, Any]:
-    return {
+    """Resolved config. Every field here changes the config hash by design."""
+    resolved_weight_format = weight_format or resolve_phobert_weight_format(
+        E4_MODEL_ID, model_revision)
+    assert_weight_format_loadable(resolved_weight_format)
+    config: dict[str, Any] = {
         "stage_id": E4_STAGE_ID,
         "expert_id": "E4_phobert_w2ner",
         "mode": mode,
@@ -896,8 +1320,21 @@ def build_e4_resolved_config(
         "tokenizer_revision": tokenizer_revision,
         "seed": seed,
         "max_words": max_words,
-        "effective_batch_size": effective_batch_size,
+        "effective_batch_size": (
+            accumulation.effective_batch_size if accumulation is not None
+            else effective_batch_size),
         "label_space": list(W2NERLabelVocab().type_order),
+        "optimizer_name": optimizer_name,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "max_grad_norm": max_grad_norm,
+        "optimizer_signature": optimizer_signature(
+            name=optimizer_name, learning_rate=learning_rate,
+            weight_decay=weight_decay, max_grad_norm=max_grad_norm),
+        # PhoBERT is fully fine-tuned together with the W2NER head; nothing is
+        # frozen and no quantization is applied (Audit 0039).
+        "freeze_base_model": False,
+        "quantization": "none",
         # Audit-0038 contract identity. These fields change the resolved-config
         # hash, so an Audit-0037 artifact can never validate against a v2 run.
         "e4_input_contract_version": E4_INPUT_CONTRACT_VERSION,
@@ -906,6 +1343,132 @@ def build_e4_resolved_config(
         "atomic_projection_version": ATOMIC_PROJECTION_VERSION,
         "atomic_feature_dim": ATOMIC_FEATURE_DIM,
         "w2ner_config_version": W2NER_CONFIG_VERSION,
+        "internal_test_accessed": False,
+    }
+    config.update(resolved_weight_format.as_dict())
+    if accumulation is not None:
+        config.update(accumulation.as_dict())
+    if precision is not None:
+        config.update(precision.as_dict())
+    return config
+
+
+def build_e4_training_state_payload(
+    *,
+    mode: str,
+    config_sha256: str,
+    model_revision: str,
+    tokenizer_revision: str,
+    parameter_count: int,
+    weight_format: PhoBERTWeightFormat,
+    accumulation: AccumulationPlan,
+    precision: MixedPrecisionPolicy,
+    optimizer_signature_value: str,
+    epoch: int,
+    optimizer_steps: int,
+    backward_passes: int,
+    examples_processed: int,
+    best_metric: float,
+    best_checkpoint_sha256: str = "",
+    model_state: Mapping[str, Any] | None = None,
+    optimizer_state: Mapping[str, Any] | None = None,
+    scaler_state: Mapping[str, Any] | None = None,
+    scheduler_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A checkpoint payload carrying everything an exact full resume needs.
+
+    Audit 0038's payload held model weights only, so a full run could not truly be
+    resumed: optimizer moments, the GradScaler scale, the step count and the best
+    metric were all lost. ``scheduler_state`` stays ``None`` unless a scheduler is
+    actually part of the tracked configuration — no arbitrary scheduler is added.
+    """
+    payload = e4_checkpoint_payload(
+        mode=mode,
+        config_sha256=config_sha256,
+        model_revision=model_revision,
+        tokenizer_revision=tokenizer_revision,
+        parameter_count=parameter_count,
+    )
+    payload.update(weight_format.as_dict())
+    payload.update(precision.as_dict())
+    payload["accumulation_signature"] = accumulation.signature
+    payload["accumulation"] = accumulation.as_dict()
+    payload["optimizer_signature"] = optimizer_signature_value
+    payload["epoch"] = int(epoch)
+    payload["optimizer_steps"] = int(optimizer_steps)
+    payload["backward_passes"] = int(backward_passes)
+    payload["examples_processed"] = int(examples_processed)
+    payload["best_metric"] = float(best_metric)
+    payload["best_checkpoint_sha256"] = best_checkpoint_sha256
+    payload["model_state"] = dict(model_state or {})
+    payload["optimizer_state"] = dict(optimizer_state or {})
+    payload["scaler_state"] = dict(scaler_state or {})
+    payload["scheduler_state"] = dict(scheduler_state or {})
+    payload["scheduler_configured"] = scheduler_state is not None
+    return payload
+
+
+def build_e4_history_row(
+    *,
+    epoch: int,
+    mode: str,
+    train_loss: float,
+    validation_metrics: Mapping[str, Any],
+    optimizer_steps: int,
+    backward_passes: int,
+    examples_processed: int,
+    learning_rate: float,
+    accumulation: AccumulationPlan,
+    precision: MixedPrecisionPolicy,
+) -> dict[str, Any]:
+    """One governed per-epoch history record (spec §18.1 error/decision trail)."""
+    return {
+        "epoch": int(epoch),
+        "mode": mode,
+        "train_loss": float(train_loss),
+        "validation_exact_precision": float(
+            validation_metrics.get("validation_exact_precision", 0.0)),
+        "validation_exact_recall": float(
+            validation_metrics.get("validation_exact_recall", 0.0)),
+        "validation_exact_f1": float(validation_metrics.get("validation_exact_f1", 0.0)),
+        "optimizer_steps": int(optimizer_steps),
+        "backward_passes": int(backward_passes),
+        "completed_examples": int(examples_processed),
+        "learning_rate": float(learning_rate),
+        "micro_batch_size": accumulation.micro_batch_size,
+        "accumulation_steps": accumulation.accumulation_steps,
+        "effective_batch_size": accumulation.effective_batch_size,
+        "precision_mode": precision.mode,
+        "internal_test_accessed": False,
+    }
+
+
+def build_e4_training_accounting(
+    *,
+    accumulation: AccumulationPlan,
+    precision: MixedPrecisionPolicy,
+    weight_format: PhoBERTWeightFormat,
+    observed_optimizer_steps: int,
+    observed_backward_passes: int,
+    observed_examples: int,
+    max_grad_norm: float,
+    gradient_clipping_enabled: bool = True,
+) -> dict[str, Any]:
+    """Manifest accounting that must match what the loop really did."""
+    assert_optimizer_step_accounting(accumulation, observed_optimizer_steps)
+    if observed_backward_passes != accumulation.expected_backward_passes:
+        raise E4TrainingContractError(
+            f"backward-pass accounting mismatch: expected "
+            f"{accumulation.expected_backward_passes}, observed {observed_backward_passes}")
+    return {
+        **accumulation.as_dict(),
+        **precision.as_dict(),
+        **weight_format.as_dict(),
+        "observed_optimizer_steps": int(observed_optimizer_steps),
+        "observed_backward_passes": int(observed_backward_passes),
+        "examples_processed": int(observed_examples),
+        "gradient_clipping_enabled": bool(gradient_clipping_enabled),
+        "max_grad_norm": float(max_grad_norm),
         "internal_test_accessed": False,
     }
 
@@ -983,6 +1546,7 @@ def build_e4_manifest(
     validation_split_id: str,
     safe_to_resume: bool,
     initialization_source: str,
+    training_accounting: Mapping[str, Any] | None = None,
 ) -> Phase2TrainingManifest:
     config_sha256 = canonical_json_sha256(dict(resolved_config))
     return Phase2TrainingManifest(
@@ -1023,17 +1587,49 @@ def build_e4_manifest(
             if mode == MODE_SMOKE
             else ""
         ),
+        training_accounting=dict(training_accounting or {}),
     )
 
 
 __all__ = [
     "ATOMIC_FEATURE_DIM",
     "ATOMIC_PROJECTION_VERSION",
+    "AccumulationPlan",
     "AtomicWordProjection",
+    "DEVICE_CPU",
+    "DEVICE_CUDA",
     "E4_CHECKPOINT_SCHEMA_VERSION",
     "E4_INPUT_CONTRACT_VERSION",
+    "E4_KNOWN_BIN_ONLY_REVISIONS",
+    "E4_PINNED_MODEL_REVISION",
     "E4_SUPERSEDED_CHECKPOINT_SCHEMA_VERSIONS",
     "E4_SUPERSEDED_INPUT_CONTRACT_VERSIONS",
+    "E4_WEIGHT_FORMAT_BIN",
+    "E4_WEIGHT_FORMAT_SAFETENSORS",
+    "FULL_RESUME_COMPATIBILITY_FIELDS",
+    "INITIALIZATION_FULL_RESUME",
+    "INITIALIZATION_PINNED_BASE",
+    "INITIALIZATION_PINNED_BASE_SMOKE",
+    "MixedPrecisionPolicy",
+    "PRECISION_BF16",
+    "PRECISION_FP16",
+    "PRECISION_FP32",
+    "PhoBERTWeightFormat",
+    "REQUIRED_FULL_RESUME_KEYS",
+    "SUPPORTED_PRECISION_MODES",
+    "assert_compatible_full_resume",
+    "assert_full_checkpoint_custody",
+    "assert_full_initialization_source",
+    "assert_full_training_device",
+    "assert_optimizer_step_accounting",
+    "assert_weight_format_loadable",
+    "build_e4_history_row",
+    "build_e4_training_accounting",
+    "build_e4_training_state_payload",
+    "optimizer_signature",
+    "plan_gradient_accumulation",
+    "resolve_mixed_precision_policy",
+    "resolve_phobert_weight_format",
     "E4_GOVERNED_TRAIN_SHA256",
     "E4_GOVERNED_VALIDATION_SHA256",
     "E4_FULL_AUTHORIZATION",

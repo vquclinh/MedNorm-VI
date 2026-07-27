@@ -1,5 +1,5 @@
-version: phase2-e4-phobert-w2ner-colab-v1
-stage_id: phase2-e4-phobert-w2ner-v1
+version: phase2-e4-phobert-w2ner-colab-v2
+stage_id: phase2-e4-phobert-w2ner-v2
 expert_id: E4_phobert_w2ner
 status: READY_FOR_COLAB_SMOKE
 enabled_by_default: false
@@ -11,8 +11,11 @@ environment:
 authorization:
   full_training: I_AUTHORIZE_E4_FULL_TRAINING
 artifacts:
-  smoke_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_smoke_v1
+  # The Audit-0039 regression smoke writes to a FRESH directory so its evidence is
+  # not mixed with the Audit-0038 smoke artifact recorded below.
+  smoke_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_smoke_v2
   full_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_full_v1
+  archived_smoke_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_smoke_v1
   required_files:
     - checkpoints/best.pt
     - checkpoints/latest.pt
@@ -20,10 +23,36 @@ artifacts:
     - resolved_config.json
     - validation_metrics.json
     - training_manifest.json
+    - e4_alignment_diagnostic.json
+
 model:
   id: vinai/phobert-large
   revision_policy: resolve_40_hex_in_colab_bootstrap_before_full_training
-  local_revision_status: operator_colab_required
+  # Resolved and trained against by the real Audit-0038 Colab smoke run.
+  observed_model_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
+  observed_tokenizer_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
+  tokenizer_class: PhobertTokenizer
+  tokenizer_is_fast: false
+
+  # ---------------------------------------------------------------------------
+  # Pretrained weight format (Audit 0039)
+  # ---------------------------------------------------------------------------
+  # The pinned official revision publishes `pytorch_model.bin` and does NOT
+  # publish `model.safetensors`. A real Colab run failed with:
+  #   OSError: vinai/phobert-large does not appear to have model.safetensors or
+  #   model.safetensors.index.json and cannot be loaded with safetensors.
+  # This is a serialization-format fact about the official repository only. The
+  # model, architecture, tensor values and revision are unchanged, and loading
+  # `.bin` is NOT a lower-quality model.
+  pretrained_weight_format: pytorch_model.bin
+  use_safetensors: false
+  weight_format_resolution: deterministic_repository_inspection_then_pinned_default
+  expected_load_report:
+    ignored_mlm_head_key_prefixes: [lm_head., roberta.lm_head., cls., roberta.cls.]
+    unexpected_missing_encoder_keys_fail: true
+    unexpected_non_mlm_keys_fail: true
+    w2ner_head_expected_from_base: false
+
 training:
   smoke_max_epochs: 1
   full_max_epochs: 12
@@ -31,9 +60,79 @@ training:
   reject_smoke_checkpoint_as_full_initializer: true
   validation_after_every_epoch: true
   best_criterion: max_validation_exact_f1_governed_validation_only
+
+  # PhoBERT is fully fine-tuned together with the W2NER head. Nothing is frozen
+  # and no quantization is applied.
+  freeze_base_model: false
+  quantization: none
+
+  # -------------------------------------------------------------------------
+  # Real gradient accumulation (Audit 0039)
+  # -------------------------------------------------------------------------
+  # Audit 0038's loop stepped the optimizer after EVERY document while declaring
+  # an effective batch of 8, so the true effective batch was one document and the
+  # recorded optimizer-step count was the document count. Micro-batch size is 1
+  # because W2NER grids are variable-sized per document; the effective batch is
+  # reached by accumulation, and every count below is DERIVED, never relabelled.
+  micro_batch_size: 1
+  gradient_accumulation_steps: 8
+  effective_batch_size: 8
+  optimizer_step_policy: step_only_at_accumulation_boundaries
+  final_partial_group_policy: scale_loss_by_actual_group_size
+  gradient_clipping_enabled: true
+  max_grad_norm: 1.0
+
+  optimizer:
+    name: AdamW
+    learning_rate: 2.0e-5
+    weight_decay: 0.0
+  # No scheduler is part of the tracked configuration. One is not added here
+  # without justification; if it is added later it must also be checkpointed.
+  scheduler: none
+
+  # -------------------------------------------------------------------------
+  # Mixed precision (Audit 0039)
+  # -------------------------------------------------------------------------
+  # Requested policy; the runtime resolves it against the actual device. bf16
+  # needs no loss scaling; fp16 requires a GradScaler. CPU always resolves to
+  # fp32 and full training on CPU is refused.
+  requested_precision: bf16
+  precision_fallback: fp16_with_grad_scaler
+  cpu_precision: fp32
+  full_training_requires_cuda: true
+
 data:
-  train_split: data/processed/public_ner_train.jsonl
-  validation_split: data/processed/public_ner_validation.jsonl
+  train_split_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
+  resolution_policy: resolve_by_authoritative_sha256_not_filename
   internal_test_allowed: false
+
+# ---------------------------------------------------------------------------
+# Real executed smoke evidence (Audit 0038 run, recorded by Audit 0039)
+# ---------------------------------------------------------------------------
+# SMOKE_EXECUTED + ARTIFACT_VALIDATED. Bounded execution evidence that the
+# pipeline runs end to end. NOT a quality result, and never a full initializer.
+observed_smoke_run:
+  status: SMOKE_EXECUTED
+  artifact_validated: true
+  artifact_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_phobert_w2ner_smoke_v1
+  mode: smoke
+  validation_exact_f1: 0.0
+  validation_exact_f1_interpretation: >-
+    Bounded smoke on a small subset. It proves preprocessing, alignment,
+    forward/backward, optimizer, validation, checkpoint save/reload, hashing and
+    artifact validation execute. It is NOT a full-training quality signal.
+  best_checkpoint_sha256: bd689ec9bdc824b5abb3c0fa6373a3a6461781ad88a004870a27e2b396b8bbb1
+  latest_checkpoint_sha256: 42265aedb53bc39e729056bd0ec073eda27f7b3b15d136c29b170280686f0999
+  manifest_sha256: d2c36a1d15b395d86638fc3cdab2983689d0d3aef4c8e65ce41d3298c4c765ac
+  validator_ok: true
+  validator_failures: []
+  validator_warnings: []
+  internal_test_accessed: false
+  # Produced BEFORE the Audit-0039 training-loop changes, so its optimizer-step
+  # accounting predates real gradient accumulation. A fresh regression smoke is
+  # required before full training.
+  superseded_by_audit_0039_loop_changes: true
+
 validator:
   cli: env PYTHONPATH=src python -m mednorm_vi.training.phase2.cli validate-artifact --kind e4 --artifact-dir ARTIFACT_DIR --mode full
