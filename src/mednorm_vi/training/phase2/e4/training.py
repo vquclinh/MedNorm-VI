@@ -360,3 +360,240 @@ __all__ = [
     "resolve_initialization_source",
     "resolve_mixed_precision_policy",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Tiny-overfit stopping policy (Audit 0046)
+# ---------------------------------------------------------------------------
+#
+# Stage 2 originally reused BestCheckpointSelector, the FULL-TRAINING stopper.
+# On a 12-example set with accumulation 4 that gives 3 optimizer steps an epoch,
+# so a 200-epoch bound plans 600 steps and a 10% warmup needs 60. Validation F1
+# is legitimately 0.0 while the head is still warming up, so patience-3 counted
+# three "no improvement" epochs and stopped at epoch 4 — 12 optimizer steps, 20%
+# of warmup, with the backbone at 1e-6 and the head at 2e-4 instead of the
+# configured 5e-6 and 1e-3.
+#
+# That is not evidence about the recipes. It is a stopper answering a question
+# nobody asked: memorization is the goal here, and "F1 has not improved yet" is
+# the expected state during warmup, not a reason to abandon the run.
+
+TINY_HEARTBEAT_EVERY_N_EPOCHS = 5
+
+TINY_STOP_GATE_MET = "tiny_gate_met"
+TINY_STOP_EPOCH_BOUND = "reached_epoch_bound_without_meeting_the_gate"
+TINY_STOP_NUMERIC_FAILURE = "numeric_failure"
+TINY_STOP_PROVEN_NOT_LEARNING = "proven_not_learning_after_full_warmup"
+TINY_CONTINUE = "continue"
+
+
+@dataclass(frozen=True, slots=True)
+class TinyEpochSignal:
+    """What one tiny-overfit epoch produced, in the terms the policy needs."""
+
+    epoch: int
+    optimizer_steps: int
+    exact_f1: float
+    predicted_mentions: int
+    positive_cell_accuracy: float
+    types_predicted: tuple[str, ...]
+    loss_total: float
+    loss_is_finite: bool = True
+
+    def gate_met(self, *, required_types: Sequence[str], target_f1: float) -> bool:
+        """Every tiny pass condition except save/reload, which runs after."""
+        return (self.exact_f1 >= target_f1
+                and self.predicted_mentions > 0
+                and self.positive_cell_accuracy > 0.0
+                and all(t in self.types_predicted for t in required_types))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "epoch": self.epoch,
+            "optimizer_steps": self.optimizer_steps,
+            "exact_f1": self.exact_f1,
+            "predicted_mentions": self.predicted_mentions,
+            "positive_cell_accuracy": self.positive_cell_accuracy,
+            "types_predicted": list(self.types_predicted),
+            "loss_total": self.loss_total,
+            "loss_is_finite": self.loss_is_finite,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TinyOverfitStopPolicy:
+    """Stopping contract for Stage 2. Deliberately not validation patience.
+
+    A tiny run ends when it has *succeeded*, when it has exhausted its epoch
+    bound, or when something is genuinely broken. "F1 is still zero" is none of
+    those while the scheduler has not even reached its peak learning rate.
+
+    ``allow_fail_fast`` is opt-in and can only fire **after the full configured
+    warmup**, so a fail-fast can never be blamed on an under-warmed schedule.
+    """
+
+    epoch_bound: int
+    warmup_steps: int
+    target_exact_f1: float = 0.95
+    required_types: tuple[str, ...] = ()
+    heartbeat_every_n_epochs: int = TINY_HEARTBEAT_EVERY_N_EPOCHS
+    allow_fail_fast: bool = False
+    # Epochs of a completely dead positive signal, after warmup, before the
+    # optional fail-fast concludes the run is not learning.
+    fail_fast_patience_after_warmup: int = 25
+
+    def __post_init__(self) -> None:
+        if self.epoch_bound < 1:
+            raise E4TrainingError("epoch_bound must be at least 1")
+        if self.warmup_steps < 0:
+            raise E4TrainingError("warmup_steps must be non-negative")
+        if self.heartbeat_every_n_epochs < 1:
+            raise E4TrainingError("heartbeat_every_n_epochs must be at least 1")
+        if self.fail_fast_patience_after_warmup < 1:
+            raise E4TrainingError("fail_fast patience must be at least 1")
+
+    def should_heartbeat(self, epoch: int) -> bool:
+        return (epoch == 1
+                or epoch % self.heartbeat_every_n_epochs == 0
+                or epoch >= self.epoch_bound)
+
+    def decide(self, history: Sequence[TinyEpochSignal]) -> tuple[bool, str]:
+        """``(stop, reason)`` for the run so far."""
+        if not history:
+            return False, TINY_CONTINUE
+        latest = history[-1]
+
+        if not latest.loss_is_finite:
+            return True, TINY_STOP_NUMERIC_FAILURE
+        if latest.gate_met(required_types=self.required_types,
+                           target_f1=self.target_exact_f1):
+            return True, TINY_STOP_GATE_MET
+        if latest.epoch >= self.epoch_bound:
+            return True, TINY_STOP_EPOCH_BOUND
+
+        if self.allow_fail_fast:
+            # Only ever after the configured warmup is fully served.
+            after_warmup = [s for s in history if s.optimizer_steps >= self.warmup_steps]
+            if len(after_warmup) >= self.fail_fast_patience_after_warmup:
+                window = after_warmup[-self.fail_fast_patience_after_warmup:]
+                if all(s.predicted_mentions == 0 and s.positive_cell_accuracy == 0.0
+                       for s in window):
+                    return True, TINY_STOP_PROVEN_NOT_LEARNING
+        return False, TINY_CONTINUE
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "policy": "tiny_overfit_v1",
+            "epoch_bound": self.epoch_bound,
+            "warmup_steps": self.warmup_steps,
+            "target_exact_f1": self.target_exact_f1,
+            "required_types": list(self.required_types),
+            "heartbeat_every_n_epochs": self.heartbeat_every_n_epochs,
+            "validation_patience_early_stopping_used": False,
+            "collapse_guard_enabled": False,
+            "allow_fail_fast": self.allow_fail_fast,
+            "fail_fast_patience_after_warmup": self.fail_fast_patience_after_warmup,
+            "fail_fast_permitted_before_full_warmup": False,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Scheduler accounting (Audit 0046)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulePlan:
+    """Planned and realized optimizer-step accounting for one run.
+
+    The premature stop was invisible because nothing compared the steps a run
+    actually took against the steps its schedule was built for. Both are now
+    recorded, and :attr:`peak_learning_rate_reached` says plainly whether the
+    configured rates were ever in force.
+    """
+
+    examples: int
+    accumulation_steps: int
+    epoch_bound: int
+    optimizer_steps_per_epoch: int
+    planned_total_optimizer_steps: int
+    warmup_steps: int
+    realized_optimizer_steps: int = 0
+    realized_epochs: int = 0
+
+    @property
+    def warmup_completed(self) -> bool:
+        return self.realized_optimizer_steps >= self.warmup_steps
+
+    @property
+    def peak_learning_rate_reached(self) -> bool:
+        """True once the schedule has served its whole warmup."""
+        return self.warmup_completed
+
+    @property
+    def warmup_fraction_served(self) -> float:
+        if self.warmup_steps <= 0:
+            return 1.0
+        return min(1.0, self.realized_optimizer_steps / self.warmup_steps)
+
+    def realized(self, *, optimizer_steps: int, epochs: int) -> SchedulePlan:
+        return SchedulePlan(
+            examples=self.examples,
+            accumulation_steps=self.accumulation_steps,
+            epoch_bound=self.epoch_bound,
+            optimizer_steps_per_epoch=self.optimizer_steps_per_epoch,
+            planned_total_optimizer_steps=self.planned_total_optimizer_steps,
+            warmup_steps=self.warmup_steps,
+            realized_optimizer_steps=optimizer_steps,
+            realized_epochs=epochs)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "examples": self.examples,
+            "accumulation_steps": self.accumulation_steps,
+            "epoch_bound": self.epoch_bound,
+            "optimizer_steps_per_epoch": self.optimizer_steps_per_epoch,
+            "planned_total_optimizer_steps": self.planned_total_optimizer_steps,
+            "warmup_steps": self.warmup_steps,
+            "realized_optimizer_steps": self.realized_optimizer_steps,
+            "realized_epochs": self.realized_epochs,
+            "warmup_completed": self.warmup_completed,
+            "warmup_fraction_served": self.warmup_fraction_served,
+            "peak_learning_rate_reached": self.peak_learning_rate_reached,
+        }
+
+
+def plan_schedule(
+    *, examples: int, accumulation_steps: int, epoch_bound: int, warmup_ratio: float,
+) -> SchedulePlan:
+    """Derive the step budget from examples, accumulation and the FULL bound.
+
+    The epoch bound used here must be the one actually requested. Planning a
+    schedule over 200 epochs and then stopping at 4 is what produced learning
+    rates five times below target.
+    """
+    plan = plan_gradient_accumulation(
+        examples, accumulation_steps=accumulation_steps, epochs=epoch_bound)
+    total = plan.expected_optimizer_steps
+    return SchedulePlan(
+        examples=examples,
+        accumulation_steps=accumulation_steps,
+        epoch_bound=epoch_bound,
+        optimizer_steps_per_epoch=plan.optimizer_steps_per_epoch,
+        planned_total_optimizer_steps=total,
+        warmup_steps=int(total * warmup_ratio))
+
+
+__all__ = [  # noqa: F822 - extends the module surface defined above
+    *__all__,
+    "SchedulePlan",
+    "TINY_CONTINUE",
+    "TINY_HEARTBEAT_EVERY_N_EPOCHS",
+    "TINY_STOP_EPOCH_BOUND",
+    "TINY_STOP_GATE_MET",
+    "TINY_STOP_NUMERIC_FAILURE",
+    "TINY_STOP_PROVEN_NOT_LEARNING",
+    "TinyEpochSignal",
+    "TinyOverfitStopPolicy",
+    "plan_schedule",
+]

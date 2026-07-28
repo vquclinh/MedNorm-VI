@@ -29,7 +29,11 @@ from mednorm_vi.training.phase2.e4 import (
     ExampleIndex,
     GateArtifact,
     RecipeResult,
+    ReproductionCheck,
+    SchedulePlan,
     SubsetResult,
+    TinyEpochSignal,
+    TinyOverfitStopPolicy,
     ValidationSnapshot,
     all_recipes,
     assert_full_training_allowed,
@@ -39,6 +43,7 @@ from mednorm_vi.training.phase2.e4 import (
     evaluate_collapse_guard,
     measure_order,
     plan_gradient_accumulation,
+    plan_schedule,
     reject_superseded_checkpoint,
     select_recipe,
 )
@@ -53,7 +58,9 @@ from mednorm_vi.training.phase2.e4.contracts import (
 from mednorm_vi.training.phase2.e4.gates import (
     SUBSET_GATE_FILENAME,
     TINY_GATE_FILENAME,
+    TINY_TARGET_EXACT_F1,
     GateError,
+    assert_real_reproduction,
     required_supervised_types,
 )
 from mednorm_vi.training.phase2.e4.recipes import (
@@ -76,6 +83,11 @@ from mednorm_vi.training.phase2.e4.sampling import (
     assert_order_preserves_corpus,
 )
 from mednorm_vi.training.phase2.e4.training import (
+    TINY_STOP_EPOCH_BOUND,
+    TINY_STOP_GATE_MET,
+    TINY_STOP_NUMERIC_FAILURE,
+    TINY_STOP_PROVEN_NOT_LEARNING,
+    BestCheckpointSelector,
     E4TrainingError,
     assert_not_collapsed_when_marking_trained,
 )
@@ -172,12 +184,22 @@ def test_obsolete_e4_module_cannot_be_imported(module: str) -> None:
 
 
 def test_nothing_still_imports_the_removed_modules() -> None:
+    """Match import paths, not bare words.
+
+    ``tiny_overfit`` is now a legitimate concept name (``TinyOverfitStopPolicy``,
+    the Stage-2 artifact directory), so a basename search would flag healthy
+    code. What must be absent is the flat ``phase2.e4_*`` module path.
+    """
+    patterns = "|".join(
+        [r"phase2\.e4_[a-z_]+", r"from \.e4_[a-z_]+ import",
+         r"phase2/e4_[a-z_]+\.py"])
     hits = subprocess.run(
-        ["git", "-C", str(REPO), "grep", "-l", "-E",
-         "|".join(m.rsplit(".", 1)[1] for m in OBSOLETE_MODULES),
-         "--", "src", "tests", "scripts", "notebooks", "configs"],
+        ["git", "-C", str(REPO), "grep", "-l", "-E", patterns,
+         "--", "src", "tests", "scripts", "notebooks", "configs",
+         # This file is the guard; its OBSOLETE_* lists necessarily name them.
+         f":!{Path(__file__).relative_to(REPO)}"],
         capture_output=True, text=True).stdout.split()
-    assert hits == [], f"stale references remain in {hits}"
+    assert hits == [], f"stale module references remain in {hits}"
 
 
 def test_there_is_exactly_one_current_e4_implementation_path() -> None:
@@ -611,6 +633,28 @@ def test_a_collapsed_run_can_never_be_marked_fully_trained() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _reproduction(*, reproduced: bool = True, **overrides) -> ReproductionCheck:
+    before = {"exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+              "predicted_mentions": 22.0, "positive_cell_accuracy": 0.98}
+    after = dict(before) if reproduced else {**before, "exact_f1": 0.4}
+    fields = {
+        "checkpoint_sha256": "a" * 64, "metrics_before": before,
+        "metrics_after": after, "missing_keys": (), "unexpected_keys": (),
+        "fresh_model_evaluated": True, "examples_evaluated": 12,
+    }
+    fields.update(overrides)
+    return ReproductionCheck(**fields)
+
+
+def _schedule(*, peak: bool = True) -> dict:
+    return SchedulePlan(
+        examples=12, accumulation_steps=4, epoch_bound=200,
+        optimizer_steps_per_epoch=3, planned_total_optimizer_steps=600,
+        warmup_steps=60,
+        realized_optimizer_steps=600 if peak else 12,
+        realized_epochs=200 if peak else 4).as_dict()
+
+
 def _result(name: str, **overrides) -> RecipeResult:
     fields = {
         "recipe": name, "exact_precision": 1.0, "exact_recall": 1.0,
@@ -619,8 +663,9 @@ def _result(name: str, **overrides) -> RecipeResult:
         "gold_positive_background_rate": 0.01, "nnw_predictions": 30,
         "thw_predictions_by_type": {"DIAGNOSIS": 10, "SYMPTOM": 8, "MEDICATION": 4},
         "loss_total": 0.001, "loss_positive": 0.01, "loss_background": 0.0001,
-        "seconds": 60.0, "peak_vram_gib": 9.0, "save_reload_reproduced": True,
-        "grid_cell_accuracy": 0.9985,
+        "seconds": 60.0, "peak_vram_gib": 9.0, "reproduction": _reproduction(),
+        "grid_cell_accuracy": 0.9985, "schedule": _schedule(),
+        "stopped_reason": "tiny_gate_met",
     }
     fields.update(overrides)
     return RecipeResult(**fields)
@@ -948,3 +993,426 @@ def test_the_config_is_valid_and_committed_unauthorized() -> None:
         "batch_global_valid_cell_mean")
     assert config["recipes"]["shared"]["per_example_mean"] is False
     assert config["model"]["resume_from_superseded_checkpoint"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tiny-overfit stopping policy (Audit 0046)
+# ---------------------------------------------------------------------------
+#
+# Colab evidence from the first Stage-2 run: every recipe stopped after 4 epochs
+# and 12 optimizer steps, against a planned 600 steps with a 60-step warmup, so
+# the backbone was at 1e-6 and the head at 2e-4 instead of 5e-6 and 1e-3. That is
+# a stopper artefact, not a fact about the recipes.
+
+STAGE2_EXAMPLES = 12
+STAGE2_ACCUMULATION = 4
+STAGE2_EPOCH_BOUND = 200
+
+
+def test_the_generic_stopper_reproduces_the_four_epoch_stop() -> None:
+    """Regression: exactly what shipped, reproduced before the repair.
+
+    BestCheckpointSelector still exists and is still correct — for full
+    training. Applied to a tiny run whose F1 is legitimately 0.0 during warmup,
+    patience 3 ends the run at epoch 4.
+    """
+    plan = plan_gradient_accumulation(
+        STAGE2_EXAMPLES, accumulation_steps=STAGE2_ACCUMULATION,
+        epochs=STAGE2_EPOCH_BOUND)
+    selector = BestCheckpointSelector(patience=3)
+    stopped_at = None
+    steps = 0
+    for epoch in range(1, STAGE2_EPOCH_BOUND + 1):
+        steps += plan.optimizer_steps_per_epoch
+        selector.observe(epoch=epoch, exact_f1=0.0)
+        if selector.should_stop:
+            stopped_at = epoch
+            break
+    assert stopped_at == 4
+    assert steps == 12
+    assert selector.best_epoch == 1
+    assert selector.best_metric == 0.0
+
+
+def test_the_reproduced_stop_lands_inside_warmup_at_a_fifth_of_target_lr() -> None:
+    """The four learning-rate numbers the Colab run reported, derived."""
+    schedule = plan_schedule(
+        examples=STAGE2_EXAMPLES, accumulation_steps=STAGE2_ACCUMULATION,
+        epoch_bound=STAGE2_EPOCH_BOUND, warmup_ratio=0.10)
+    assert schedule.planned_total_optimizer_steps == 600
+    assert schedule.warmup_steps == 60
+    realized = schedule.realized(optimizer_steps=12, epochs=4)
+    assert not realized.warmup_completed
+    assert not realized.peak_learning_rate_reached
+    assert realized.warmup_fraction_served == pytest.approx(0.2)
+
+    recipe = build_recipe(REFERENCE_CE)
+    multiplier = recipe.schedule.multiplier_at(11, 600)
+    assert multiplier == pytest.approx(0.2)
+    assert recipe.optimizer.backbone_lr * multiplier == pytest.approx(1e-6)
+    assert recipe.optimizer.head_lr * multiplier == pytest.approx(2e-4)
+
+
+def _tiny_policy(**overrides) -> TinyOverfitStopPolicy:
+    fields = {
+        "epoch_bound": STAGE2_EPOCH_BOUND, "warmup_steps": 60,
+        "target_exact_f1": TINY_TARGET_EXACT_F1,
+        "required_types": ("DIAGNOSIS", "MEDICATION", "SYMPTOM"),
+    }
+    fields.update(overrides)
+    return TinyOverfitStopPolicy(**fields)
+
+
+def _signal(epoch: int, *, f1: float = 0.0, predicted: int = 0,
+            positive_accuracy: float = 0.0, types: tuple[str, ...] = (),
+            steps: int | None = None, finite: bool = True) -> TinyEpochSignal:
+    return TinyEpochSignal(
+        epoch=epoch, optimizer_steps=steps if steps is not None else epoch * 3,
+        exact_f1=f1, predicted_mentions=predicted,
+        positive_cell_accuracy=positive_accuracy, types_predicted=types,
+        loss_total=0.01, loss_is_finite=finite)
+
+
+def test_the_tiny_policy_does_not_stop_at_epoch_four_on_zero_f1() -> None:
+    """The repair, stated as the exact scenario that failed."""
+    policy = _tiny_policy()
+    history = [_signal(epoch) for epoch in range(1, 5)]
+    stop, reason = policy.decide(history)
+    assert not stop
+    assert reason == "continue"
+
+
+def test_the_tiny_policy_never_stops_early_on_a_flat_zero_f1_run() -> None:
+    policy = _tiny_policy()
+    history: list[TinyEpochSignal] = []
+    for epoch in range(1, STAGE2_EPOCH_BOUND):
+        history.append(_signal(epoch))
+        stop, _reason = policy.decide(history)
+        assert not stop, f"stopped at epoch {epoch}"
+
+
+def test_unsuccessful_tiny_training_reaches_the_epoch_bound() -> None:
+    policy = _tiny_policy()
+    history = [_signal(epoch) for epoch in range(1, STAGE2_EPOCH_BOUND + 1)]
+    stop, reason = policy.decide(history)
+    assert stop
+    assert reason == TINY_STOP_EPOCH_BOUND
+
+
+def test_successful_tiny_memorization_may_stop_before_the_bound() -> None:
+    policy = _tiny_policy()
+    history = [_signal(epoch) for epoch in range(1, 40)]
+    history.append(_signal(40, f1=0.97, predicted=22, positive_accuracy=0.95,
+                           types=("DIAGNOSIS", "MEDICATION", "SYMPTOM")))
+    stop, reason = policy.decide(history)
+    assert stop
+    assert reason == TINY_STOP_GATE_MET
+
+
+def test_the_gate_needs_every_present_supervised_type() -> None:
+    policy = _tiny_policy()
+    incomplete = _signal(50, f1=0.99, predicted=20, positive_accuracy=0.9,
+                         types=("DIAGNOSIS", "SYMPTOM"))
+    assert not incomplete.gate_met(
+        required_types=policy.required_types, target_f1=policy.target_exact_f1)
+    stop, reason = policy.decide([incomplete])
+    assert not stop and reason == "continue"
+
+
+def test_the_exact_f1_gate_is_not_weakened() -> None:
+    policy = _tiny_policy()
+    just_under = _signal(50, f1=0.94, predicted=22, positive_accuracy=0.9,
+                         types=("DIAGNOSIS", "MEDICATION", "SYMPTOM"))
+    assert not just_under.gate_met(
+        required_types=policy.required_types, target_f1=policy.target_exact_f1)
+    assert policy.target_exact_f1 == 0.95
+    assert TINY_TARGET_EXACT_F1 == 0.95
+
+
+def test_a_numeric_failure_stops_immediately() -> None:
+    policy = _tiny_policy()
+    stop, reason = policy.decide([_signal(2, finite=False)])
+    assert stop
+    assert reason == TINY_STOP_NUMERIC_FAILURE
+
+
+def test_fail_fast_is_opt_in_and_only_after_the_full_warmup() -> None:
+    policy = _tiny_policy(allow_fail_fast=True, fail_fast_patience_after_warmup=5)
+    # Twenty dead epochs, all still inside warmup: no fail-fast.
+    inside = [_signal(e, steps=3 * e) for e in range(1, 20)]
+    assert all(s.optimizer_steps < policy.warmup_steps for s in inside)
+    stop, _reason = policy.decide(inside)
+    assert not stop
+    # Past the warmup and still dead: the opt-in fail-fast may fire.
+    beyond = inside + [_signal(e, steps=3 * e) for e in range(20, 40)]
+    stop, reason = policy.decide(beyond)
+    assert stop
+    assert reason == TINY_STOP_PROVEN_NOT_LEARNING
+
+
+def test_fail_fast_is_off_by_default() -> None:
+    policy = _tiny_policy()
+    assert policy.allow_fail_fast is False
+    dead = [_signal(e, steps=3 * e) for e in range(1, 100)]
+    stop, _reason = policy.decide(dead)
+    assert not stop
+
+
+def test_the_tiny_policy_records_that_it_is_not_validation_patience() -> None:
+    payload = _tiny_policy().as_dict()
+    assert payload["validation_patience_early_stopping_used"] is False
+    assert payload["collapse_guard_enabled"] is False
+    assert payload["fail_fast_permitted_before_full_warmup"] is False
+    assert payload["heartbeat_every_n_epochs"] == 5
+
+
+def test_the_policy_heartbeats_at_least_every_five_epochs() -> None:
+    policy = _tiny_policy()
+    beats = [e for e in range(1, 51) if policy.should_heartbeat(e)]
+    assert 1 in beats
+    gaps = [b - a for a, b in zip(beats, beats[1:], strict=False)]
+    assert max(gaps) <= 5
+
+
+def test_full_training_early_stopping_is_unchanged() -> None:
+    """The generic stopper keeps its behaviour for Stage 4."""
+    selector = BestCheckpointSelector(patience=3)
+    assert selector.observe(epoch=1, exact_f1=0.10)
+    assert not selector.should_stop
+    assert selector.observe(epoch=2, exact_f1=0.20)
+    assert selector.best_epoch == 2
+    for epoch in (3, 4, 5):
+        assert not selector.observe(epoch=epoch, exact_f1=0.15)
+    assert selector.should_stop
+    assert selector.as_dict()["early_stopping_patience"] == 3
+    assert selector.as_dict()["selection_split"] == "governed_validation_only"
+
+
+# ---------------------------------------------------------------------------
+# Scheduler accounting
+# ---------------------------------------------------------------------------
+
+
+def test_the_schedule_is_planned_from_examples_accumulation_and_full_bound() -> None:
+    schedule = plan_schedule(
+        examples=12, accumulation_steps=4, epoch_bound=200, warmup_ratio=0.10)
+    assert schedule.optimizer_steps_per_epoch == 3
+    assert schedule.planned_total_optimizer_steps == 3 * 200
+    assert schedule.warmup_steps == 60
+    # Halving the bound halves the plan; the bound is a real input.
+    halved = plan_schedule(
+        examples=12, accumulation_steps=4, epoch_bound=100, warmup_ratio=0.10)
+    assert halved.planned_total_optimizer_steps == 300
+    assert halved.warmup_steps == 30
+
+
+def test_planned_and_realized_step_counts_are_both_recorded() -> None:
+    schedule = plan_schedule(
+        examples=12, accumulation_steps=4, epoch_bound=200, warmup_ratio=0.10)
+    payload = schedule.realized(optimizer_steps=600, epochs=200).as_dict()
+    for key in ("planned_total_optimizer_steps", "realized_optimizer_steps",
+                "warmup_steps", "realized_epochs", "warmup_completed",
+                "warmup_fraction_served", "peak_learning_rate_reached"):
+        assert key in payload, key
+    assert payload["planned_total_optimizer_steps"] == 600
+    assert payload["realized_optimizer_steps"] == 600
+
+
+def test_the_scheduler_reaches_peak_learning_rate_after_warmup() -> None:
+    schedule = plan_schedule(
+        examples=12, accumulation_steps=4, epoch_bound=200, warmup_ratio=0.10)
+    recipe = build_recipe(REFERENCE_CE)
+    total = schedule.planned_total_optimizer_steps
+    # Immediately after the final warmup step the multiplier is exactly 1.0.
+    assert recipe.schedule.multiplier_at(
+        schedule.warmup_steps - 1, total) == pytest.approx(1.0)
+    peak_backbone = recipe.optimizer.backbone_lr * recipe.schedule.multiplier_at(
+        schedule.warmup_steps - 1, total)
+    peak_head = recipe.optimizer.head_lr * recipe.schedule.multiplier_at(
+        schedule.warmup_steps - 1, total)
+    assert peak_backbone == pytest.approx(5e-6)
+    assert peak_head == pytest.approx(1e-3)
+    assert schedule.realized(
+        optimizer_steps=schedule.warmup_steps, epochs=20).peak_learning_rate_reached
+
+
+def test_a_run_that_stopped_inside_warmup_is_flagged_on_the_result() -> None:
+    denied = _result(REFERENCE_CE, schedule=_schedule(peak=False))
+    assert denied.stopped_inside_warmup
+    assert not _result(REFERENCE_CE).stopped_inside_warmup
+
+
+def test_a_failed_ablation_says_when_it_is_not_evidence_about_the_recipes() -> None:
+    """Exactly the first Stage-2 run: three 'failures' that proved nothing."""
+    denied = [
+        _result(name, exact_f1=0.0, exact_recall=0.0, predicted_mentions=0,
+                positive_cell_accuracy=0.0, thw_predictions_by_type={},
+                schedule=_schedule(peak=False),
+                stopped_reason="early_stopping_patience")
+        for name in RECIPE_NAMES
+    ]
+    selected, report = select_recipe(denied, required_types=REQUIRED)
+    assert selected is None
+    assert report["passed"] is False
+    assert report["result_is_invalid_for_recipe_comparison"] is True
+    assert set(report["recipes_stopped_inside_warmup"]) == set(RECIPE_NAMES)
+    assert "NOT evidence about those recipes" in report["stop_reason"]
+
+
+def test_a_genuine_failure_after_full_warmup_is_not_flagged_as_invalid() -> None:
+    honest = [
+        _result(name, exact_f1=0.0, exact_recall=0.0, predicted_mentions=0,
+                positive_cell_accuracy=0.0, thw_predictions_by_type={},
+                schedule=_schedule(peak=True),
+                stopped_reason=TINY_STOP_EPOCH_BOUND)
+        for name in RECIPE_NAMES
+    ]
+    _selected, report = select_recipe(honest, required_types=REQUIRED)
+    assert report["recipes_stopped_inside_warmup"] == []
+    assert "result_is_invalid_for_recipe_comparison" not in report
+
+
+# ---------------------------------------------------------------------------
+# Real save/reload reproduction
+# ---------------------------------------------------------------------------
+
+
+def test_reproduction_requires_a_fresh_model_evaluation() -> None:
+    assert _reproduction().reproduced
+    assert not _reproduction(fresh_model_evaluated=False).reproduced
+    assert not _reproduction(examples_evaluated=0).reproduced
+
+
+def test_state_dict_key_names_alone_cannot_pass_reproduction() -> None:
+    """The removed check was ``set(reloaded["model_state"]) == {...}``.
+
+    There is no constructor path that accepts a key-name comparison: the metrics
+    are mandatory, and omitting them raises rather than defaulting to success.
+    """
+    with pytest.raises(GateError, match="not a key-name comparison"):
+        ReproductionCheck(
+            checkpoint_sha256="a" * 64,
+            metrics_before={"model_state_keys": 2.0},
+            metrics_after={"model_state_keys": 2.0},
+            missing_keys=(), unexpected_keys=(),
+            fresh_model_evaluated=True, examples_evaluated=12)
+    with pytest.raises(GateError, match="reproduction check"):
+        assert_real_reproduction(None)
+
+
+def test_reproduction_fails_when_a_metric_drifts_beyond_tolerance() -> None:
+    drifted = _reproduction(reproduced=False)
+    assert not drifted.reproduced
+    assert any("exact_f1 drifted" in f for f in drifted.failures())
+    assert drifted.differences()["exact_f1"] == pytest.approx(0.6)
+
+
+def test_reproduction_fails_on_missing_or_unexpected_keys() -> None:
+    assert not _reproduction(missing_keys=("encoder.weight",)).reproduced
+    assert not _reproduction(unexpected_keys=("lm_head.bias",)).reproduced
+    report = _reproduction(missing_keys=("encoder.weight",))
+    assert any("missing state-dict keys" in f for f in report.failures())
+
+
+def test_reproduction_tolerance_is_explicit_and_recorded() -> None:
+    payload = _reproduction().as_dict()
+    assert payload["tolerance"] == pytest.approx(1e-6)
+    assert payload["reproduced"] is True
+    assert payload["fresh_model_evaluated"] is True
+    assert payload["examples_evaluated"] == 12
+    assert payload["state_dict_key_names_alone_are_sufficient"] is False
+    assert set(payload["differences"]) == {
+        "exact_precision", "exact_recall", "exact_f1", "predicted_mentions",
+        "positive_cell_accuracy"}
+
+
+def test_a_recipe_without_a_reproduction_check_cannot_pass() -> None:
+    unproven = _result(REFERENCE_CE, reproduction=None)
+    passed, failures = unproven.passes(required_types=REQUIRED)
+    assert not passed
+    assert any("no fresh-model re-evaluation" in f for f in failures)
+
+
+def test_a_recipe_with_a_failing_reproduction_cannot_pass() -> None:
+    drifted = _result(REFERENCE_CE, reproduction=_reproduction(reproduced=False))
+    passed, failures = drifted.passes(required_types=REQUIRED)
+    assert not passed
+    assert any("save/reload did not reproduce" in f for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# Stale gate handling
+# ---------------------------------------------------------------------------
+
+
+def test_the_stale_failed_gate_cannot_authorize_stage_four(tmp_path: Path) -> None:
+    """The previous Stage-2 gate was written by the premature-stop code."""
+    _write_gates(tmp_path, tiny_passed=False, code="stale-premature-stop-code")
+    with pytest.raises(GateError, match="did not pass"):
+        assert_full_training_allowed(gate_dir=tmp_path, **FULL_OK)
+
+
+def test_even_a_passing_gate_from_the_old_code_hash_is_refused(tmp_path: Path) -> None:
+    _write_gates(tmp_path, code="stale-premature-stop-code")
+    with pytest.raises(GateError, match="re-run the gated stages"):
+        assert_full_training_allowed(gate_dir=tmp_path, **FULL_OK)
+
+
+def test_a_gate_is_replaced_atomically(tmp_path: Path) -> None:
+    """A rerun must not leave the old verdict beside the new one."""
+    target = tmp_path / TINY_GATE_FILENAME
+    GateArtifact(stage="tiny_recipe_ablation", passed=False, recipe="",
+                 config_sha256="cfg", code_sha256="old", corpus_sha256={},
+                 detail={"run": "premature-stop"}).write(target)
+    assert json.loads(target.read_text(encoding="utf-8"))["passed"] is False
+
+    GateArtifact(stage="tiny_recipe_ablation", passed=True, recipe=REFERENCE_CE,
+                 config_sha256="cfg", code_sha256="new", corpus_sha256={},
+                 detail={"run": "repaired"}).write(target)
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["passed"] is True
+    assert payload["code_sha256"] == "new"
+    assert payload["detail"]["run"] == "repaired"
+    # No temporary file survives, and no second gate file was created.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [TINY_GATE_FILENAME]
+
+
+# ---------------------------------------------------------------------------
+# The notebook uses the repaired contracts
+# ---------------------------------------------------------------------------
+
+
+def test_the_notebook_stage_two_uses_the_tiny_policy_not_validation_patience() -> None:
+    code = _notebook_code()
+    assert "TinyOverfitStopPolicy(" in code
+    assert "tiny_policy=policy" in code
+    assert "tiny_policy.decide(" in code
+    assert "collapse_guard=False" in code
+
+
+def test_the_notebook_plans_the_schedule_from_the_full_epoch_bound() -> None:
+    code = _notebook_code()
+    assert "plan_schedule(" in code
+    assert "epoch_bound=TINY_EPOCH_BOUND" in code
+    assert "warmup_ratio=recipe.schedule.warmup_ratio" in code
+
+
+def test_the_notebook_performs_a_real_fresh_model_save_reload() -> None:
+    code = _notebook_code()
+    assert "def evaluate_state(" in code
+    assert "ReproductionCheck(" in code
+    assert "fresh_model_evaluated=True" in code
+    # The removed key-name check must not come back.
+    assert 'set(reloaded["model_state"]) == {"base_model", "w2ner_head"}' not in code
+    assert "reproduction=reproduction" in code
+
+
+def test_the_notebook_still_deletes_candidate_checkpoints() -> None:
+    code = _notebook_code()
+    assert "tmp.unlink(missing_ok=True)" in code
+
+
+def test_the_notebook_emits_tiny_heartbeats() -> None:
+    code = _notebook_code()
+    assert "tiny_heartbeat" in code
+    assert "should_heartbeat(" in code

@@ -21,8 +21,9 @@ backward passes on a recipe nothing had ever validated end to end.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -102,12 +103,32 @@ class RecipeResult:
     loss_background: float
     seconds: float
     peak_vram_gib: float
-    save_reload_reproduced: bool
+    # A real fresh-model re-evaluation, or None. There is deliberately no bare
+    # boolean: Audit 0046 removed a "reproduction check" that compared two
+    # state-dict key names and would have passed for a checkpoint of zeros.
+    reproduction: ReproductionCheck | None
     grid_cell_accuracy: float = 0.0
+    # Planned vs realized schedule accounting, so a run that stopped inside
+    # warmup can never be mistaken for evidence about the recipe.
+    schedule: Mapping[str, Any] = field(default_factory=dict)
+    stopped_reason: str = ""
 
     def types_predicted(self) -> tuple[str, ...]:
         return tuple(sorted(
             name for name, count in self.thw_predictions_by_type.items() if count > 0))
+
+    @property
+    def save_reload_reproduced(self) -> bool:
+        return self.reproduction is not None and self.reproduction.reproduced
+
+    @property
+    def stopped_inside_warmup(self) -> bool:
+        """A run that never reached its configured learning rates.
+
+        Its numbers describe the schedule it was denied, not the recipe.
+        """
+        return bool(self.schedule) and not self.schedule.get(
+            "peak_learning_rate_reached", True)
 
     def passes(self, *, required_types: Sequence[str]) -> tuple[bool, tuple[str, ...]]:
         """Pass/fail with every unmet condition named."""
@@ -123,7 +144,10 @@ class RecipeResult:
         if missing:
             failures.append(f"never predicted {sorted(missing)}")
         if not self.save_reload_reproduced:
-            failures.append("save/reload did not reproduce the metric")
+            detail = ("no fresh-model re-evaluation was performed"
+                      if self.reproduction is None
+                      else "; ".join(self.reproduction.failures()))
+            failures.append(f"save/reload did not reproduce the metrics ({detail})")
         return (not failures), tuple(failures)
 
     def as_dict(self) -> dict[str, Any]:
@@ -148,6 +172,11 @@ class RecipeResult:
             "seconds": self.seconds,
             "peak_vram_gib": self.peak_vram_gib,
             "save_reload_reproduced": self.save_reload_reproduced,
+            "reproduction": (
+                self.reproduction.as_dict() if self.reproduction is not None else None),
+            "schedule": dict(self.schedule),
+            "stopped_reason": self.stopped_reason,
+            "stopped_inside_warmup": self.stopped_inside_warmup,
         }
 
 
@@ -188,9 +217,19 @@ def select_recipe(
     if not passing:
         report["selected_recipe"] = None
         report["passed"] = False
+        denied = [r.recipe for r in results if r.stopped_inside_warmup]
+        report["recipes_stopped_inside_warmup"] = denied
         report["stop_reason"] = (
             "no candidate recipe met the tiny-overfit criteria; subset and full "
             "training must not run")
+        if denied:
+            # Audit 0046: this is exactly how the first Stage-2 run produced a
+            # three-way "failure" that said nothing about the recipes.
+            report["result_is_invalid_for_recipe_comparison"] = True
+            report["stop_reason"] = (
+                f"{denied} stopped before the scheduler reached its configured "
+                "learning rates, so this run is NOT evidence about those recipes; "
+                "re-run Stage 2 with the corrected stopping policy")
         return None, report
     selected = min(
         passing,
@@ -293,6 +332,115 @@ class SubsetResult:
 
 
 # ---------------------------------------------------------------------------
+# Save/reload reproduction (Audit 0046)
+# ---------------------------------------------------------------------------
+#
+# The first Stage-2 implementation "verified" reproduction with
+#
+#     set(reloaded["model_state"]) == {"base_model", "w2ner_head"}
+#
+# which proves only that two dictionary keys exist. It would pass for a
+# checkpoint full of zeros, for the wrong recipe's weights, or for a payload
+# whose tensors never loaded. Reproduction now means: restore into a FRESH
+# architecture and re-evaluate the same examples.
+
+# Metrics that must reproduce, and the tolerance they must reproduce within.
+REPRODUCTION_METRICS: tuple[str, ...] = (
+    "exact_precision", "exact_recall", "exact_f1",
+    "predicted_mentions", "positive_cell_accuracy",
+)
+DEFAULT_REPRODUCTION_TOLERANCE = 1e-6
+
+
+@dataclass(frozen=True, slots=True)
+class ReproductionCheck:
+    """Evidence that a saved checkpoint reproduces its pre-save evaluation.
+
+    Constructing one requires the metrics measured *before* saving and the
+    metrics measured *after* restoring into a freshly built model. There is no
+    constructor path that accepts "the keys looked right".
+    """
+
+    checkpoint_sha256: str
+    metrics_before: Mapping[str, float]
+    metrics_after: Mapping[str, float]
+    missing_keys: tuple[str, ...]
+    unexpected_keys: tuple[str, ...]
+    fresh_model_evaluated: bool
+    examples_evaluated: int
+    tolerance: float = DEFAULT_REPRODUCTION_TOLERANCE
+
+    def __post_init__(self) -> None:
+        for name, payload in (("metrics_before", self.metrics_before),
+                              ("metrics_after", self.metrics_after)):
+            missing = [m for m in REPRODUCTION_METRICS if m not in payload]
+            if missing:
+                raise GateError(
+                    f"{name} is missing {sorted(missing)}; a reproduction check "
+                    "needs the real evaluated metrics, not a key-name comparison")
+        if self.tolerance < 0.0:
+            raise GateError("reproduction tolerance must be non-negative")
+
+    def differences(self) -> dict[str, float]:
+        return {
+            metric: abs(float(self.metrics_after[metric])
+                        - float(self.metrics_before[metric]))
+            for metric in REPRODUCTION_METRICS
+        }
+
+    @property
+    def reproduced(self) -> bool:
+        if not self.fresh_model_evaluated or self.examples_evaluated <= 0:
+            return False
+        if self.missing_keys or self.unexpected_keys:
+            return False
+        return all(delta <= self.tolerance for delta in self.differences().values())
+
+    def failures(self) -> tuple[str, ...]:
+        problems: list[str] = []
+        if not self.fresh_model_evaluated:
+            problems.append("the checkpoint was never restored into a fresh model")
+        if self.examples_evaluated <= 0:
+            problems.append("no example was re-evaluated after restoration")
+        if self.missing_keys:
+            problems.append(f"missing state-dict keys: {sorted(self.missing_keys)}")
+        if self.unexpected_keys:
+            problems.append(
+                f"unexpected state-dict keys: {sorted(self.unexpected_keys)}")
+        problems.extend(
+            f"{metric} drifted by {delta:g} (tolerance {self.tolerance:g})"
+            for metric, delta in sorted(self.differences().items())
+            if delta > self.tolerance)
+        return tuple(problems)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "metrics_before": dict(self.metrics_before),
+            "metrics_after": dict(self.metrics_after),
+            "differences": self.differences(),
+            "tolerance": self.tolerance,
+            "missing_keys": list(self.missing_keys),
+            "unexpected_keys": list(self.unexpected_keys),
+            "fresh_model_evaluated": self.fresh_model_evaluated,
+            "examples_evaluated": self.examples_evaluated,
+            "reproduced": self.reproduced,
+            "failures": list(self.failures()),
+            "state_dict_key_names_alone_are_sufficient": False,
+        }
+
+
+def assert_real_reproduction(check: ReproductionCheck | None) -> bool:
+    """A recipe may only claim reproduction from a real re-evaluation."""
+    if check is None:
+        raise GateError(
+            "save/reload reproduction requires a ReproductionCheck built from a "
+            "fresh-model re-evaluation; comparing state-dict key names is not a "
+            "reproduction check")
+    return check.reproduced
+
+
+# ---------------------------------------------------------------------------
 # Gate artifacts
 # ---------------------------------------------------------------------------
 
@@ -324,11 +472,19 @@ class GateArtifact:
         }
 
     def write(self, path: str | Path) -> Path:
+        """Replace the gate atomically.
+
+        A rerun must never leave a half-written gate, and must never leave the
+        previous run's verdict alongside the new one. The temporary file lands
+        on the same filesystem so ``os.replace`` is atomic.
+        """
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
+        staged = target.with_name(target.name + ".tmp")
+        staged.write_text(
             json.dumps(self.as_dict(), indent=2, sort_keys=True) + "\n",
             encoding="utf-8")
+        os.replace(staged, target)
         return target
 
 
@@ -434,8 +590,12 @@ __all__ = [
     "SUBSET_MAX_GOLD_POSITIVE_BACKGROUND_RATE",
     "TINY_GATE_FILENAME",
     "TINY_TARGET_EXACT_F1",
+    "DEFAULT_REPRODUCTION_TOLERANCE",
+    "REPRODUCTION_METRICS",
     "GateArtifact",
     "GateError",
+    "ReproductionCheck",
+    "assert_real_reproduction",
     "RecipeResult",
     "SubsetResult",
     "assert_full_training_allowed",
