@@ -68,6 +68,6 @@ warn_unused_ignores = true
 # for an environment reason rather than a code reason. Skip them: their internals
 # are not this repository's contract.
 [[tool.mypy.overrides]]
-module = ["torch.*", "torch", "numpy.*", "numpy", "transformers.*", "transformers", "py_vncorenlp", "py_vncorenlp.*", "tqdm", "tqdm.*"]
+module = ["torch.*", "torch", "numpy.*", "numpy", "transformers.*", "transformers", "py_vncorenlp", "py_vncorenlp.*", "tqdm", "tqdm.*", "gliner", "gliner.*"]
 follow_imports = "skip"
 ignore_missing_imports = true

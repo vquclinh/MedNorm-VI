@@ -15,6 +15,7 @@ deterministic grammar, pinned pretrained checkpoints and locked ontologies.
 
 from __future__ import annotations
 
+from .backends import BackendError, GLiNERBackend, QwenBackend
 from .ledger import (
     MAX_ACTIVE_PARAMETERS,
     BudgetExceeded,
@@ -53,6 +54,14 @@ from .proposals import (
     resolve_occurrence,
 )
 from .resolver import ResolvedMention, ResolverThresholds, emitted, resolve
+from .runner import (
+    ArmExecutionError,
+    ArmSources,
+    Document,
+    assert_stage3_complete,
+    run_all_arms,
+    run_arm,
+)
 from .submission import (
     ArmResult,
     OrganizerPreconditions,
@@ -69,9 +78,14 @@ __all__ = [
     "ZS0_ARMS",
     "ZS0_B",
     "ZS0_C",
+    "ArmExecutionError",
     "ArmResult",
+    "ArmSources",
+    "BackendError",
     "BudgetExceeded",
     "Candidate",
+    "Document",
+    "GLiNERBackend",
     "LedgerEntry",
     "LedgerReport",
     "LinkingError",
@@ -79,6 +93,7 @@ __all__ = [
     "OntologySnapshot",
     "OrganizerPreconditions",
     "ProposalRejected",
+    "QwenBackend",
     "RejectionLedger",
     "ResolvedMention",
     "ResolverThresholds",
@@ -89,6 +104,7 @@ __all__ = [
     "all_arms",
     "assert_codes_in_snapshot",
     "assert_organizer_inference_allowed",
+    "assert_stage3_complete",
     "assert_zs0_components_allowed",
     "assert_zs0_feature_flags",
     "build_arm",
@@ -100,6 +116,8 @@ __all__ = [
     "render_ledger",
     "resolve",
     "resolve_occurrence",
+    "run_all_arms",
+    "run_arm",
     "select_arm",
     "validate_package",
 ]

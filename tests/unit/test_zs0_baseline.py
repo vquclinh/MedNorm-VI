@@ -34,6 +34,11 @@ from mednorm_vi.governance.e4_retirement import (
     assert_no_e4_checkpoint_required,
     assert_stage_not_forbidden,
 )
+from mednorm_vi.lattice.models import (
+    EXPERT_GLINER,
+    EXPERT_MEDICATION_GRAMMAR,
+    ExpertSpanProposal,
+)
 from mednorm_vi.schemas.constants import ASSERTION_LABELS, ORGANIZER_LABEL_BY_TYPE
 from mednorm_vi.zs0 import (
     MAX_ACTIVE_PARAMETERS,
@@ -369,7 +374,6 @@ def test_the_rejection_ledger_never_holds_clinical_text() -> None:
 
 def _proposal(start: int, end: int, entity_type: str, score: float, expert: str,
               ordinal: int = 1):
-    from mednorm_vi.lattice.models import ExpertSpanProposal
     return ExpertSpanProposal(
         document_id="d1", start=start, end=end, text=TEXT[start:end],
         type_scores={entity_type: score}, local_score=score, expert_id=expert,
@@ -377,7 +381,6 @@ def _proposal(start: int, end: int, entity_type: str, score: float, expert: str,
 
 
 def test_the_resolver_preserves_every_contributing_provenance() -> None:
-    from mednorm_vi.lattice.models import EXPERT_GLINER, EXPERT_MEDICATION_GRAMMAR
     resolved = resolve([
         _proposal(10, 17, "SYMPTOM", 0.9, EXPERT_GLINER, 1),
         _proposal(10, 17, "SYMPTOM", 0.8, EXPERT_MEDICATION_GRAMMAR, 2),
@@ -390,9 +393,7 @@ def test_the_resolver_preserves_every_contributing_provenance() -> None:
 
 def test_identical_text_at_different_positions_stays_two_mentions() -> None:
     """Text-only dedup would silently delete one of them (spec §5 case C7)."""
-    from mednorm_vi.lattice.models import EXPERT_GLINER
     text = "sốt và sốt"
-    from mednorm_vi.lattice.models import ExpertSpanProposal
     proposals = [
         ExpertSpanProposal(
             document_id="d", start=s, end=s + 3, text="sốt",
@@ -408,7 +409,6 @@ def test_identical_text_at_different_positions_stays_two_mentions() -> None:
 
 
 def test_the_resolver_is_deterministic_and_sorted() -> None:
-    from mednorm_vi.lattice.models import EXPERT_GLINER
     proposals = [
         _proposal(21, 28, "SYMPTOM", 0.9, EXPERT_GLINER, 1),
         _proposal(10, 17, "SYMPTOM", 0.9, EXPERT_GLINER, 2),
@@ -420,7 +420,6 @@ def test_the_resolver_is_deterministic_and_sorted() -> None:
 
 
 def test_the_resolver_abstains_on_a_lone_low_confidence_proposal() -> None:
-    from mednorm_vi.lattice.models import EXPERT_GLINER
     resolved = resolve(
         [_proposal(10, 17, "SYMPTOM", 0.10, EXPERT_GLINER)],
         thresholds=ResolverThresholds(min_single_expert_score=0.5))
@@ -854,3 +853,339 @@ def test_the_architecture_pdf_is_unchanged() -> None:
         (REPO / "docs" / "MedNorm-VI_Architecture.pdf").read_bytes()).hexdigest()
     assert digest == (
         "0d5eaa2045f6a4fba6c6505c14507a44e1c15768cb4adea76088b5f42081e09b")
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 actually runs (Audit 0049)
+# ---------------------------------------------------------------------------
+#
+# The Audit-0048 notebook shipped Stage 3 as a placeholder: it set
+# ARM_RESULTS = [] and printed a note asking the reader to populate it. Stage 4's
+# guard then fired correctly on an empty list. These tests pin the behaviour that
+# was missing, and the invariants that keep a broken run from looking like a
+# measured one.
+
+from mednorm_vi.zs0.backends import (  # noqa: E402
+    GLINER_PROMPT_LABELS,
+    BackendError,
+    GLiNERBackend,
+    QwenBackend,
+    build_mention_prompt,
+    extract_json_object,
+    parse_completion,
+)
+from mednorm_vi.zs0.runner import (  # noqa: E402
+    ArmExecutionError,
+    ArmSources,
+    Document,
+    assert_stage3_complete,
+    run_all_arms,
+    run_arm,
+)
+
+DOC_TEXT = "Bệnh nhân sốt cao và ho khan ."
+GOLD = ((10, 17, "SYMPTOM"),)
+
+
+def _document() -> Document:
+    return Document(document_id="d1", text=DOC_TEXT, gold=GOLD)
+
+
+def _det_hit(document: Document):
+    return [ExpertSpanProposal(
+        document_id=document.document_id, start=10, end=17,
+        text=document.text[10:17], type_scores={"SYMPTOM": 0.9}, local_score=0.9,
+        expert_id=EXPERT_MEDICATION_GRAMMAR, proposal_id="det-1",
+        original_start=10, original_end=17)]
+
+
+def _det_none(document: Document):
+    return []
+
+
+def _gliner_hit(text: str):
+    return [{"start": 21, "end": 28, "label": "symptom", "score": 0.8}]
+
+
+def _qwen_hit(text: str) -> str:
+    return json.dumps({"mentions": [{"text": "ho khan", "type": "SYMPTOM"}]})
+
+
+def _sources_for(arm_name: str) -> ArmSources:
+    if arm_name == ZS0_A:
+        return ArmSources(deterministic=_det_hit)
+    if arm_name == ZS0_B:
+        return ArmSources(deterministic=_det_hit, gliner=_gliner_hit)
+    return ArmSources(deterministic=_det_hit, gliner=_gliner_hit, qwen=_qwen_hit)
+
+
+def test_stage_three_produces_exactly_three_real_arm_results() -> None:
+    arms = list(all_arms())
+    results = run_all_arms(
+        arms, [_document()], {a.name: _sources_for(a.name) for a in arms})
+    assert len(results) == 3
+    assert {r.arm for r in results} == {ZS0_A, ZS0_B, ZS0_C}
+    assert_stage3_complete(results, arms)
+
+
+def test_stage_four_receives_exactly_three_results() -> None:
+    """The condition whose absence produced 'Stage 3 produced no arm results'."""
+    arms = list(all_arms())
+    results = run_all_arms(
+        arms, [_document()], {a.name: _sources_for(a.name) for a in arms})
+    selected, report = select_arm(results)
+    assert len(report["results"]) == 3
+    assert selected is not None
+
+
+def test_an_arm_with_zero_predictions_still_returns_a_result() -> None:
+    """Zero predictions is a measurement; a missing result is a bug."""
+    result = run_arm(build_arm(ZS0_A), [_document()],
+                     ArmSources(deterministic=_det_none))
+    assert result.arm == ZS0_A
+    assert result.exact_f1 == 0.0
+    assert result.exact_precision == 0.0
+    assert result.exact_recall == 0.0
+    assert result.offset_violations == 0
+    assert result.admissible
+
+
+def test_every_arm_returns_a_result_even_when_all_of_them_predict_nothing() -> None:
+    arms = list(all_arms())
+    empty = {
+        ZS0_A: ArmSources(deterministic=_det_none),
+        ZS0_B: ArmSources(deterministic=_det_none, gliner=lambda t: []),
+        ZS0_C: ArmSources(deterministic=_det_none, gliner=lambda t: [],
+                          qwen=lambda t: json.dumps({"mentions": []})),
+    }
+    results = run_all_arms(arms, [_document()], empty)
+    assert len(results) == 3
+    assert all(r.exact_f1 == 0.0 for r in results)
+
+
+def test_a_missing_backend_fails_loudly_and_names_the_arm() -> None:
+    with pytest.raises(ArmExecutionError) as excinfo:
+        run_arm(build_arm(ZS0_B), [_document()],
+                ArmSources(deterministic=_det_hit))   # no GLiNER
+    assert excinfo.value.arm == ZS0_B
+    assert "GLiNER" in excinfo.value.prerequisite
+    with pytest.raises(ArmExecutionError) as excinfo:
+        run_arm(build_arm(ZS0_C), [_document()],
+                ArmSources(deterministic=_det_hit, gliner=_gliner_hit))  # no Qwen
+    assert excinfo.value.arm == ZS0_C
+    assert "Qwen" in excinfo.value.prerequisite
+
+
+def test_an_arm_exception_propagates_and_is_never_swallowed() -> None:
+    def exploding(document):
+        raise RuntimeError("model went missing")
+
+    with pytest.raises(ArmExecutionError) as excinfo:
+        run_arm(build_arm(ZS0_A), [_document()],
+                ArmSources(deterministic=exploding))
+    assert excinfo.value.arm == ZS0_A
+    assert "deterministic E1/E2 path failed" in excinfo.value.prerequisite
+    assert "model went missing" in excinfo.value.detail
+
+
+def test_a_failing_arm_stops_the_whole_run_rather_than_shortening_it() -> None:
+    """Continuing past a broken arm would leave Stage 4 a short list again."""
+    arms = list(all_arms())
+    sources = {a.name: _sources_for(a.name) for a in arms}
+    sources[ZS0_B] = ArmSources(deterministic=_det_hit)   # missing GLiNER
+    with pytest.raises(ArmExecutionError) as excinfo:
+        run_all_arms(arms, [_document()], sources)
+    assert excinfo.value.arm == ZS0_B
+
+
+def test_run_all_arms_refuses_an_arm_with_no_sources() -> None:
+    arms = list(all_arms())
+    with pytest.raises(ArmExecutionError, match="no ArmSources"):
+        run_all_arms(arms, [_document()], {ZS0_A: _sources_for(ZS0_A)})
+
+
+def test_an_arm_refuses_to_run_on_no_documents() -> None:
+    with pytest.raises(ArmExecutionError, match="no governed validation document"):
+        run_arm(build_arm(ZS0_A), [], ArmSources(deterministic=_det_hit))
+
+
+def test_stage3_postcondition_catches_a_short_or_wrong_result_set() -> None:
+    arms = list(all_arms())
+    partial = [run_arm(build_arm(ZS0_A), [_document()], _sources_for(ZS0_A))]
+    with pytest.raises(ArmExecutionError, match="expected"):
+        assert_stage3_complete(partial, arms)
+
+
+def test_arm_metrics_are_real_and_reflect_the_predictions() -> None:
+    perfect = run_arm(build_arm(ZS0_A), [_document()],
+                      ArmSources(deterministic=_det_hit))
+    assert perfect.exact_precision == 1.0
+    assert perfect.exact_recall == 1.0
+    assert perfect.exact_f1 == 1.0
+    # Adding a second correct span raises recall on a two-gold document.
+    two_gold = Document(document_id="d1", text=DOC_TEXT,
+                        gold=((10, 17, "SYMPTOM"), (21, 28, "SYMPTOM")))
+    half = run_arm(build_arm(ZS0_A), [two_gold],
+                   ArmSources(deterministic=_det_hit))
+    assert half.exact_recall == 0.5
+    both = run_arm(build_arm(ZS0_B), [two_gold],
+                   ArmSources(deterministic=_det_hit, gliner=_gliner_hit))
+    assert both.exact_recall == 1.0
+
+
+def test_a_right_span_with_the_wrong_type_is_counted_as_wrong_type() -> None:
+    def wrong_type(document):
+        return [ExpertSpanProposal(
+            document_id=document.document_id, start=10, end=17,
+            text=document.text[10:17], type_scores={"DIAGNOSIS": 0.9},
+            local_score=0.9, expert_id=EXPERT_MEDICATION_GRAMMAR,
+            proposal_id="det-1", original_start=10, original_end=17)]
+
+    result = run_arm(build_arm(ZS0_A), [_document()],
+                     ArmSources(deterministic=wrong_type))
+    assert result.wrong_type_count == 1
+    assert result.exact_f1 == 0.0
+
+
+def test_malformed_model_output_is_counted_not_crashed_on() -> None:
+    result = run_arm(
+        build_arm(ZS0_C), [_document()],
+        ArmSources(deterministic=_det_none, gliner=lambda t: [],
+                   qwen=lambda t: "not json at all"))
+    assert result.malformed_proposal_count >= 1
+    assert result.exact_f1 == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 is independent of organizer inference
+# ---------------------------------------------------------------------------
+
+
+def test_stage_three_does_not_reference_organizer_inference() -> None:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    stage3 = [c for c in cells if "STAGE 3" in c]
+    assert len(stage3) == 1
+    source = stage3[0]
+    assert "RUN_ORGANIZER_INFERENCE" not in source
+    assert "CONFIRM_ORGANIZER_INFERENCE" not in source
+    assert "assert_organizer_inference_allowed" not in source
+
+
+def test_stage_three_is_no_longer_a_placeholder() -> None:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    source = next(c for c in cells if "STAGE 3" in c)
+    # The exact placeholder that shipped in Audit 0048.
+    assert "populate ARM_RESULTS with one ArmResult per arm" not in source
+    assert "ARM_RESULTS = []" not in source
+    # And what must be there instead.
+    assert "run_all_arms(" in source
+    assert "assert_stage3_complete(" in source
+    assert "GLiNERBackend(" in source
+    assert "QwenBackend(" in source
+    assert "run_phase1b(" in source
+
+
+def test_stage_three_has_no_try_except_around_an_arm() -> None:
+    """A caught arm error would reproduce the short-list failure silently."""
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    source = next(c for c in cells if "STAGE 3" in c)
+    assert "run_all_arms(" in source
+    run_index = source.index("run_all_arms(")
+    assert "try:" not in source[max(0, run_index - 400):run_index]
+
+
+def test_arm_results_is_assigned_exactly_once_from_the_runner() -> None:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    assignments = [line.strip() for cell in cells for line in cell.splitlines()
+                   if line.strip().startswith("ARM_RESULTS =")]
+    assert assignments == ["ARM_RESULTS = run_all_arms("]
+
+
+# ---------------------------------------------------------------------------
+# The real backends
+# ---------------------------------------------------------------------------
+
+
+def test_the_backends_import_without_their_heavy_dependencies() -> None:
+    """The module must import on a laptop with neither gliner nor a GPU."""
+    assert GLiNERBackend().loaded is False
+    assert QwenBackend().loaded is False
+
+
+def test_an_unloaded_backend_refuses_to_predict_or_count() -> None:
+    with pytest.raises(BackendError, match="not loaded"):
+        GLiNERBackend().predict("text")
+    with pytest.raises(BackendError, match="not loaded"):
+        GLiNERBackend().parameter_count()
+    with pytest.raises(BackendError, match="not loaded"):
+        QwenBackend().generate("prompt")
+    with pytest.raises(BackendError, match="not loaded"):
+        QwenBackend().parameter_count()
+
+
+def test_the_gliner_prompt_labels_map_into_the_five_btc_types() -> None:
+    from mednorm_vi.zs0.proposals import map_gliner_label
+    mapped = {map_gliner_label(label) for label in GLINER_PROMPT_LABELS}
+    assert mapped <= set(ORGANIZER_LABEL_BY_TYPE)
+    assert len(mapped) == 5
+
+
+def test_the_qwen_prompt_forbids_invention_and_names_the_types() -> None:
+    prompt = build_mention_prompt("Bệnh nhân sốt cao .")
+    assert "verbatim" in prompt
+    assert "never paraphrase" in prompt
+    for entity_type in ORGANIZER_LABEL_BY_TYPE:
+        assert entity_type in prompt
+    assert "anchor" in prompt
+    assert "Bệnh nhân sốt cao ." in prompt
+
+
+def test_a_fenced_completion_is_recovered_without_repairing_its_content() -> None:
+    fenced = '```json\n{"mentions": [{"text": "sốt", "type": "SYMPTOM"}]}\n```'
+    recovered = parse_completion(fenced)
+    assert json.loads(recovered)["mentions"][0]["text"] == "sốt"
+    # A nested object still balances correctly.
+    nested = 'Here: {"mentions": [{"text": "a", "type": "SYMPTOM"}]} done'
+    assert json.loads(parse_completion(nested))["mentions"][0]["text"] == "a"
+    # Genuinely malformed text is handed through, not repaired.
+    assert json.loads(json.dumps(extract_json_object("no object here"))) == (
+        "no object here")
+
+
+def test_the_backends_never_train() -> None:
+    from mednorm_vi.zs0 import backends as backends_module
+    tokens = _executable_tokens(Path(backends_module.__file__))
+    for forbidden in (" backward ( ", " AdamW ", " optim ", " zero_grad ( "):
+        assert forbidden not in tokens, forbidden
+    source = Path(backends_module.__file__).read_text(encoding="utf-8")
+    assert "torch.no_grad()" in source
+    assert ".eval()" in source
+    # Greedy decoding only: a sampled model is not reproducible.
+    assert "do_sample=False" in source
+
+
+def test_no_forbidden_expert_is_reachable_from_the_runner() -> None:
+    from mednorm_vi.zs0 import runner as runner_module
+    source = Path(runner_module.__file__).read_text(encoding="utf-8")
+    for forbidden in ("vihealthbert", "phobert_w2ner", "xlmr_mrc",
+                      "EXPERT_VIHEALTHBERT", "EXPERT_PHOBERT_W2NER",
+                      "EXPERT_XLMR_MRC"):
+        assert forbidden not in source, forbidden
+
+
+def test_the_notebook_stage_three_activates_no_forbidden_expert() -> None:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    source = next(c for c in cells if "STAGE 3" in c)
+    for forbidden in ("vihealthbert", "phobert_w2ner", "xlmr_mrc",
+                      "backward", "AdamW", "torch.optim"):
+        assert forbidden not in source, forbidden
