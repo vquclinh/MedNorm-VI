@@ -35,8 +35,10 @@ feature_flags:
   # Preserved measured default from Audit 0033: E3 ViHealthBERT remains the only
   # enabled trained mention expert unless an ablation validates a wider lattice.
   enable_e3_vihealthbert: true
-  # Phase-2 trainable specialists are implemented but disabled until valid local
-  # checkpoints exist and validation-split ablations support enabling them.
+  # E4 is RETIRED_FROM_ACTIVE_STACK (Audit 0048). Its completed Stage-2 ablation
+  # selected no recipe (best exact F1 0.7333 by group_balanced_ce against a 0.95
+  # gate). Source, tests and Audits 0043-0047 are preserved as evidence; only
+  # activation is withdrawn. This flag must never be true again.
   enable_e4_phobert_w2ner: false
   enable_e5_xlmr_mrc: false
   enable_e6_gliner: false
@@ -51,7 +53,8 @@ specialist_requires_checkpoints:
   - assertion/assertion_hydra
 full_requires_checkpoints:
   - mention/vihealthbert
-  - mention/phobert_w2ner
+  # mention/phobert_w2ner removed: E4 is RETIRED_FROM_ACTIVE_STACK (Audit 0048).
+  # A retired expert has no checkpoint and none is expected.
   - mention/xlmr_mrc
   - mention/gliner
   - mention/qwen3_1_7b_proposer

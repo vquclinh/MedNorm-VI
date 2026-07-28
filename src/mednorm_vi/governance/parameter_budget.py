@@ -55,9 +55,18 @@ STATUS_PLANNED = "PLANNED"            # architecture-declared, not implemented y
 STATUS_IMPLEMENTED = "IMPLEMENTED"    # code exists, no trained checkpoint
 STATUS_TRAINED = "TRAINED"            # a validated checkpoint exists
 STATUS_EXCLUDED_BY_ABLATION = "EXCLUDED_BY_ABLATION"  # researched, not deployed
+# Audit 0048: researched to completion, then withdrawn from the active stack by
+# an owner decision. Distinct from EXCLUDED_BY_ABLATION, which is a measurement
+# outcome — retirement is a decision recorded on top of one.
+STATUS_RETIRED_FROM_ACTIVE_STACK = "RETIRED_FROM_ACTIVE_STACK"
 
 REGISTRY_STATUSES: tuple[str, ...] = (
-    STATUS_PLANNED, STATUS_IMPLEMENTED, STATUS_TRAINED, STATUS_EXCLUDED_BY_ABLATION)
+    STATUS_PLANNED, STATUS_IMPLEMENTED, STATUS_TRAINED,
+    STATUS_EXCLUDED_BY_ABLATION, STATUS_RETIRED_FROM_ACTIVE_STACK)
+
+# Statuses a deployment manifest may never select.
+NON_DEPLOYABLE_STATUSES: tuple[str, ...] = (
+    STATUS_PLANNED, STATUS_EXCLUDED_BY_ABLATION, STATUS_RETIRED_FROM_ACTIVE_STACK)
 
 # How a parameter count was obtained. Only COUNTED_FROM_CONFIG is trustworthy for
 # a deployment decision.
@@ -482,7 +491,9 @@ __all__ = [
     "REGISTRY_STATUSES",
     "STATUS_EXCLUDED_BY_ABLATION",
     "STATUS_IMPLEMENTED",
+    "NON_DEPLOYABLE_STATUSES",
     "STATUS_PLANNED",
+    "STATUS_RETIRED_FROM_ACTIVE_STACK",
     "STATUS_TRAINED",
     "VERIFIED_METHODS",
     "CandidateModel",

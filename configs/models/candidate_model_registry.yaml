@@ -52,7 +52,13 @@ components:
   - component_id: e4_phobert_w2ner
     architecture_layer: L3
     training_stage: S1
-    status: IMPLEMENTED
+    # Audit 0048: retired by the human owner after a completed, valid Stage-2
+    # ablation. Best exact F1 0.7333 (group_balanced_ce) against a 0.95 gate;
+    # no recipe was selected, so Stage 3 and full training never ran.
+    status: RETIRED_FROM_ACTIVE_STACK
+    retired_by_audit: "0048"
+    best_measured_tiny_exact_f1: 0.7333
+    in_active_deployment: false
     model_id: vinai/phobert-large
     pinned_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
     checkpoint_role: w2ner_relation_grid

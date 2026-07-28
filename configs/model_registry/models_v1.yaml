@@ -47,7 +47,10 @@ models:
     load_order: 11
     enabled_profiles: [Safe-8.85B, Lean-6.5B, No-LLM-baseline, full]
 
+  # RETIRED_FROM_ACTIVE_STACK (Audit 0048). Retained as a historical research
+  # record; it is in no enabled profile and loads no weights.
   - model_id: phobert_large_w2ner
+    status: RETIRED_FROM_ACTIVE_STACK
     role: l3_e4_phobert_w2ner
     base_parameter_count: 370000000
     adapter_parameter_count: 3000000

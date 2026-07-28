@@ -88,6 +88,8 @@ LATER_NOTEBOOKS = {
         "0031-s1-full-training-run-validation-and-internal-test-evaluation.md",
     "MedNorm_E4_Clean_Training.ipynb":
         "0045-clean-slate-e4-replacement-and-gated-training.md",
+    "MedNorm_ZS0_Baseline_Submission.ipynb":
+        "0048-e4-retirement-and-zs0-zero-shot-baseline.md",
     "MedNorm_E5_XLMR_MRC_NER_Training.ipynb":
         "0035-multi-expert-mention-ensemble-and-learned-l4-v2.md",
     "MedNorm_L4_Learned_Resolver_v2_Training.ipynb":
@@ -100,7 +102,7 @@ EXPECTED_INVENTORY = AUDIT_0017_INVENTORY | set(LATER_NOTEBOOKS)
 
 def test_notebook_inventory_matches_expected() -> None:
     assert set(ALL_NOTEBOOKS) == EXPECTED_INVENTORY
-    assert len(ALL_NOTEBOOKS) == 17
+    assert len(ALL_NOTEBOOKS) == 18
     audit_dir = REPO / "docs" / "audits"
     audit_0017 = (audit_dir / "0017-training-readiness-and-governed-corpus.md").read_text(
         encoding="utf-8")

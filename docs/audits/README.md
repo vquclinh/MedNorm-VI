@@ -90,3 +90,4 @@ Each audit should record, at minimum:
 - `0045-clean-slate-e4-replacement-and-gated-training.md`
 - `0046-e4-tiny-overfit-execution-contract-repair.md`
 - `0047-e4-positive-cell-objective-repair.md`
+- `0048-e4-retirement-and-zs0-zero-shot-baseline.md`
