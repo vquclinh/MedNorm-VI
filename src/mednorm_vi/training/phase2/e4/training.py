@@ -597,3 +597,158 @@ __all__ = [  # noqa: F822 - extends the module surface defined above
     "TinyOverfitStopPolicy",
     "plan_schedule",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Best versus final metrics (Audit 0047)
+# ---------------------------------------------------------------------------
+#
+# The Stage-2 loop rebound `metrics` every epoch and returned it after the loop,
+# so `outcome["metrics"]` was the FINAL epoch's evaluation while
+# `outcome["best_state"]` held the BEST epoch's weights. Reproduction then
+# compared the final-epoch metrics against a re-evaluation of the best state —
+# two different models. It reported False for both CE variants, and True for the
+# retired focal candidate only because both sides were all-zero.
+#
+# The contract now names all four quantities and refuses to conflate them.
+
+BEST_STATE_PRE_SERIALIZATION = "best_state_pre_serialization"
+BEST_STATE_POST_RELOAD = "best_state_post_reload"
+FINAL_EPOCH_METRICS = "final_epoch_metrics"
+
+# The only provenance pair a reproduction check may be built from.
+VALID_REPRODUCTION_SOURCES: tuple[str, str] = (
+    BEST_STATE_PRE_SERIALIZATION, BEST_STATE_POST_RELOAD)
+
+
+@dataclass(frozen=True, slots=True)
+class BestFinalRecord:
+    """Best and final epochs kept explicitly apart.
+
+    ``best_metrics`` is what the gate judges and what reproduction compares.
+    ``final_metrics`` is retained for trajectory reporting only — it is never a
+    reproduction operand.
+    """
+
+    best_epoch: int
+    best_metrics: Mapping[str, Any]
+    final_epoch: int
+    final_metrics: Mapping[str, Any]
+    best_state_changed_at: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.best_epoch < 1 or self.final_epoch < 1:
+            raise E4TrainingError("epochs are 1-based")
+        if self.best_epoch > self.final_epoch:
+            raise E4TrainingError(
+                "the best epoch cannot come after the final epoch")
+        if not self.best_metrics or not self.final_metrics:
+            raise E4TrainingError(
+                "both best_metrics and final_metrics must be recorded explicitly")
+
+    @property
+    def best_is_final(self) -> bool:
+        return self.best_epoch == self.final_epoch
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "best_epoch": self.best_epoch,
+            "best_metrics": dict(self.best_metrics),
+            "final_epoch": self.final_epoch,
+            "final_metrics": dict(self.final_metrics),
+            "best_is_final": self.best_is_final,
+            "best_state_changed_at": list(self.best_state_changed_at),
+            "final_metrics_used_for_reproduction": False,
+        }
+
+
+def assert_gate_uses_best_metrics(source: str) -> None:
+    """The tiny gate judges the checkpoint that will be saved, not the last one."""
+    if source != BEST_STATE_PRE_SERIALIZATION:
+        raise E4TrainingError(
+            f"the tiny gate must be evaluated from {BEST_STATE_PRE_SERIALIZATION!r}, "
+            f"not {source!r}; judging the final epoch while saving the best state "
+            "is what produced the Audit-0047 reproduction mismatch")
+
+
+# ---------------------------------------------------------------------------
+# Per-epoch diagnostic telemetry (Audit 0047)
+# ---------------------------------------------------------------------------
+#
+# The first two ablations were hard to read because the interesting quantities
+# were not recorded. Aggregate counts and rates only; no clinical text ever.
+
+POSITIVE_CLASS_ORDER: tuple[str, ...] = (
+    "NNW", "THW:DIAGNOSIS", "THW:MEDICATION", "THW:SYMPTOM")
+
+
+@dataclass(frozen=True, slots=True)
+class EpochTelemetry:
+    """Everything one Stage-2 epoch should have told us the first time."""
+
+    epoch: int
+    recipe: str
+    optimizer_steps: int
+    best_exact_f1: float
+    final_exact_f1: float
+    positive_cell_accuracy: float
+    per_positive_class_accuracy: Mapping[str, float]
+    gold_positive_predicted_as_none_rate: float
+    loss_positive: float
+    loss_background: float
+    positive_cells: int
+    background_cells: int
+    head_grad_norm: float
+    backbone_grad_norm: float
+    mean_none_logit_on_gold_positive: float
+    strongest_non_none_margin_on_gold_positive: float
+    best_epoch: int
+    best_state_changed: bool
+    selected_hard_negatives: int | None = None
+    total_background_candidates: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "stage": "tiny_epoch_telemetry",
+            "epoch": self.epoch,
+            "recipe": self.recipe,
+            "optimizer_steps": self.optimizer_steps,
+            "best_exact_f1": self.best_exact_f1,
+            "final_exact_f1": self.final_exact_f1,
+            "positive_cell_accuracy": self.positive_cell_accuracy,
+            "per_positive_class_accuracy": {
+                name: float(self.per_positive_class_accuracy.get(name, 0.0))
+                for name in POSITIVE_CLASS_ORDER},
+            "gold_positive_predicted_as_none_rate": (
+                self.gold_positive_predicted_as_none_rate),
+            "loss_positive": self.loss_positive,
+            "loss_background": self.loss_background,
+            "positive_cells": self.positive_cells,
+            "background_cells": self.background_cells,
+            "head_grad_norm": self.head_grad_norm,
+            "backbone_grad_norm": self.backbone_grad_norm,
+            "mean_none_logit_on_gold_positive": self.mean_none_logit_on_gold_positive,
+            "strongest_non_none_margin_on_gold_positive": (
+                self.strongest_non_none_margin_on_gold_positive),
+            "best_epoch": self.best_epoch,
+            "best_state_changed": self.best_state_changed,
+            "contains_clinical_text": False,
+            "internal_test_accessed": False,
+        }
+        if self.selected_hard_negatives is not None:
+            payload["selected_hard_negatives"] = self.selected_hard_negatives
+            payload["total_background_candidates"] = self.total_background_candidates
+        return payload
+
+
+__all__ = [  # noqa: F822 - extends the module surface defined above
+    *__all__,
+    "BEST_STATE_POST_RELOAD",
+    "BEST_STATE_PRE_SERIALIZATION",
+    "FINAL_EPOCH_METRICS",
+    "POSITIVE_CLASS_ORDER",
+    "VALID_REPRODUCTION_SOURCES",
+    "BestFinalRecord",
+    "EpochTelemetry",
+    "assert_gate_uses_best_metrics",
+]

@@ -157,23 +157,74 @@ recipes:
     early_stopping_patience: 3
     best_criterion: max_validation_exact_f1_governed_validation_only
 
+  # -------------------------------------------------------------------------
+  # Stage-2 objectives (Audit 0047 revised this set on completed evidence)
+  # -------------------------------------------------------------------------
   reference_ce:
+    stage2_objective: true
     objective: cross_entropy
+    reduction: batch_global_valid_cell_mean
     data_order: shuffled_source_interleaved
+    role: baseline
 
-  reference_ce_resampled:
+  group_balanced_ce:
+    stage2_objective: true
     objective: cross_entropy
-    data_order: positive_aware_resampled
-
-  balanced_focal:
-    objective: focal
+    reduction: batch_global_group_balanced_mean
     data_order: shuffled_source_interleaved
-    gamma: 2.0
-    alpha: 0.25
-    # alpha/(1-alpha) = 0.333 positive:background. The raw 577:1 inverse
-    # frequency weight is explicitly refused by the loader.
-    max_effective_class_weight_ratio: 100.0
+    # loss = positive_weight * positive_mean + background_weight * background_mean
+    # Each GROUP is averaged before it is weighted, so the 577:1 imbalance
+    # changes neither weight. This is not inverse-frequency class weighting.
+    positive_group_weight: 0.5
+    background_group_weight: 0.5
+    every_positive_cell_participates: true
+    no_positive_cell_fallback: background_mean_only
+    max_effective_group_weight_ratio: 100.0
     log_positive_background_total_loss_separately: true
+
+  hard_negative_ce:
+    stage2_objective: true
+    objective: hard_negative
+    reduction: batch_global_selected_cell_mean
+    data_order: shuffled_source_interleaved
+    # Every positive cell participates; only the highest-loss background cells
+    # are retained, bounded by a ratio against the positive count.
+    negative_to_positive_ratio: 3
+    no_positive_background_cap: 32
+    every_positive_cell_participates: true
+    selection: deterministic_highest_loss_then_position
+    falls_back_to_all_cell_ce: false
+    log_selected_and_total_background_counts: true
+
+  # -------------------------------------------------------------------------
+  # Defined, but NOT a Stage-2 objective
+  # -------------------------------------------------------------------------
+  reference_ce_resampled:
+    stage2_objective: false
+    objective: cross_entropy
+    reduction: batch_global_valid_cell_mean
+    data_order: positive_aware_resampled
+    # It differs from reference_ce only in DATA ORDER, and the tiny set is
+    # entirely positive examples, so zero-entity resampling has nothing to
+    # reorder there. Retained for Stage 3 and full training, where it is real.
+    available_for: [stage3_subset_smoke, stage4_full_training]
+
+retired_recipes:
+  balanced_focal:
+    retired_by: Audit 0047
+    # A COMPLETED run, not a runtime failure: 200 epochs, 600 optimizer steps,
+    # all 60 warmup steps served, peak learning rates reached.
+    epochs_completed: 200
+    optimizer_steps: 600
+    warmup_served: full
+    exact_f1: 0.0
+    predicted_mentions: 0
+    positive_cell_accuracy: 0.0
+    loss_positive: 0.468997
+    loss_background: 0.000521
+    reason: >-
+      optimized the easy background majority to near zero while never producing
+      a single relation; removed from Stage-2 selection rather than carried along.
 
 # ---------------------------------------------------------------------------
 # Stages

@@ -25,7 +25,10 @@ import yaml
 from mednorm_vi.mention_factory.w2ner import W2NERLabelVocab
 from mednorm_vi.training.phase2.e4 import (
     RECIPE_NAMES,
+    STAGE2_RECIPE_NAMES,
     BatchGlobalAccumulator,
+    BestFinalRecord,
+    EpochTelemetry,
     ExampleIndex,
     GateArtifact,
     RecipeResult,
@@ -64,17 +67,25 @@ from mednorm_vi.training.phase2.e4.gates import (
     required_supervised_types,
 )
 from mednorm_vi.training.phase2.e4.recipes import (
-    BALANCED_FOCAL,
+    BATCH_GLOBAL_GROUP_BALANCED_MEAN,
+    BATCH_GLOBAL_SELECTED_CELL_MEAN,
+    BATCH_GLOBAL_VALID_CELL_MEAN,
+    DEFAULT_NEGATIVE_TO_POSITIVE_RATIO,
+    GROUP_BALANCED_CE,
+    HARD_NEGATIVE_CE,
     REFERENCE_CE,
     REFERENCE_CE_RESAMPLED,
-    FocalConfig,
+    RETIRED_RECIPE_NAMES,
+    GroupWeights,
+    HardNegativeConfig,
     OptimizerGroups,
     RecipeError,
     ScheduleConfig,
     cross_entropy_cell,
-    focal_cell,
     microbatch_scale,
     reduce_grid,
+    select_hard_negatives,
+    stage2_recipes,
 )
 from mednorm_vi.training.phase2.e4.sampling import (
     POSITIVE_AWARE_RESAMPLED,
@@ -83,12 +94,17 @@ from mednorm_vi.training.phase2.e4.sampling import (
     assert_order_preserves_corpus,
 )
 from mednorm_vi.training.phase2.e4.training import (
+    BEST_STATE_POST_RELOAD,
+    BEST_STATE_PRE_SERIALIZATION,
+    FINAL_EPOCH_METRICS,
+    POSITIVE_CLASS_ORDER,
     TINY_STOP_EPOCH_BOUND,
     TINY_STOP_GATE_MET,
     TINY_STOP_NUMERIC_FAILURE,
     TINY_STOP_PROVEN_NOT_LEARNING,
     BestCheckpointSelector,
     E4TrainingError,
+    assert_gate_uses_best_metrics,
     assert_not_collapsed_when_marking_trained,
 )
 
@@ -324,16 +340,18 @@ def test_reduce_grid_skips_masked_cells() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_exactly_three_candidate_recipes_exist() -> None:
-    assert RECIPE_NAMES == (REFERENCE_CE, REFERENCE_CE_RESAMPLED, BALANCED_FOCAL)
-    assert len(all_recipes()) == 3
+def test_stage_two_compares_exactly_three_objectives() -> None:
+    assert STAGE2_RECIPE_NAMES == (REFERENCE_CE, GROUP_BALANCED_CE, HARD_NEGATIVE_CE)
+    assert len(stage2_recipes()) == 3
     with pytest.raises(RecipeError, match="unknown recipe"):
         build_recipe("reference_ce_v2")
 
 
-def test_every_recipe_uses_the_batch_global_reduction() -> None:
+def test_every_recipe_uses_a_batch_global_reduction() -> None:
     for recipe in all_recipes():
-        assert recipe.reduction == "batch_global_valid_cell_mean"
+        assert recipe.reduction in (
+            BATCH_GLOBAL_VALID_CELL_MEAN, BATCH_GLOBAL_GROUP_BALANCED_MEAN,
+            BATCH_GLOBAL_SELECTED_CELL_MEAN)
         assert recipe.as_dict()["per_example_mean_used"] is False
 
 
@@ -375,53 +393,18 @@ def test_the_schedule_warms_up_then_decays() -> None:
     # The collapsed run held one constant rate for all 50,748 steps.
     assert schedule.multiplier_at(0, 1000) != schedule.multiplier_at(500, 1000)
     assert schedule.max_grad_norm == 5.0
-
-
-def test_focal_downweights_easy_background_but_keeps_every_positive() -> None:
-    config = FocalConfig()
-    easy_background = [12.0, 0.0, 0.0]     # confident NONE
-    hard_positive = [4.0, 0.0, 0.0]        # confident NONE where gold is positive
-    easy_ce = cross_entropy_cell(easy_background, 0)
-    easy_focal = focal_cell(easy_background, 0, gamma=config.gamma,
-                            alpha=config.alpha)
-    positive_ce = cross_entropy_cell(hard_positive, 2)
-    positive_focal = focal_cell(hard_positive, 2, gamma=config.gamma,
-                                alpha=config.alpha)
-    # An easy background cell is suppressed by orders of magnitude...
-    assert easy_focal < easy_ce / 1000
-    # ...while a hard positive keeps essentially the full alpha weight: the
-    # focal factor is exactly (1 - p_t)**gamma, and p_t is tiny where the model
-    # is confidently wrong, so almost nothing is removed.
-    import math
-    p_t = math.exp(-positive_ce)
-    assert positive_focal == pytest.approx(
-        config.alpha * ((1.0 - p_t) ** config.gamma) * positive_ce)
-    assert positive_focal >= config.alpha * positive_ce * 0.95
-    assert positive_focal > easy_focal * 1000
-
-
-def test_focal_refuses_the_raw_inverse_frequency_regime() -> None:
-    with pytest.raises(RecipeError, match="inverse-frequency regime"):
-        FocalConfig(alpha=0.995)
-    with pytest.raises(RecipeError, match="between 0 and 1"):
-        FocalConfig(alpha=1.0)
-    with pytest.raises(RecipeError, match="non-negative"):
-        FocalConfig(gamma=-1.0)
-    # 577:1 is the measured background:positive ratio; nothing near it is allowed.
-    assert FocalConfig().as_dict()[
-        "effective_positive_to_background_weight_ratio"] < 1.0
-
-
-def test_only_the_focal_recipe_carries_a_focal_config() -> None:
-    assert build_recipe(BALANCED_FOCAL).focal is not None
-    assert build_recipe(REFERENCE_CE).focal is None
-    assert build_recipe(REFERENCE_CE_RESAMPLED).focal is None
+def test_only_the_hard_negative_recipe_carries_a_mining_config() -> None:
+    assert build_recipe(HARD_NEGATIVE_CE).hard_negative is not None
+    assert build_recipe(REFERENCE_CE).hard_negative is None
+    assert build_recipe(GROUP_BALANCED_CE).hard_negative is None
+    assert build_recipe(GROUP_BALANCED_CE).group_weights is not None
 
 
 def test_only_the_resampled_recipe_uses_positive_aware_sampling() -> None:
     assert build_recipe(REFERENCE_CE_RESAMPLED).uses_positive_aware_sampling
     assert not build_recipe(REFERENCE_CE).uses_positive_aware_sampling
-    assert not build_recipe(BALANCED_FOCAL).uses_positive_aware_sampling
+    assert not build_recipe(GROUP_BALANCED_CE).uses_positive_aware_sampling
+    assert not build_recipe(HARD_NEGATIVE_CE).uses_positive_aware_sampling
 
 
 # ---------------------------------------------------------------------------
@@ -675,15 +658,15 @@ REQUIRED = ("DIAGNOSIS", "MEDICATION", "SYMPTOM")
 
 
 def test_the_tiny_stage_compares_all_three_recipes() -> None:
-    results = [_result(name) for name in RECIPE_NAMES]
+    results = [_result(name) for name in STAGE2_RECIPE_NAMES]
     selected, report = select_recipe(results, required_types=REQUIRED)
-    assert {r["recipe"] for r in report["recipes_evaluated"]} == set(RECIPE_NAMES)
+    assert {r["recipe"] for r in report["recipes_evaluated"]} == set(STAGE2_RECIPE_NAMES)
     assert len(report["pass_summary"]) == 3
     assert selected is not None
 
 
 def test_an_exact_tie_selects_the_simplest_recipe() -> None:
-    results = [_result(name) for name in RECIPE_NAMES]
+    results = [_result(name) for name in STAGE2_RECIPE_NAMES]
     selected, _report = select_recipe(results, required_types=REQUIRED)
     assert selected.recipe == REFERENCE_CE
 
@@ -691,16 +674,16 @@ def test_an_exact_tie_selects_the_simplest_recipe() -> None:
 def test_selection_prefers_f1_then_recall_then_fewer_false_positives() -> None:
     results = [
         _result(REFERENCE_CE, exact_f1=0.96, exact_recall=0.96),
-        _result(BALANCED_FOCAL, exact_f1=0.99, exact_recall=0.99),
+        _result(GROUP_BALANCED_CE, exact_f1=0.99, exact_recall=0.99),
     ]
     selected, _ = select_recipe(results, required_types=REQUIRED)
-    assert selected.recipe == BALANCED_FOCAL
+    assert selected.recipe == GROUP_BALANCED_CE
     tie = [
         _result(REFERENCE_CE, exact_f1=0.99, exact_recall=0.99, false_positives=5),
-        _result(BALANCED_FOCAL, exact_f1=0.99, exact_recall=0.99, false_positives=1),
+        _result(GROUP_BALANCED_CE, exact_f1=0.99, exact_recall=0.99, false_positives=1),
     ]
     selected, _ = select_recipe(tie, required_types=REQUIRED)
-    assert selected.recipe == BALANCED_FOCAL
+    assert selected.recipe == GROUP_BALANCED_CE
 
 
 def test_grid_cell_accuracy_is_never_a_pass_criterion() -> None:
@@ -725,7 +708,7 @@ def test_a_recipe_missing_a_supervised_type_fails() -> None:
 
 
 def test_when_no_recipe_passes_the_chain_stops() -> None:
-    failing = [_result(name, exact_f1=0.1) for name in RECIPE_NAMES]
+    failing = [_result(name, exact_f1=0.1) for name in STAGE2_RECIPE_NAMES]
     selected, report = select_recipe(failing, required_types=REQUIRED)
     assert selected is None
     assert report["passed"] is False
@@ -805,7 +788,7 @@ def test_full_training_is_refused_when_no_gate_artifact_exists(tmp_path: Path) -
 
 
 def test_full_training_is_refused_when_the_gates_disagree(tmp_path: Path) -> None:
-    _write_gates(tmp_path, tiny_recipe=REFERENCE_CE, subset_recipe=BALANCED_FOCAL)
+    _write_gates(tmp_path, tiny_recipe=REFERENCE_CE, subset_recipe=GROUP_BALANCED_CE)
     with pytest.raises(GateError, match="but the subset smoke validated"):
         assert_full_training_allowed(gate_dir=tmp_path, **FULL_OK)
 
@@ -988,7 +971,7 @@ def test_the_config_is_valid_and_committed_unauthorized() -> None:
     assert config["permitted"]["internal_test_access"] is False
     assert config["permitted"]["output_zip_creation"] is False
     assert config["permitted"]["tracked_checkpoints"] is False
-    assert set(config["recipes"]) == {"shared", *RECIPE_NAMES}
+    assert set(config["recipes"]) >= {"shared", *STAGE2_RECIPE_NAMES}
     assert config["recipes"]["shared"]["loss_reduction"] == (
         "batch_global_valid_cell_mean")
     assert config["recipes"]["shared"]["per_example_mean"] is False
@@ -1249,13 +1232,13 @@ def test_a_failed_ablation_says_when_it_is_not_evidence_about_the_recipes() -> N
                 positive_cell_accuracy=0.0, thw_predictions_by_type={},
                 schedule=_schedule(peak=False),
                 stopped_reason="early_stopping_patience")
-        for name in RECIPE_NAMES
+        for name in STAGE2_RECIPE_NAMES
     ]
     selected, report = select_recipe(denied, required_types=REQUIRED)
     assert selected is None
     assert report["passed"] is False
     assert report["result_is_invalid_for_recipe_comparison"] is True
-    assert set(report["recipes_stopped_inside_warmup"]) == set(RECIPE_NAMES)
+    assert set(report["recipes_stopped_inside_warmup"]) == set(STAGE2_RECIPE_NAMES)
     assert "NOT evidence about those recipes" in report["stop_reason"]
 
 
@@ -1265,7 +1248,7 @@ def test_a_genuine_failure_after_full_warmup_is_not_flagged_as_invalid() -> None
                 positive_cell_accuracy=0.0, thw_predictions_by_type={},
                 schedule=_schedule(peak=True),
                 stopped_reason=TINY_STOP_EPOCH_BOUND)
-        for name in RECIPE_NAMES
+        for name in STAGE2_RECIPE_NAMES
     ]
     _selected, report = select_recipe(honest, required_types=REQUIRED)
     assert report["recipes_stopped_inside_warmup"] == []
@@ -1414,5 +1397,396 @@ def test_the_notebook_still_deletes_candidate_checkpoints() -> None:
 
 def test_the_notebook_emits_tiny_heartbeats() -> None:
     code = _notebook_code()
-    assert "tiny_heartbeat" in code
+    assert "EpochTelemetry(" in code
     assert "should_heartbeat(" in code
+
+
+# ---------------------------------------------------------------------------
+# Best versus final metrics (Audit 0047)
+# ---------------------------------------------------------------------------
+#
+# The completed 200-epoch ablation reported save/reload False for both CE
+# variants and True for the retired focal candidate. The cause was not the
+# checkpoints: `metrics_before` carried the FINAL epoch's evaluation while
+# `metrics_after` re-evaluated the BEST state, so the check compared two
+# different models. Focal "passed" only because both sides were all-zero.
+
+
+def test_reproduction_refuses_final_epoch_metrics_as_an_operand() -> None:
+    """The mechanical block on the exact defect."""
+    before = {"exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+              "predicted_mentions": 22.0, "positive_cell_accuracy": 0.98}
+    with pytest.raises(GateError, match="Audit-0047 defect"):
+        ReproductionCheck(
+            checkpoint_sha256="a" * 64, metrics_before=before,
+            metrics_after=dict(before), missing_keys=(), unexpected_keys=(),
+            fresh_model_evaluated=True, examples_evaluated=12,
+            metrics_before_source=FINAL_EPOCH_METRICS,
+            metrics_after_source=BEST_STATE_POST_RELOAD)
+
+
+def test_reproduction_requires_the_post_reload_source_on_the_other_side() -> None:
+    before = {"exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+              "predicted_mentions": 22.0, "positive_cell_accuracy": 0.98}
+    with pytest.raises(GateError, match="metrics_after_source"):
+        ReproductionCheck(
+            checkpoint_sha256="a" * 64, metrics_before=before,
+            metrics_after=dict(before), missing_keys=(), unexpected_keys=(),
+            fresh_model_evaluated=True, examples_evaluated=12,
+            metrics_after_source=FINAL_EPOCH_METRICS)
+
+
+def test_reproduction_compares_the_same_best_state_on_both_sides() -> None:
+    payload = _reproduction().as_dict()
+    assert payload["metrics_before_source"] == BEST_STATE_PRE_SERIALIZATION
+    assert payload["metrics_after_source"] == BEST_STATE_POST_RELOAD
+    assert payload["compares_the_same_best_state"] is True
+    assert payload["final_epoch_metrics_used"] is False
+
+
+def test_reproduction_requires_eval_mode_and_determinism() -> None:
+    before = {"exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+              "predicted_mentions": 22.0, "positive_cell_accuracy": 0.98}
+    with pytest.raises(GateError, match="eval mode"):
+        ReproductionCheck(
+            checkpoint_sha256="a" * 64, metrics_before=before,
+            metrics_after=dict(before), missing_keys=(), unexpected_keys=(),
+            fresh_model_evaluated=True, examples_evaluated=12, eval_mode=False)
+    with pytest.raises(GateError, match="deterministic"):
+        ReproductionCheck(
+            checkpoint_sha256="a" * 64, metrics_before=before,
+            metrics_after=dict(before), missing_keys=(), unexpected_keys=(),
+            fresh_model_evaluated=True, examples_evaluated=12,
+            deterministic_evaluation=False)
+
+
+def test_best_and_final_metrics_are_both_explicit() -> None:
+    record = BestFinalRecord(
+        best_epoch=137, best_metrics={"validation_exact_f1": 0.97},
+        final_epoch=200, final_metrics={"validation_exact_f1": 0.41},
+        best_state_changed_at=(1, 42, 137))
+    payload = record.as_dict()
+    assert payload["best_epoch"] == 137
+    assert payload["final_epoch"] == 200
+    assert payload["best_metrics"]["validation_exact_f1"] == 0.97
+    assert payload["final_metrics"]["validation_exact_f1"] == 0.41
+    assert payload["best_is_final"] is False
+    assert payload["best_state_changed_at"] == [1, 42, 137]
+    assert payload["final_metrics_used_for_reproduction"] is False
+
+
+def test_a_best_final_record_needs_both_halves() -> None:
+    with pytest.raises(E4TrainingError, match="both best_metrics and final_metrics"):
+        BestFinalRecord(best_epoch=1, best_metrics={}, final_epoch=2,
+                        final_metrics={"validation_exact_f1": 0.0})
+    with pytest.raises(E4TrainingError, match="cannot come after"):
+        BestFinalRecord(best_epoch=9, best_metrics={"a": 1}, final_epoch=2,
+                        final_metrics={"a": 1})
+
+
+def test_the_gate_must_be_evaluated_from_the_best_state() -> None:
+    assert_gate_uses_best_metrics(BEST_STATE_PRE_SERIALIZATION)
+    with pytest.raises(E4TrainingError, match="reproduction mismatch"):
+        assert_gate_uses_best_metrics(FINAL_EPOCH_METRICS)
+
+
+def test_the_notebook_never_reads_a_bare_outcome_metrics_key() -> None:
+    """`outcome["metrics"]` was the final epoch. The key no longer exists."""
+    code = _notebook_code()
+    assert 'outcome["metrics"]' not in code
+    assert 'outcome["best_metrics"]' in code
+    assert 'outcome["best_final"]' in code
+
+
+def test_the_notebook_evaluates_the_best_state_before_serializing() -> None:
+    code = _notebook_code()
+    assert "before_metrics" in code
+    assert "assert_gate_uses_best_metrics(" in code
+    assert "metrics_before=reproduction_metrics(before_metrics)" in code
+    assert "metrics_before_source=BEST_STATE_PRE_SERIALIZATION" in code
+    assert "metrics_after_source=BEST_STATE_POST_RELOAD" in code
+
+
+# ---------------------------------------------------------------------------
+# The revised three-objective matrix
+# ---------------------------------------------------------------------------
+
+
+def test_the_retired_focal_candidate_cannot_be_built_or_selected() -> None:
+    assert "balanced_focal" in RETIRED_RECIPE_NAMES
+    assert "balanced_focal" not in STAGE2_RECIPE_NAMES
+    assert "balanced_focal" not in RECIPE_NAMES
+    with pytest.raises(RecipeError, match="retired by Audit 0047"):
+        build_recipe("balanced_focal")
+
+
+def test_stage_two_selection_refuses_a_non_stage_two_recipe() -> None:
+    """reference_ce_resampled is defined, but not a Stage-2 objective."""
+    with pytest.raises(GateError, match="are not Stage-2 objectives"):
+        select_recipe([_result(REFERENCE_CE_RESAMPLED)], required_types=REQUIRED)
+
+
+def test_reference_ce_remains_the_stage_two_baseline() -> None:
+    baseline = build_recipe(REFERENCE_CE)
+    assert baseline.is_stage2_objective
+    assert baseline.reduction == BATCH_GLOBAL_VALID_CELL_MEAN
+    assert baseline.complexity == min(
+        build_recipe(n).complexity for n in STAGE2_RECIPE_NAMES)
+
+
+def test_resampled_stays_available_for_stage_three_and_full_training() -> None:
+    resampled = build_recipe(REFERENCE_CE_RESAMPLED)
+    assert not resampled.is_stage2_objective
+    assert resampled.uses_positive_aware_sampling
+    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    entry = config["recipes"]["reference_ce_resampled"]
+    assert entry["stage2_objective"] is False
+    assert set(entry["available_for"]) == {"stage3_subset_smoke", "stage4_full_training"}
+
+
+def test_the_config_records_the_retired_candidate_and_its_evidence() -> None:
+    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    retired = config["retired_recipes"]["balanced_focal"]
+    assert retired["epochs_completed"] == 200
+    assert retired["optimizer_steps"] == 600
+    assert retired["predicted_mentions"] == 0
+    assert retired["exact_f1"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# group_balanced_ce
+# ---------------------------------------------------------------------------
+
+
+def test_group_balanced_gives_the_two_groups_independent_influence() -> None:
+    """The measured ratio: positive loss ~1.79, background ~0.0055."""
+    accumulator = BatchGlobalAccumulator()
+    accumulator.observe_microbatch(
+        loss_sum=(1.79 * 5) + (0.0055 * 995), cells=1000,
+        positive_sum=1.79 * 5, positive_cells=5)
+    assert accumulator.positive_mean() == pytest.approx(1.79)
+    assert accumulator.background_mean() == pytest.approx(0.0055)
+    # Natural frequency: the total tracks the background.
+    assert accumulator.reduced() == pytest.approx(0.0144225, abs=1e-7)
+    # Group-balanced: the positive group carries half the loss.
+    balanced = accumulator.group_balanced()
+    assert balanced == pytest.approx(0.5 * 1.79 + 0.5 * 0.0055)
+    assert balanced > accumulator.reduced() * 50
+
+
+def test_group_weights_are_not_inverse_frequency() -> None:
+    weights = GroupWeights()
+    assert weights.positive == 0.5
+    assert weights.background == 0.5
+    payload = weights.as_dict()
+    assert payload["positive_to_background_ratio"] == 1.0
+    assert payload["is_inverse_frequency_weighting"] is False
+    with pytest.raises(RecipeError, match="inverse-frequency regime"):
+        GroupWeights(positive=577.0, background=1.0)
+    with pytest.raises(RecipeError, match="must be positive"):
+        GroupWeights(positive=0.0, background=1.0)
+
+
+def test_group_balanced_falls_back_to_background_only_with_no_positives() -> None:
+    """Explicit, and tested: there is no positive mean to combine."""
+    accumulator = BatchGlobalAccumulator()
+    accumulator.observe_microbatch(loss_sum=5.0, cells=1000)
+    assert accumulator.positive_cells == 0
+    assert accumulator.group_balanced() == pytest.approx(0.005)
+    assert accumulator.group_balanced() == pytest.approx(accumulator.background_mean())
+    with pytest.raises(RecipeError, match="no positive cell"):
+        accumulator.positive_mean()
+
+
+def test_group_balanced_handles_an_all_positive_batch() -> None:
+    accumulator = BatchGlobalAccumulator()
+    accumulator.observe_microbatch(
+        loss_sum=8.0, cells=4, positive_sum=8.0, positive_cells=4)
+    assert accumulator.background_cells == 0
+    assert accumulator.group_balanced() == pytest.approx(2.0)
+
+
+def test_group_balanced_recipe_carries_explicit_weights() -> None:
+    recipe = build_recipe(GROUP_BALANCED_CE)
+    assert recipe.reduction == BATCH_GLOBAL_GROUP_BALANCED_MEAN
+    assert recipe.group_weights is not None
+    payload = recipe.as_dict()
+    assert payload["group_weights"]["positive"] == 0.5
+    assert payload["every_positive_cell_participates"] is True
+    accumulator = BatchGlobalAccumulator()
+    accumulator.observe_microbatch(
+        loss_sum=100.0, cells=1000, positive_sum=95.0, positive_cells=5)
+    assert recipe.reduce_batch(accumulator) == pytest.approx(
+        accumulator.group_balanced())
+
+
+# ---------------------------------------------------------------------------
+# hard_negative_ce
+# ---------------------------------------------------------------------------
+
+
+def test_hard_negative_keeps_the_deterministic_highest_loss_negatives() -> None:
+    cells = [(0.1, 0, 0), (9.0, 1, 1), (5.0, 2, 2), (9.0, 0, 3), (0.2, 3, 3)]
+    chosen = select_hard_negatives(cells, keep=3)
+    # Highest loss first; the 9.0 tie breaks by (row, column), so (0, 3) precedes (1, 1).
+    assert chosen == ((9.0, 0, 3), (9.0, 1, 1), (5.0, 2, 2))
+    assert select_hard_negatives(cells, keep=3) == chosen  # no RNG anywhere
+    assert select_hard_negatives(cells, keep=0) == ()
+    assert len(select_hard_negatives(cells, keep=99)) == len(cells)
+
+
+def test_hard_negative_never_discards_a_positive_cell() -> None:
+    logits = [[[0.0, 3.0, 0.0], [4.0, 0.0, 0.0]],
+              [[4.0, 0.0, 0.0], [0.0, 0.0, 3.0]]]
+    labels = [[1, 0], [0, 2]]
+    mask = [[True, True], [True, True]]
+    _sum, cells, _psum, positive_cells = reduce_grid(
+        logits, labels, mask, objective="hard_negative",
+        hard_negative=HardNegativeConfig(negative_to_positive_ratio=1))
+    assert positive_cells == 2          # both positives survive
+    assert cells == 2 + 2               # plus at most ratio x positives negatives
+
+
+def test_the_hard_negative_ratio_is_bounded_by_default_and_by_guard() -> None:
+    assert DEFAULT_NEGATIVE_TO_POSITIVE_RATIO == 3
+    config = HardNegativeConfig()
+    assert config.keep_count(positive_cells=5, background_cells=10_000) == 15
+    assert config.keep_count(positive_cells=5, background_cells=4) == 4
+    with pytest.raises(RecipeError, match="at least 1"):
+        HardNegativeConfig(negative_to_positive_ratio=0)
+    with pytest.raises(RecipeError, match="natural-frequency CE by another name"):
+        HardNegativeConfig(negative_to_positive_ratio=1000)
+
+
+def test_hard_negative_no_positive_batch_uses_an_explicit_bounded_rule() -> None:
+    config = HardNegativeConfig()
+    # Not all background, and not none: a bounded slice of the hardest.
+    assert config.keep_count(positive_cells=0, background_cells=10_000) == 32
+    assert config.keep_count(positive_cells=0, background_cells=7) == 7
+    assert config.as_dict()["falls_back_to_all_cell_ce"] is False
+    with pytest.raises(RecipeError, match="no_positive_background_cap"):
+        HardNegativeConfig(no_positive_background_cap=0)
+
+
+def test_hard_negative_does_not_silently_become_all_cell_ce() -> None:
+    """A 100-cell grid with 1 positive keeps 1 + 3 cells, not 100."""
+    size = 10
+    logits = [[[0.0, 1.0, 0.0] for _ in range(size)] for _ in range(size)]
+    labels = [[0] * size for _ in range(size)]
+    labels[3][4] = 1
+    mask = [[True] * size for _ in range(size)]
+    _sum, cells, _psum, positive_cells = reduce_grid(
+        logits, labels, mask, objective="hard_negative")
+    assert positive_cells == 1
+    assert cells == 1 + 3
+    # The plain objective keeps every cell.
+    _s2, cells_all, _p2, _pc2 = reduce_grid(
+        logits, labels, mask, objective="cross_entropy")
+    assert cells_all == size * size
+
+
+def test_hard_negative_recipe_reduces_over_the_selected_cells() -> None:
+    recipe = build_recipe(HARD_NEGATIVE_CE)
+    assert recipe.reduction == BATCH_GLOBAL_SELECTED_CELL_MEAN
+    assert recipe.hard_negative is not None
+    assert recipe.as_dict()["hard_negative"]["every_positive_cell_participates"] is True
+    accumulator = BatchGlobalAccumulator()
+    accumulator.observe_microbatch(
+        loss_sum=12.0, cells=8, positive_sum=9.0, positive_cells=2)
+    assert recipe.reduce_batch(accumulator) == pytest.approx(12.0 / 8)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+
+
+def _telemetry(**overrides) -> EpochTelemetry:
+    fields = {
+        "epoch": 40, "recipe": REFERENCE_CE, "optimizer_steps": 120,
+        "best_exact_f1": 0.31, "final_exact_f1": 0.16,
+        "positive_cell_accuracy": 0.2394,
+        "per_positive_class_accuracy": {
+            "NNW": 0.30, "THW:DIAGNOSIS": 0.20, "THW:MEDICATION": 0.10,
+            "THW:SYMPTOM": 0.05},
+        "gold_positive_predicted_as_none_rate": 0.71,
+        "loss_positive": 1.793879, "loss_background": 0.005660,
+        "positive_cells": 51, "background_cells": 11_198,
+        "head_grad_norm": 0.84, "backbone_grad_norm": 0.11,
+        "mean_none_logit_on_gold_positive": 6.2,
+        "strongest_non_none_margin_on_gold_positive": -1.4,
+        "best_epoch": 37, "best_state_changed": False,
+    }
+    fields.update(overrides)
+    return EpochTelemetry(**fields)
+
+
+def test_telemetry_records_every_required_quantity() -> None:
+    payload = _telemetry().as_dict()
+    for key in ("best_exact_f1", "final_exact_f1", "positive_cell_accuracy",
+                "per_positive_class_accuracy",
+                "gold_positive_predicted_as_none_rate", "loss_positive",
+                "loss_background", "positive_cells", "background_cells",
+                "head_grad_norm", "backbone_grad_norm",
+                "mean_none_logit_on_gold_positive",
+                "strongest_non_none_margin_on_gold_positive",
+                "best_epoch", "best_state_changed"):
+        assert key in payload, key
+    assert set(payload["per_positive_class_accuracy"]) == set(POSITIVE_CLASS_ORDER)
+    assert POSITIVE_CLASS_ORDER == (
+        "NNW", "THW:DIAGNOSIS", "THW:MEDICATION", "THW:SYMPTOM")
+
+
+def test_telemetry_reports_hard_negative_counts_only_when_applicable() -> None:
+    plain = _telemetry().as_dict()
+    assert "selected_hard_negatives" not in plain
+    mined = _telemetry(recipe=HARD_NEGATIVE_CE, selected_hard_negatives=153,
+                       total_background_candidates=11_198).as_dict()
+    assert mined["selected_hard_negatives"] == 153
+    assert mined["total_background_candidates"] == 11_198
+
+
+def test_telemetry_is_aggregate_only() -> None:
+    payload = _telemetry().as_dict()
+    assert payload["contains_clinical_text"] is False
+    assert payload["internal_test_accessed"] is False
+    serialized = json.dumps(payload, ensure_ascii=False)
+    # Counts, rates and names only — nothing that could carry a document.
+    assert all(not isinstance(v, (list, tuple)) or not v
+               for k, v in payload.items() if k != "per_positive_class_accuracy")
+    assert "text" not in serialized.lower().replace("contains_clinical_text", "")
+
+
+def test_the_notebook_emits_the_full_telemetry_record() -> None:
+    code = _notebook_code()
+    assert "EpochTelemetry(" in code
+    assert "head_grad_norm" in code
+    assert "backbone_grad_norm" in code
+    assert "per_positive_class_accuracy" in code
+    assert "mean_none_logit_on_gold_positive" in code
+
+
+def test_the_notebook_clips_and_measures_each_parameter_group() -> None:
+    code = _notebook_code()
+    assert 'optimizer.param_groups[0]["params"]' in code
+    assert 'optimizer.param_groups[1]["params"]' in code
+
+
+# ---------------------------------------------------------------------------
+# Stage-2 stopping and gates are unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_the_tiny_gate_and_bound_are_unchanged_by_this_milestone() -> None:
+    assert TINY_TARGET_EXACT_F1 == 0.95
+    assert STAGE2_EPOCH_BOUND == 200
+    code = _notebook_code()
+    assert "TINY_EPOCH_BOUND = 200" in code
+    assert "TinyOverfitStopPolicy(" in code
+    assert "collapse_guard=False" in code
+
+
+def test_the_notebook_runs_only_the_three_stage_two_objectives() -> None:
+    code = _notebook_code()
+    assert "for recipe in stage2_recipes():" in code
+    assert "for recipe in all_recipes():" not in code

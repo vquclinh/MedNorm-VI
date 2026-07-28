@@ -34,7 +34,8 @@ from .contracts import (
     E4_TINY_AUTHORIZATION,
     E4ContractError,
 )
-from .recipes import RECIPE_COMPLEXITY, RECIPE_NAMES
+from .recipes import RECIPE_COMPLEXITY, RECIPE_NAMES, STAGE2_RECIPE_NAMES
+from .training import BEST_STATE_POST_RELOAD, BEST_STATE_PRE_SERIALIZATION
 
 GATE_CONTRACT_VERSION = "e4-stage-gate-v1"
 
@@ -196,6 +197,11 @@ def select_recipe(
     """
     if not results:
         raise GateError("the tiny ablation produced no results")
+    unexpected = [r.recipe for r in results if r.recipe not in STAGE2_RECIPE_NAMES]
+    if unexpected:
+        raise GateError(
+            f"{unexpected} are not Stage-2 objectives; Stage 2 compares exactly "
+            f"{list(STAGE2_RECIPE_NAMES)}")
     evaluated = []
     for result in results:
         ok, failures = result.passes(required_types=required_types)
@@ -369,6 +375,14 @@ class ReproductionCheck:
     fresh_model_evaluated: bool
     examples_evaluated: int
     tolerance: float = DEFAULT_REPRODUCTION_TOLERANCE
+    # Provenance of each side. Both must name the BEST state; Audit 0047 found
+    # `metrics_before` silently carrying the FINAL epoch's metrics while
+    # `metrics_after` re-evaluated the best state, so the check compared two
+    # different models and its verdict meant nothing.
+    metrics_before_source: str = BEST_STATE_PRE_SERIALIZATION
+    metrics_after_source: str = BEST_STATE_POST_RELOAD
+    eval_mode: bool = True
+    deterministic_evaluation: bool = True
 
     def __post_init__(self) -> None:
         for name, payload in (("metrics_before", self.metrics_before),
@@ -380,6 +394,22 @@ class ReproductionCheck:
                     "needs the real evaluated metrics, not a key-name comparison")
         if self.tolerance < 0.0:
             raise GateError("reproduction tolerance must be non-negative")
+        if self.metrics_before_source != BEST_STATE_PRE_SERIALIZATION:
+            raise GateError(
+                f"metrics_before_source is {self.metrics_before_source!r}; "
+                f"reproduction must compare the SAME best state, so it must be "
+                f"{BEST_STATE_PRE_SERIALIZATION!r}. Comparing the best state "
+                "against final-epoch metrics is the Audit-0047 defect.")
+        if self.metrics_after_source != BEST_STATE_POST_RELOAD:
+            raise GateError(
+                f"metrics_after_source is {self.metrics_after_source!r}; "
+                f"expected {BEST_STATE_POST_RELOAD!r}")
+        if not self.eval_mode:
+            raise GateError(
+                "reproduction requires the model in eval mode; dropout or "
+                "batch-norm updates would make the comparison meaningless")
+        if not self.deterministic_evaluation:
+            raise GateError("reproduction requires deterministic evaluation")
 
     def differences(self) -> dict[str, float]:
         return {
@@ -424,6 +454,12 @@ class ReproductionCheck:
             "unexpected_keys": list(self.unexpected_keys),
             "fresh_model_evaluated": self.fresh_model_evaluated,
             "examples_evaluated": self.examples_evaluated,
+            "metrics_before_source": self.metrics_before_source,
+            "metrics_after_source": self.metrics_after_source,
+            "compares_the_same_best_state": True,
+            "final_epoch_metrics_used": False,
+            "eval_mode": self.eval_mode,
+            "deterministic_evaluation": self.deterministic_evaluation,
             "reproduced": self.reproduced,
             "failures": list(self.failures()),
             "state_dict_key_names_alone_are_sufficient": False,

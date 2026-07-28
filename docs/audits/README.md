@@ -89,3 +89,4 @@ Each audit should record, at minimum:
 - `0044-e4-checkpoint-probe-and-root-cause-verdict.md`
 - `0045-clean-slate-e4-replacement-and-gated-training.md`
 - `0046-e4-tiny-overfit-execution-contract-repair.md`
+- `0047-e4-positive-cell-objective-repair.md`
