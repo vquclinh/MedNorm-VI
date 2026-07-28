@@ -1,0 +1,33 @@
+# MedNorm-VI — deployment budget manifest TEMPLATE (Audit 0042)
+# ==============================================================================
+# The DEPLOYMENT inventory: only the components a single final inference pipeline
+# loads together. Spec §17's 9,000,000,000-parameter limit is enforced HERE and
+# nowhere else.
+#
+# Accounting policy (conservative):
+#   * every parameter the process loads is counted, adapters included;
+#   * a LoRA deployment counts the base model PLUS its adapters;
+#   * a genuinely shared base loaded once is counted once (spec §15.1);
+#   * two independently loaded checkpoints are both counted in full;
+#   * a selected component without a VERIFIED programmatic count fails closed.
+#
+# Spec §17 states heads/adapters are outside the organizer's base-model budget.
+# The report prints that base-only figure too, but the gate uses the conservative
+# total. Passing the conservative gate necessarily satisfies §17.
+#
+# This is a TEMPLATE. The real submission manifest is chosen after validation
+# ablations and leaderboard evidence (see docs/decisions/).
+manifest_name: template_minimal_verified
+
+# Only components with verified counts may be selected. Today that is the trained
+# E3 mention expert plus the tiny learned resolver; everything else must be
+# counted programmatically before it can appear here.
+selected_components:
+  - e3_vihealthbert_span_type
+  - l4_learned_resolver_v2
+
+# Recorded for traceability; the loader reads `selected_components` only.
+notes: >-
+  Minimal verified-only deployment. Adding E4, E5, S2, S3, S4 or S5 requires a
+  verified programmatic parameter count for each, obtained from its real
+  configuration or checkpoint.

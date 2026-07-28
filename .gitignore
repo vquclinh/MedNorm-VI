@@ -76,6 +76,12 @@ outputs/**
 output/
 *.zip
 
+# Operator-placed LOCAL copies of Colab training artifacts. Audit 0036 already
+# ignores artifacts/, weights/ and caches/; this covers the local-artifacts/
+# convention observed during Audit 0042. Generated training output is never
+# committed.
+local-artifacts/
+
 # --- Audit run artifacts (numbered audit .md files under docs/audits/ ARE tracked) ---
 docs/audits/**/*.log
 docs/audits/**/*.json

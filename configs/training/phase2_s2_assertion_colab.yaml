@@ -1,0 +1,107 @@
+# MedNorm-VI — S2 assertion training (Colab) — Audit 0042
+# ==============================================================================
+# STATUS: IMPLEMENTED, PREFLIGHT_EXECUTED, READY_FOR_COLAB_SMOKE, NOT_TRAINED
+#         and additionally DATA_BLOCKED (see `governed_supervision` below).
+version: phase2-s2-assertion-colab-v1
+stage_id: phase2-s2-assertion-v1
+expert_id: S2_assertion
+status: READY_FOR_COLAB_SMOKE
+enabled_by_default: false
+
+authorization:
+  full_training: I_AUTHORIZE_S2_FULL_TRAINING
+
+model:
+  # Spec §8 A2: "ViHealthBERT token classifier"; §15.1 loads the backbone once
+  # with multiple heads, so S2 shares E3's base rather than adding a new one.
+  id: demdecuong/vihealthbert-base-word
+  pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+  shares_backbone_with: e3_vihealthbert_span_type
+
+labels:
+  # Deterministic order; multi-label, never an exclusive softmax (spec §8.1).
+  order: [isNegated, isHistorical, isFamily]
+  eligible_entity_types: [MEDICATION, DIAGNOSIS, SYMPTOM]
+  ineligible_entity_types: [TEST_NAME, TEST_RESULT]
+  ineligible_type_policy: >-
+    organizer_field_policy: TEST_NAME and TEST_RESULT carry no assertions field
+  supervision_states: [supervised_true, supervised_false, unknown]
+  unknown_supervision_is_masked_not_false: true
+
+provenance:
+  trusted_channel: trusted
+  weak_channel: weak
+  allow_weak_supervision: false
+  weak_supervision_evaluated_separately: true
+  policy: >-
+    Spec §14.1 permits weak labeling functions, but weak or synthetic labels are
+    kept in a separate provenance field, are opt-in, and are never reported as
+    gold supervision.
+
+split_integrity:
+  group_by: document
+  forbid_cross_split_documents: true
+  policy_reference: spec §15.2 group-split by document
+
+data:
+  train_split_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
+  internal_test_allowed: false
+
+# ---------------------------------------------------------------------------
+# MEASURED governed supervision (scanned locally on 2026-07-27)
+# ---------------------------------------------------------------------------
+# The pipeline is code-complete but DATA-BLOCKED: there is no assertion
+# supervision anywhere in the governed corpus. `assert_trainable()` raises rather
+# than letting a run fabricate 13,711 confident negatives out of missing data.
+governed_supervision:
+  measured: true
+  train_eligible_mentions: 11720
+  validation_eligible_mentions: 1991
+  train_examples_with_any_supervision: 0
+  validation_examples_with_any_supervision: 0
+  trusted_examples: 0
+  weak_examples: 0
+  coverage_manifest_declares_assertions:
+    phoner_covid19: false
+    vimedner: false
+    vimq: false
+    vietmed_ner: false
+  trainable: false
+  blocker: >-
+    No governed source annotates assertions. S2 cannot be trained until an
+    assertion-annotated corpus is acquired or a controlled, separately-evaluated
+    weak-supervision corpus is approved.
+
+artifacts:
+  schema_version: phase2-s2-artifact-v1
+  checkpoint_schema_version: phase2-s2-checkpoint-v1
+  smoke_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s2_assertion_smoke_v1
+  full_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/s2_assertion_full_v1
+  validator: mednorm_vi.training.phase2.s2_assertion_training.validate_s2_artifact
+  required_files:
+    - checkpoints/best.pt
+    - checkpoints/latest.pt
+    - logs/training_history.jsonl
+    - resolved_config.json
+    - validation_metrics.json
+    - training_manifest.json
+
+head:
+  hidden_size: 768
+  heads: [cue, scope, relation, assertion]
+  verified_parameter_count: 9228
+
+training:
+  smoke_max_epochs: 1
+  full_max_epochs: 6
+  micro_batch_size: 8
+  gradient_accumulation_steps: 4
+  effective_batch_size: 32
+  max_grad_norm: 1.0
+  learning_rate: 2.0e-5
+  requested_precision: bf16
+  precision_fallback: fp16_with_grad_scaler
+  full_training_requires_cuda: true
+  best_criterion: max_validation_macro_f1_governed_validation_only
+  validation_after_every_epoch: true

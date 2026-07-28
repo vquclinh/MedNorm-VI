@@ -30,13 +30,33 @@ queries:
 training:
   smoke_max_epochs: 1
   full_max_epochs: 12
+  micro_batch_size: 1
+  gradient_accumulation_steps: 8
+  effective_batch_size: 8
+  max_grad_norm: 1.0
+  learning_rate: 1.0e-5
+  requested_precision: bf16
+  precision_policy: bf16_on_capable_cuda_else_fp16_with_grad_scaler
   full_initialization_source: pinned_pretrained_base
   reject_smoke_checkpoint_as_full_initializer: true
   validation_after_every_epoch: true
   best_criterion: max_validation_exact_f1_governed_validation_only
+  checkpoint_custody: best_and_latest_with_optimizer_scaler_resume_state
+  local_first_artifact_persistence: true
+progress:
+  heartbeat_first_n_train_samples: 10
+  heartbeat_every_n_train_samples: 100
+  heartbeat_every_n_validation_samples: 50
+  eta_policy: time_monotonic_same_shape_as_audit_0041
 data:
   train_split: data/processed/public_ner_train.jsonl
   validation_split: data/processed/public_ner_validation.jsonl
+  train_split_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
   internal_test_allowed: false
+supervision:
+  supervised_entity_types: [DIAGNOSIS, MEDICATION, SYMPTOM]
+  unsupervised_entity_types: [TEST_NAME, TEST_RESULT]
+  laboratory_labels_fabricated: false
 validator:
   cli: env PYTHONPATH=src python -m mednorm_vi.training.phase2.cli validate-artifact --kind e5 --artifact-dir ARTIFACT_DIR --mode full
