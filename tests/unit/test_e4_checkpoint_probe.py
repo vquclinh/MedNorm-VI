@@ -405,40 +405,77 @@ def test_the_checkpoints_are_git_ignored() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _executable_tokens(path: Path) -> str:
+    """Space-joined code tokens, with comments and string literals removed.
+
+    Two traps this avoids. A prose guarantee ("no ``.backward()`` is ever
+    called") lives in a docstring and would satisfy a naive substring search —
+    docstrings are STRING tokens, not comments, so both are dropped. And a
+    substring search over raw text matches ``backward`` inside the legitimate
+    field ``backward_passes``; joining *tokens* with spaces makes the search
+    exact, so ``" backward ( "`` matches the call and not the field.
+    """
+    import io
+    import tokenize
+
+    kept: list[str] = []
+    with path.open("rb") as handle:
+        for token in tokenize.tokenize(io.BytesIO(handle.read()).readline):
+            if token.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            if token.string.strip():
+                kept.append(token.string)
+    return " " + " ".join(kept) + " "
+
+
+PROBE_SOURCE = (REPO / "src" / "mednorm_vi" / "training" / "phase2"
+                / "e4_checkpoint_probe.py")
+
+
 def test_probe_source_constructs_no_optimizer_and_never_calls_backward() -> None:
-    source = (REPO / "src" / "mednorm_vi" / "training" / "phase2"
-              / "e4_checkpoint_probe.py").read_text(encoding="utf-8")
-    executable = "\n".join(
-        line for line in source.splitlines()
-        if not line.lstrip().startswith("#"))
-    for forbidden in (".backward(", "optimizer.step(", "torch.optim",
-                      "AdamW", "loss.backward", "requires_grad_(True)",
-                      "torch.save", "cross_entropy"):
-        assert forbidden not in executable, forbidden
+    tokens = _executable_tokens(PROBE_SOURCE)
+    for forbidden in (" backward ( ", " AdamW ", " optim ", " save ( ",
+                      " cross_entropy ( ", " requires_grad_ ( True ) ",
+                      " zero_grad ( ", " step ( "):
+        assert forbidden not in tokens, forbidden
     # And the guarantees it must positively make.
-    assert "torch.no_grad()" in executable
-    assert ".eval()" in executable
-    assert "requires_grad_(False)" in executable
+    assert " torch . no_grad ( ) " in tokens
+    assert " . eval ( ) " in tokens
+    assert " requires_grad_ ( False ) " in tokens
+
+
+def test_the_source_scanner_would_actually_catch_a_backward_call(
+    tmp_path: Path,
+) -> None:
+    """Guard the guard: prose must not pass, a real call must not slip through,
+    and a field merely named ``backward_passes`` must not be a false positive."""
+    prose_only = tmp_path / "prose.py"
+    prose_only.write_text(
+        '"""This module never calls .backward()."""\n', encoding="utf-8")
+    assert " backward ( " not in _executable_tokens(prose_only)
+
+    field_named_backward = tmp_path / "field.py"
+    field_named_backward.write_text("backward_passes = 405912\n", encoding="utf-8")
+    assert " backward ( " not in _executable_tokens(field_named_backward)
+
+    real_call = tmp_path / "real.py"
+    real_call.write_text("def train(loss):\n    loss.backward()\n", encoding="utf-8")
+    assert " backward ( " in _executable_tokens(real_call)
 
 
 def test_probe_source_never_opens_the_frozen_split() -> None:
-    source = (REPO / "src" / "mednorm_vi" / "training" / "phase2"
-              / "e4_checkpoint_probe.py").read_text(encoding="utf-8")
+    source = PROBE_SOURCE.read_text(encoding="utf-8")
     assert "internal_test.jsonl" not in source
     assert 'split="internal_test"' not in source
-    assert "assert_split_allowed" in source
+    assert " assert_split_allowed " in _executable_tokens(PROBE_SOURCE)
 
 
 def test_probe_source_does_not_download_pretrained_weights() -> None:
     """The checkpoint supplies the encoder. Loading pretrained weights first
     would let a checkpoint that lacks them appear to restore cleanly."""
-    source = (REPO / "src" / "mednorm_vi" / "training" / "phase2"
-              / "e4_checkpoint_probe.py").read_text(encoding="utf-8")
-    executable = "\n".join(
-        line for line in source.splitlines()
-        if not line.lstrip().startswith("#"))
-    assert "AutoModel.from_config" in executable
-    assert "AutoModel.from_pretrained" not in executable
+    tokens = _executable_tokens(PROBE_SOURCE)
+    assert " AutoModel . from_config ( " in tokens
+    assert " AutoModel . from_pretrained " not in tokens
 
 
 # ---------------------------------------------------------------------------
@@ -604,9 +641,7 @@ def test_probe_reports_contain_no_governed_document_text() -> None:
 
 def test_cli_never_prints_a_bare_blocked_line() -> None:
     source = (REPO / "scripts" / "diagnose_e4_collapse.py").read_text(encoding="utf-8")
-    executable = "\n".join(
-        line for line in source.splitlines()
-        if not line.lstrip().startswith("#"))
-    assert '"  BLOCKED"' not in executable
-    assert '"  NOT EXECUTED"' in executable
-    assert "probe_blocked_detail" in executable
+    assert '"  BLOCKED"' not in source
+    assert '"  NOT EXECUTED"' in source
+    assert " probe_blocked_detail " in _executable_tokens(
+        REPO / "scripts" / "diagnose_e4_collapse.py")

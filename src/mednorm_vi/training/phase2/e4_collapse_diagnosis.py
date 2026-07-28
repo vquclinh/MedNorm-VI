@@ -1415,10 +1415,15 @@ def resolve_verdict(
             f"recorded epochs was {history.peak_predicted_mentions} at epoch "
             f"{history.peak_prediction_epoch}")
 
-    # The three requirements for the collapse verdict, checked explicitly.
+    # The four requirements for the collapse verdict, checked explicitly.
     has_logits = any(probe.background_label_count or probe.non_background_label_count
                      for probe in probes)
     has_gold_cells = any(probe.gold_positive_cell_predicted_labels for probe in probes)
+    # Restoration is a prerequisite, not an independent finding: logits read off a
+    # head that did not restore describe an untrained head, so they are evidence
+    # about custody, never about what training converged to.
+    heads_restored = bool(restored) and all(
+        item.get("w2ner_head_restored") for item in restored)
     if not probes:
         missing.append(
             "grid logit distributions from a checkpoint probe")
@@ -1429,8 +1434,12 @@ def resolve_verdict(
             missing.append("grid logit distributions from a checkpoint probe")
         if not has_gold_cells:
             missing.append("predicted labels at gold-positive cells")
+        if not heads_restored:
+            missing.append(
+                "grid logits from a checkpoint whose W2NER head actually restored")
 
-    collapse_provable = round_trip_passes and has_logits and has_gold_cells
+    collapse_provable = (
+        round_trip_passes and has_logits and has_gold_cells and heads_restored)
     if collapse_provable:
         background_dominant = all(
             probe.gold_positive_cell_background_rate >= 0.99 for probe in probes)

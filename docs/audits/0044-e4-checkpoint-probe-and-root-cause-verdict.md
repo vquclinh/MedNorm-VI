@@ -472,7 +472,7 @@ base model weights downloaded      NO    (config.json and tokenizer only)
 
 ## 12. Tests and Static Checks
 
-`tests/unit/test_e4_checkpoint_probe.py` — new. Covers the Audit-0043 regression
+`tests/unit/test_e4_checkpoint_probe.py` — new, 34 tests. Covers the Audit-0043 regression
 (present checkpoints must invoke the probe; a present checkpoint can never be
 reported absent), precise blocked reasons for both the absent-weights and
 missing-dependency cases, read-only payload inspection, W2NER-head restoration,
@@ -484,13 +484,49 @@ bounded deterministic aggregation, absence of clinical text, byte-identical
 artifact and checkpoints, and that no checkpoint is tracked by Git.
 
 ```text
-env PYTHONPATH=src .venv/bin/python -m pytest -q      SUITE_RESULT
-ruff check .                                          RUFF_RESULT
-ruff check notebooks                                  RUFF_NB_RESULT
-env PYTHONPATH=src .venv/bin/python -m mypy           MYPY_RESULT
-env PYTHONPATH=src .venv/bin/python -m compileall -q src   COMPILEALL_RESULT
-git diff --check                                      DIFFCHECK_RESULT
+env PYTHONPATH=src .venv/bin/python -m pytest -q            1704 passed, 3 skipped
+ruff check .                                                All checks passed
+ruff check notebooks                                        All checks passed
+env PYTHONPATH=src .venv/bin/python -m mypy                 Success: no issues found
+                                                            in 267 source files
+env PYTHONPATH=src .venv/bin/python -m compileall -q src    clean
+git diff --check                                            clean
 ```
+
+The three skips are all correct-by-design:
+
+```text
+test_e4_collapse_diagnosis.py:199   skips when the checkpoints ARE present; it
+test_e4_collapse_diagnosis.py:736   asserts the absent-checkpoint behaviour, which
+                                    is no longer the state of this working tree
+test_vietmed_adapter.py:399         long-standing "pyarrow not installed locally"
+```
+
+The two Audit-0042 failures reported in Audit 0043 §13.1 **pass** under the
+project environment; they were the wrong-interpreter artifact described in §4.3,
+not defects.
+
+### 12.1 Two defects this milestone's own tests caught
+
+Both were in work added by this milestone and are recorded rather than quietly
+fixed:
+
+1. **`resolve_verdict` could confirm collapse from an unrestored head.** Given a
+   probe whose `w2ner_head_restored` was false, it confirmed both
+   `CHECKPOINT_RESTORE_FAILURE` *and* `ALL_BACKGROUND_LOSS_COLLAPSE` and returned
+   `MULTIPLE_CONFIRMED_FAILURES`. Logits read off a head that did not restore
+   describe an *untrained* head, so they are evidence about custody and never
+   about what training converged to. Restoration is now a prerequisite for the
+   collapse verdict, matching the gate condition in §9.
+
+2. **The forward-only source scan was satisfied by its own docstring.** It
+   stripped `#` comments but not string literals, so the module's own prose
+   guarantee ("no `.backward()`, no `.step()`") matched the substring search it
+   was meant to fail. The scan now tokenizes, drops COMMENT *and* STRING tokens,
+   and matches whole token sequences (`" backward ( "`), which additionally stops
+   the legitimate field `backward_passes` from producing a false positive. A
+   guard-the-guard test asserts all three cases: prose does not match, a field
+   named `backward_passes` does not match, and a real `loss.backward()` does.
 
 ## 13. Changed Files
 
