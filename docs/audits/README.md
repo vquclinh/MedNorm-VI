@@ -86,3 +86,4 @@ Each audit should record, at minimum:
 - `0041-e4-training-progress-observability.md`
 - `0042-parallel-e5-s2-and-parameter-budget-readiness.md`
 - `0043-e4-post-training-collapse-diagnosis.md`
+- `0044-e4-checkpoint-probe-and-root-cause-verdict.md`

@@ -38,8 +38,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -1584,6 +1584,7 @@ class CollapseDiagnosis:
     checkpoint_inspections: tuple[Mapping[str, Any], ...]
     probe_blocked_reason: str
     verdict: Verdict
+    probe_blocked_detail: Mapping[str, Any] = field(default_factory=dict)
     diagnosis_version: str = DIAGNOSIS_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -1601,6 +1602,7 @@ class CollapseDiagnosis:
             "checkpoint_probes": [probe.as_dict() for probe in self.probes],
             "checkpoint_inspections": [dict(item) for item in self.checkpoint_inspections],
             "probe_blocked_reason": self.probe_blocked_reason,
+            "probe_blocked_detail": dict(self.probe_blocked_detail),
             "verdict": self.verdict.as_dict(),
             "local_training_performed": False,
             "internal_test_accessed": False,
@@ -1609,18 +1611,34 @@ class CollapseDiagnosis:
         }
 
 
+ProbeRunner = Callable[
+    [Any, Mapping[str, Any]],
+    tuple[tuple[CheckpointProbeReport, ...], tuple[Mapping[str, Any], ...]],
+]
+
+
+def _default_probe_runner(
+    artifact_dir: Any, split_paths: Mapping[str, Any],
+) -> tuple[tuple[CheckpointProbeReport, ...], tuple[Mapping[str, Any], ...]]:
+    """Load the real probe lazily so this module imports without torch."""
+    from .e4_checkpoint_probe import run_default_checkpoint_probe
+
+    return run_default_checkpoint_probe(artifact_dir, split_paths)
+
+
 def run_collapse_diagnosis(
     *,
     artifact_dir: str | Path,
     split_paths: Mapping[str, str | Path],
     max_words: int | None = None,
     limit: int | None = None,
+    probe_runner: ProbeRunner | None = None,
 ) -> CollapseDiagnosis:
     """Run every diagnostic the available evidence supports, in order.
 
-    The checkpoint probe is attempted and, when the weights are absent, recorded
-    as a named blocking reason. The verdict then reflects the missing evidence
-    rather than silently omitting it.
+    When the checkpoints are present the probe **runs**. When it cannot run, the
+    reason is recorded with its exception type and remedy. The verdict then
+    reflects exactly the evidence obtained.
     """
     integrity = verify_artifact_integrity(artifact_dir)
     history = reconstruct_epoch_history(artifact_dir)
@@ -1664,14 +1682,40 @@ def run_collapse_diagnosis(
                 "positive_cells": train_distribution.positive_cells,
             }
 
+    # The checkpoint probe. Audit 0043 shipped this block with `probes` bound to
+    # an empty tuple and `require_checkpoint` called only for its raise-on-absence
+    # side effect, so arriving weights never unblocked anything and the reason
+    # string stayed empty. It now actually runs the probe, and every way it can
+    # fail produces a *named* reason rather than a bare "BLOCKED" (Audit 0044).
     probes: tuple[CheckpointProbeReport, ...] = ()
     inspections: tuple[Mapping[str, Any], ...] = ()
     blocked_reason = ""
+    blocked_detail: dict[str, Any] = {}
+    if probe_runner is None:
+        probe_runner = _default_probe_runner
     try:
         require_checkpoint(artifact_dir, "best")
         require_checkpoint(artifact_dir, "latest")
     except CheckpointEvidenceUnavailable as error:
         blocked_reason = str(error)
+        blocked_detail = {
+            "exception_type": type(error).__name__,
+            "next_action": (
+                "download the completed Colab checkpoints into "
+                f"{Path(artifact_dir) / 'checkpoints'}"),
+        }
+    else:
+        try:
+            probes, inspections = probe_runner(artifact_dir, split_paths)
+        except E4DiagnosisError as error:
+            # A dependency or restoration failure is real evidence about why the
+            # probe cannot run. It is surfaced with its type and remedy, never
+            # flattened into "BLOCKED".
+            blocked_reason = str(error)
+            detail = getattr(error, "as_dict", None)
+            blocked_detail = (
+                dict(detail()) if callable(detail)
+                else {"exception_type": type(error).__name__})
 
     verdict = resolve_verdict(
         round_trips=round_trips,
@@ -1694,6 +1738,7 @@ def run_collapse_diagnosis(
         probes=probes,
         checkpoint_inspections=inspections,
         probe_blocked_reason=blocked_reason,
+        probe_blocked_detail=blocked_detail,
         verdict=verdict,
     )
 
@@ -1716,6 +1761,7 @@ __all__ = [
     "UNAVAILABLE",
     "VERDICTS",
     "ArtifactIntegrityReport",
+    "ProbeRunner",
     "CheckpointEvidenceUnavailable",
     "CheckpointProbeReport",
     "ClassDistributionReport",

@@ -133,11 +133,74 @@ def _render(diagnosis) -> str:  # noqa: ANN001 - CollapseDiagnosis, kept local
     lines.append("")
     lines.append("== E. checkpoint probe ==")
     if diagnosis.probes:
+        inspections = {
+            str(item.get("role", "")): item
+            for item in diagnosis.checkpoint_inspections}
         for probe in diagnosis.probes:
-            lines.append(f"  {probe.role}: {probe.as_dict()}")
+            inspection = inspections.get(probe.role, {})
+            lines.append(f"  --- {probe.role}.pt (epoch {probe.epoch}) ---")
+            lines.append(f"    sha256                     {probe.checkpoint_sha256}")
+            restoration = dict(inspection.get("restoration", {}))
+            if restoration:
+                lines.append(
+                    f"    restoration ok             {restoration.get('restoration_ok')}"
+                    f"  (base missing "
+                    f"{len(restoration.get('base_missing_keys', []))}, unexpected "
+                    f"{len(restoration.get('base_unexpected_keys', []))}; head "
+                    f"restored {restoration.get('w2ner_head_restored')})")
+                lines.append(
+                    f"    base weights downloaded    "
+                    f"{restoration.get('base_model_weights_downloaded')}")
+            lines.append(
+                f"    gold / predicted / tp      {probe.gold_mention_total} / "
+                f"{probe.predicted_mention_total} / {probe.true_positives}")
+            lines.append(
+                f"    exact P / R / F1           {probe.exact_precision:.6f} / "
+                f"{probe.exact_recall:.6f} / {probe.exact_f1:.6f}")
+            lines.append(
+                f"    predictions by type        {probe.predictions_by_entity_type}")
+            lines.append(
+                f"    predicted grid labels      {probe.predicted_labels_by_class}")
+            lines.append(
+                f"    background / non-background "
+                f"{probe.background_label_count} / {probe.non_background_label_count}")
+            grid = dict(inspection.get("grid_logits", {}))
+            if grid:
+                lines.append(
+                    f"    gold-positive cells        {grid.get('gold_positive_cells')}"
+                    f"  predicted NONE "
+                    f"{grid.get('gold_positive_predicted_as_none')}"
+                    f"  background rate "
+                    f"{grid.get('gold_positive_background_rate')}")
+                lines.append(
+                    f"    gold-positive correct      "
+                    f"{grid.get('gold_positive_predicted_correct_class')}"
+                    f"  rate {grid.get('gold_positive_correct_class_rate')}")
+                lines.append(
+                    f"    gold-positive labels       "
+                    f"{grid.get('gold_positive_predicted_labels')}")
+                for name in ("none_logits", "strongest_non_none_logits",
+                             "non_none_margin_over_none",
+                             "gold_positive_margin_over_none"):
+                    lines.append(f"    {name:26s} {grid.get(name)}")
+                lines.append(
+                    f"    decoder input THW / NNW    "
+                    f"{grid.get('decoder_input_thw_relations')} / "
+                    f"{grid.get('decoder_input_nnw_relations')}")
+                lines.append(
+                    f"    decoder output mentions    "
+                    f"{grid.get('decoder_output_mentions')}")
+            lines.append(f"    outcome                    {inspection.get('outcome')}")
     else:
-        lines.append("  BLOCKED")
-        lines.append(f"  {diagnosis.probe_blocked_reason}")
+        # Never a bare BLOCKED: say what failed, of what type, and what to do.
+        lines.append("  NOT EXECUTED")
+        lines.append(f"    reason          {diagnosis.probe_blocked_reason or 'unknown'}")
+        for key, value in sorted(diagnosis.probe_blocked_detail.items()):
+            lines.append(f"    {key:15s} {value}")
+        if not diagnosis.probe_blocked_detail:
+            lines.append(
+                "    detail          none recorded — this is itself a defect; the "
+                "probe must always name its blocker")
 
     lines.append("")
     lines.append("== F. label and loss contract ==")
@@ -182,6 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-words", type=int, default=256)
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--out", default="", help="write the JSON report to this path")
+    parser.add_argument(
+        "--probe-limit", type=int, default=None,
+        help="bound the validation examples the checkpoint probe sweeps")
+    parser.add_argument(
+        "--skip-probe", action="store_true",
+        help="skip the checkpoint probe (it loads two ~4.4 GB checkpoints)")
     args = parser.parse_args(argv)
 
     split_root = Path(args.split_root)
@@ -189,12 +258,27 @@ def main(argv: list[str] | None = None) -> int:
         "train": split_root / "train.jsonl",
         "validation": split_root / "validation.jsonl",
     }
+    probe_runner = None
+    if args.skip_probe:
+        def probe_runner(_artifact_dir, _split_paths):  # type: ignore[misc]
+            raise E4DiagnosisError(
+                "checkpoint probe skipped by --skip-probe; rerun without that flag "
+                "to produce the grid-logit and gold-positive-cell evidence")
+    elif args.probe_limit is not None:
+        def probe_runner(artifact_dir, paths):  # type: ignore[misc]
+            from mednorm_vi.training.phase2.e4_checkpoint_probe import (
+                run_default_checkpoint_probe,
+            )
+            return run_default_checkpoint_probe(
+                artifact_dir, paths, limit=args.probe_limit)
+
     try:
         diagnosis = run_collapse_diagnosis(
             artifact_dir=args.artifact_dir,
             split_paths=split_paths,
             max_words=args.max_words,
             limit=args.limit,
+            probe_runner=probe_runner,
         )
     except E4DiagnosisError as error:
         print(f"E4 collapse diagnosis failed: {error}", file=sys.stderr)
