@@ -710,21 +710,18 @@ def test_e5_and_s2_notebook_cells_parse(relative_path: str, required_text: str) 
 # H. Protected E4 paths and repository hygiene
 # ---------------------------------------------------------------------------
 
-# Recorded before this milestone began; any change to an active E4 path while the
-# real full-training run is executing would be a serious defect.
+# Audit 0045 replaced the E4 implementation, so the paths pinned by Audit 0042 —
+# the v1 training module, its notebook and its config — no longer exist. What is
+# pinned here is what SURVIVED that replacement: the moved shared modules, the
+# canonical grid/decoder, the exact evaluator and the architecture PDF. The
+# guard's purpose is unchanged; only its subject moved.
 E4_PROTECTED_SHA256: dict[str, str] = {
-    "notebooks/MedNorm_E4_PhoBERT_W2NER_Training.ipynb":
-        "85040fbb824521582d5d04d7c45af293db7927b8a746a4d5b52558b32ce92813",
-    "configs/training/phase2_e4_phobert_w2ner_colab.yaml":
-        "054d376570eafe611cd1a2a35c3e24aaa30390a8a48f775a838d47b6500942ac",
-    "src/mednorm_vi/training/phase2/e4_runtime_io.py":
+    "src/mednorm_vi/training/phase2/e4/runtime_io.py":
         "ad74031f9a909eb6d40eddeed1bb3f0eeb9183f015e3024d7d8c425df3b43e77",
-    "src/mednorm_vi/training/phase2/e4_progress.py":
+    "src/mednorm_vi/training/phase2/e4/progress.py":
         "2d770fa9c2c5551d4183d9d671c06d7965cda1ef104410de72d57adc29e95474",
-    "src/mednorm_vi/training/phase2/e4_w2ner_training.py":
-        "fc44befd49bd9a56a4efad49fff65ef17686bf9272689828f850e1d87cff48dd",
-    "src/mednorm_vi/training/phase2/e4_alignment_diagnostic.py":
-        "ec610e190bf65e9033ccad7dd21a17b3f4403ff0a3f98f4192eea77d1c3e7b1c",
+    "src/mednorm_vi/training/phase2/e4/alignment_diagnostic.py":
+        "6fdafbcf7ba262a60c2a25baeab0c69258ec0c67470ff992481668a4c1cf5366",
     "src/mednorm_vi/mention_factory/w2ner.py":
         "2ca5d434e4a4a252ee8b3cd942b3c4a4566fd9d9591a7a024426e21d53f1fd4f",
     "src/mednorm_vi/training/phase2/artifacts.py":
@@ -740,7 +737,8 @@ E4_PROTECTED_SHA256: dict[str, str] = {
 def test_active_e4_paths_are_byte_for_byte_unchanged(relative_path: str) -> None:
     digest = hashlib.sha256((REPO / relative_path).read_bytes()).hexdigest()
     assert digest == E4_PROTECTED_SHA256[relative_path], (
-        f"{relative_path} changed while the real E4 full-training run was active")
+        f"{relative_path} changed; it survived the Audit-0045 E4 replacement "
+        "and must stay byte-identical")
 
 
 def test_no_model_checkpoint_cache_or_archive_is_tracked_in_git() -> None:

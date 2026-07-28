@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from mednorm_vi.training.phase2.e4_progress import (
+from mednorm_vi.training.phase2.e4.progress import (
     DEFAULT_LOG_EVERY_N_TRAIN_SAMPLES,
     DEFAULT_LOG_EVERY_N_VALIDATION_SAMPLES,
     DEFAULT_LOG_FIRST_N_SAMPLES,
@@ -52,25 +52,14 @@ from mednorm_vi.training.phase2.e4_progress import (
     training_heartbeat,
     validation_heartbeat,
 )
-from mednorm_vi.training.phase2.e4_runtime_io import (
-    GovernedW2NERContractSource,
-    assert_not_materialized,
-)
 
 REPO = Path(__file__).resolve().parents[2]
-E4_NOTEBOOK = REPO / "notebooks" / "MedNorm_E4_PhoBERT_W2NER_Training.ipynb"
 
 FULL_TRAIN_EXAMPLES = 33826
 FULL_VALIDATION_EXAMPLES = 1045
 FULL_EPOCHS = 12
 EXPECTED_OPTIMIZER_STEPS = 50748
 EXPECTED_BACKWARD_PASSES = 405912
-
-
-def _notebook_code() -> list[str]:
-    payload = json.loads(E4_NOTEBOOK.read_text(encoding="utf-8"))
-    return ["".join(cell["source"]) for cell in payload["cells"]
-            if cell["cell_type"] == "code"]
 
 
 # ---------------------------------------------------------------------------
@@ -87,29 +76,6 @@ def test_committed_full_run_interval_is_100_not_5() -> None:
     assert config.log_every_n_validation_samples == DEFAULT_LOG_EVERY_N_VALIDATION_SAMPLES == 50
     assert config.enabled is True
     assert config.progress_bar_enabled is True
-
-
-def _notebook_executable_lines() -> str:
-    """Notebook code with comment-only lines removed.
-
-    The narrative comment deliberately documents the five-sample debug option, so
-    the "not the committed default" assertion must read executable code.
-    """
-    return "\n".join(
-        line for source in _notebook_code() for line in source.splitlines()
-        if not line.strip().startswith("#"))
-
-
-def test_notebook_commits_the_conservative_defaults() -> None:
-    executable = _notebook_executable_lines()
-    assert "PROGRESS_ENABLED = True" in executable
-    assert "PROGRESS_LOG_FIRST_N_SAMPLES = 10" in executable
-    assert "PROGRESS_LOG_EVERY_N_TRAIN_SAMPLES = 100" in executable
-    assert "PROGRESS_LOG_EVERY_N_VALIDATION_SAMPLES = 50" in executable
-    assert "PROGRESS_BAR_ENABLED = True" in executable
-    assert "PROGRESS_LOG_EVERY_N_TRAIN_SAMPLES = 5\n" not in executable + "\n"
-    # The five-sample debug option is documented in prose for the operator.
-    assert "PROGRESS_LOG_EVERY_N_TRAIN_SAMPLES = 5" in "\n".join(_notebook_code())
 
 
 def test_an_operator_may_set_a_five_sample_debug_interval() -> None:
@@ -131,18 +97,6 @@ def test_intervals_must_be_positive_integers() -> None:
                    {"log_every_n_train_samples": True}):
         with pytest.raises(ProgressConfigError):
             ProgressConfig(**kwargs)  # type: ignore[arg-type]
-
-
-def test_progress_configuration_is_recorded_for_config_and_manifest() -> None:
-    payload = ProgressConfig().as_dict()
-    for key in ("progress_enabled", "progress_log_first_n_samples",
-                "progress_log_every_n_train_samples",
-                "progress_log_every_n_validation_samples",
-                "progress_bar_enabled", "progress_config_version"):
-        assert key in payload
-    joined = "\n".join(_notebook_code())
-    assert "progress=PROGRESS.as_dict()" in joined          # resolved_config.json
-    assert '"progress": {**PROGRESS.as_dict()' in joined     # manifest accounting
 
 
 # ---------------------------------------------------------------------------
@@ -420,15 +374,6 @@ def test_emit_prints_flushed_and_appends(tmp_path: Path, capsys) -> None:
     assert log.records_written == 1
 
 
-def test_progress_log_is_local_during_an_epoch_and_synced_at_boundaries() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "RUNTIME_LOGS_DIR / DEFAULT_PROGRESS_LOG_NAME" in joined
-    assert "/content/mednorm_vi_runtime" in joined
-    # Synced through the existing verified persistence, only at boundaries.
-    assert joined.count('"training_progress.jsonl", PROGRESS_LOG_PATH') == 3
-    assert 'OUTPUT_DIR / "logs" / "training_progress.jsonl"' in joined
-
-
 # ---------------------------------------------------------------------------
 # H. Controlled exception reporting
 # ---------------------------------------------------------------------------
@@ -449,16 +394,6 @@ def test_failure_record_is_complete_and_does_not_claim_resumability() -> None:
     assert record["stage"] == STAGE_TRAINING_FAILED
     assert record["exception_type"] == "RuntimeError"
     assert record["latest_persistent_checkpoint_available"] is False
-
-
-def test_notebook_reports_then_reraises_without_suppressing() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "training_failed_record(" in joined
-    assert "except BaseException as training_error:" in joined
-    # The bare `raise` re-raises the original exception; nothing swallows it.
-    body = joined[joined.index("except BaseException as training_error:"):]
-    assert "\n        raise" in body
-    assert "pass  # noqa" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -490,46 +425,13 @@ def test_progress_bar_postfix_shows_the_required_fields() -> None:
         eta_seconds_value=-5.0)["eta_s"] == "0"
 
 
-def test_notebook_uses_one_bar_per_epoch_and_per_validation_pass() -> None:
-    joined = "\n".join(_notebook_code())
-    assert joined.count("make_progress_bar(") == 2
-    assert 'f"train epoch {epoch}/{epochs}"' in joined
-    assert 'f"validation epoch {epoch}/{total_epochs}"' in joined
-    assert "bar.close()" in joined
-    assert "PROGRESS.progress_bar_enabled" in joined
-
-
 # ---------------------------------------------------------------------------
 # I. Training semantics are untouched
 # ---------------------------------------------------------------------------
 
 
-def test_progress_code_never_materializes_a_streamed_source(tmp_path: Path) -> None:
-    path = tmp_path / "train.jsonl"
-    path.write_text(json.dumps({"example_id": "a", "text": "x"}) + "\n", encoding="utf-8")
-    import hashlib
-
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    source = GovernedW2NERContractSource(
-        split="train", path=str(path), expected_sha256=digest,
-        expected_example_count=1, tokenizer=object(),
-        build_contract=lambda split, row: (object(), {"atomic_word_count": 1}),
-        max_words=256, max_model_tokens=512, input_contract_version="v1")
-    assert_not_materialized(source, label="train_source")
-    joined = "\n".join(_notebook_code())
-    assert "list(train_source" not in joined
-    assert "list(validation_source" not in joined
-    assert "assert_not_materialized(" in joined
-
-
-def test_a_new_iterator_is_still_created_per_epoch_and_validation_pass() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "train_source.iter_contracts()" in joined
-    assert "validation_source.iter_contracts()" in joined
-
-
 def test_optimizer_and_backward_accounting_is_unchanged() -> None:
-    from mednorm_vi.training.phase2.e4_w2ner_training import plan_gradient_accumulation
+    from mednorm_vi.training.phase2.e4.training import plan_gradient_accumulation
 
     plan = plan_gradient_accumulation(
         FULL_TRAIN_EXAMPLES, micro_batch_size=1, accumulation_steps=8,
@@ -557,22 +459,8 @@ def test_progress_logging_does_not_alter_step_counters() -> None:
     assert record["global_optimizer_steps"] == 12
 
 
-def test_notebook_preserves_the_training_contract() -> None:
-    joined = "\n".join(_notebook_code())
-    for marker in ("MICRO_BATCH_SIZE = 1", "GRADIENT_ACCUMULATION_STEPS = 8",
-                   "FULL_EPOCHS = 12", "ACCUMULATION.loss_scale_for(micro_batch_index)",
-                   "ACCUMULATION.is_optimizer_step_boundary(micro_batch_index)",
-                   "clip_grad_norm_(trainable, MAX_GRAD_NORM)",
-                   "use_safetensors=WEIGHT_FORMAT.use_safetensors",
-                   "assert_optimizer_step_accounting("):
-        assert marker in joined
-    # No per-sample garbage collection or cache clearing was added.
-    assert "gc.collect()" not in joined
-    assert "empty_cache()" not in joined
-
-
 def test_precision_resolution_is_unchanged() -> None:
-    from mednorm_vi.training.phase2.e4_w2ner_training import (
+    from mednorm_vi.training.phase2.training_contracts import (
         DEVICE_CUDA,
         PRECISION_BF16,
         PRECISION_FP16,
@@ -596,36 +484,6 @@ def test_gpu_snapshot_degrades_without_cuda() -> None:
 # ---------------------------------------------------------------------------
 # Privacy and hygiene
 # ---------------------------------------------------------------------------
-
-
-def test_no_corpus_text_is_logged() -> None:
-    source = (REPO / "src" / "mednorm_vi" / "training" / "phase2" / "e4_progress.py"
-              ).read_text(encoding="utf-8")
-    for forbidden in ('row["text"]', "original_text", "entity.text", "gold_spans",
-                      "contract.grid", "predicted_spans"):
-        assert forbidden not in source
-    record = training_heartbeat(
-        run_mode="full", epoch=1, total_epochs=12, sample=1, total_samples=10,
-        accumulation_slot=1, gradient_accumulation_steps=8, epoch_backward_passes=1,
-        global_backward_passes=1, epoch_optimizer_steps=0, global_optimizer_steps=0,
-        current_loss=1.0, rolling_mean_loss=1.0, epoch_elapsed_seconds=1.0,
-        run_elapsed_seconds=1.0, learning_rate=2e-5, precision_mode="bf16",
-        gpu_name="Tesla T4")
-    for value in record.values():
-        assert not isinstance(value, (list, dict, tuple))
-
-
-def test_no_internal_test_access() -> None:
-    source = (REPO / "src" / "mednorm_vi" / "training" / "phase2" / "e4_progress.py"
-              ).read_text(encoding="utf-8")
-    assert "internal_test.jsonl" not in source
-    joined = "\n".join(_notebook_code())
-    assert "internal_test.jsonl" not in joined
-
-
-def test_every_notebook_code_cell_parses() -> None:
-    for index, source in enumerate(_notebook_code()):
-        compile(source, f"e4_cell_{index}", "exec")
 
 
 def test_no_checkpoint_model_cache_or_archive_is_tracked_in_git() -> None:

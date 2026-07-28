@@ -26,18 +26,18 @@ from typing import Any
 
 from ...mention_factory.mrc import MRC_QUERY_VERSION, TYPE_QUERY_ORDER
 from ...schemas.constants import ENTITY_TYPES
+from .e5_mrc_training import E5_MODEL_ID, E5_STAGE_ID, E5TrainingContractError, query_hash
 
 # Read-only reuse of generic Phase-2 infrastructure. These modules are NOT
 # modified by this milestone.
-from .e4_w2ner_training import (
+from .training_contracts import (
     AccumulationPlan,
     MixedPrecisionPolicy,
-    assert_full_training_device,
+    assert_training_device,
     optimizer_signature,
     plan_gradient_accumulation,
     resolve_mixed_precision_policy,
 )
-from .e5_mrc_training import E5_MODEL_ID, E5_STAGE_ID, E5TrainingContractError, query_hash
 
 E5_READINESS_VERSION = "e5-readiness-v1"
 E5_INPUT_CONTRACT_VERSION = "e5-mrc-start-end-v1"
@@ -333,7 +333,7 @@ __all__ = [
     "SupervisedTypeReport",
     "assert_compatible_e5_resume",
     "assert_e5_checkpoint_custody",
-    "assert_full_training_device",
+    "assert_training_device",
     "build_e5_full_resolved_config",
     "e5_readiness_report",
     "plan_e5_accumulation",

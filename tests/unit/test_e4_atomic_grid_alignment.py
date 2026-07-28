@@ -23,7 +23,17 @@ from mednorm_vi.mention_factory.w2ner import (
     is_atomic_boundary_character,
     tokenize_atomic_words,
 )
-from mednorm_vi.training.phase2.e4_alignment_diagnostic import (
+from mednorm_vi.training.phase2.e4.alignment import (
+    ATOMIC_FEATURE_DIM,
+    ATOMIC_PROJECTION_VERSION,
+    E4_INPUT_CONTRACT_VERSION,
+    E4ContractError,
+    atomic_relation_head_input_dim,
+    build_atomic_projection,
+    build_w2ner_batch_contract_from_segmented_words,
+    prepare_phobert_word_inputs,
+)
+from mednorm_vi.training.phase2.e4.alignment_diagnostic import (
     ALIGNED,
     BOTH,
     LEFT_ONLY,
@@ -32,19 +42,8 @@ from mednorm_vi.training.phase2.e4_alignment_diagnostic import (
     classify_alignment,
     run_alignment_diagnostic,
 )
-from mednorm_vi.training.phase2.e4_w2ner_training import (
-    ATOMIC_FEATURE_DIM,
-    ATOMIC_PROJECTION_VERSION,
+from mednorm_vi.training.phase2.e4.contracts import (
     E4_CHECKPOINT_SCHEMA_VERSION,
-    E4_INPUT_CONTRACT_VERSION,
-    E4TrainingContractError,
-    atomic_relation_head_input_dim,
-    build_atomic_projection,
-    build_e4_resolved_config,
-    build_w2ner_batch_contract_from_segmented_words,
-    e4_checkpoint_payload,
-    prepare_phobert_word_inputs,
-    reject_incompatible_e4_checkpoint,
 )
 from mednorm_vi.training.phobert_alignment import SegmentedWord
 
@@ -292,7 +291,7 @@ def test_projection_output_shape_matches_the_grid() -> None:
 
 def test_relation_head_input_dim_accounts_for_the_atomic_features() -> None:
     assert atomic_relation_head_input_dim(1024) == 1024 + ATOMIC_FEATURE_DIM
-    with pytest.raises(E4TrainingContractError):
+    with pytest.raises(E4ContractError):
         atomic_relation_head_input_dim(0)
 
 
@@ -319,7 +318,7 @@ def test_projection_fails_loudly_when_an_atomic_word_has_no_model_word() -> None
         "x", text, (), _model_words(text, spec), max_words=64)
     encoding = prepare_phobert_word_inputs(
         _FakeSlowPhobertTokenizer(), contract.segmented_words, max_length=64)
-    with pytest.raises(E4TrainingContractError, match="overlaps no"):
+    with pytest.raises(E4ContractError, match="overlaps no"):
         build_atomic_projection(
             text, contract.segmented_words, encoding, atomic_words=contract.atomic_words)
 
@@ -421,115 +420,24 @@ def test_diagnostic_is_deterministic(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_contract_versions_are_bumped_for_the_atomic_grid() -> None:
+# ---------------------------------------------------------------------------
+# Contract identity under the clean implementation (Audit 0045)
+# ---------------------------------------------------------------------------
+#
+# The checkpoint-compatibility and notebook-ordering tests that used to live here
+# exercised the removed implementation: its `phase2-e4-checkpoint-v2` schema, its
+# `reject_incompatible_e4_checkpoint` helper and its full-training notebook. All
+# three are gone. Their replacements are covered by
+# tests/unit/test_e4_clean_training.py; what stays here is the alignment surface,
+# which Audit 0043 proved exact and which moved across unchanged.
+
+
+def test_the_atomic_grid_contract_survived_the_replacement() -> None:
     assert W2NER_CONFIG_VERSION == "phobert-w2ner-v2"
     assert E4_INPUT_CONTRACT_VERSION == "e4-atomic-grid-word-v1"
-    assert E4_CHECKPOINT_SCHEMA_VERSION == "phase2-e4-checkpoint-v2"
     assert ATOMIC_PROJECTION_VERSION == "atomic-projection-v1"
     assert ATOMIC_WORD_POLICY_VERSION == "atomic-original-word-v1"
 
 
-def test_resolved_config_records_the_input_contract() -> None:
-    config = build_e4_resolved_config(
-        mode="smoke", model_revision="a" * 40, tokenizer_revision="a" * 40,
-        seed=1, max_words=256, effective_batch_size=8)
-    assert config["e4_input_contract_version"] == E4_INPUT_CONTRACT_VERSION
-    assert config["grid_word_surface"] == ATOMIC_WORD_POLICY_VERSION
-    assert config["atomic_projection_version"] == ATOMIC_PROJECTION_VERSION
-    assert config["w2ner_config_version"] == W2NER_CONFIG_VERSION
-    assert config["stage_id"].endswith("-v2")
-
-
-def test_a_v2_checkpoint_payload_is_accepted() -> None:
-    payload = e4_checkpoint_payload(
-        mode="smoke", config_sha256="0" * 64, model_revision="a" * 40,
-        tokenizer_revision="a" * 40, parameter_count=1)
-    reject_incompatible_e4_checkpoint(payload)
-
-
-def test_an_audit_0037_checkpoint_is_rejected() -> None:
-    legacy = {
-        "checkpoint_schema_version": "phase2-checkpoint-v1",
-        "expert_id": "E4_phobert_w2ner",
-        "mode": "smoke",
-        "config_sha256": "0" * 64,
-        "model_revision": "a" * 40,
-        "model_state": {},
-    }
-    with pytest.raises(E4TrainingContractError, match="input contract"):
-        reject_incompatible_e4_checkpoint(legacy)
-
-
-def test_a_mismatched_projection_version_is_rejected() -> None:
-    payload = e4_checkpoint_payload(
-        mode="smoke", config_sha256="0" * 64, model_revision="a" * 40,
-        tokenizer_revision="a" * 40, parameter_count=1)
-    payload["atomic_projection_version"] = "atomic-projection-v0"
-    with pytest.raises(E4TrainingContractError, match="atomic projection"):
-        reject_incompatible_e4_checkpoint(payload)
-
-
-# ---------------------------------------------------------------------------
-# Notebook ordering and runtime hygiene
-# ---------------------------------------------------------------------------
-
-
-def _notebook_code() -> list[str]:
-    payload = json.loads(
-        (REPO / "notebooks" / "MedNorm_E4_PhoBERT_W2NER_Training.ipynb").read_text(
-            encoding="utf-8"))
-    return ["".join(cell["source"]) for cell in payload["cells"]
-            if cell["cell_type"] == "code"]
-
-
-def test_every_notebook_code_cell_parses() -> None:
-    for index, source in enumerate(_notebook_code()):
-        compile(source, f"e4_cell_{index}", "exec")
-
-
-def test_notebook_runs_the_preflight_before_acquiring_the_encoder() -> None:
-    cells = _notebook_code()
-    preflight = next(i for i, s in enumerate(cells) if "run_alignment_diagnostic(" in s)
-    encoder = next(i for i, s in enumerate(cells) if "AutoModel.from_pretrained(" in s)
-    tokenizer_cell = next(i for i, s in enumerate(cells) if "AutoTokenizer.from_pretrained(" in s)
-    assert tokenizer_cell < preflight < encoder
-    encoder_source = cells[encoder]
-    assert "PREFLIGHT_PASSED" in encoder_source
-    assert "refusing to acquire the PhoBERT encoder" in encoder_source
-
-
-def test_notebook_orders_corpus_and_revision_resolution_before_the_tokenizer() -> None:
-    cells = _notebook_code()
-    corpus = next(i for i, s in enumerate(cells) if "resolve_e4_governed_splits(" in s)
-    revisions = next(i for i, s in enumerate(cells) if "resolve_hf_revision(" in s)
-    tokenizer_cell = next(i for i, s in enumerate(cells) if "AutoTokenizer.from_pretrained(" in s)
-    assert corpus < revisions < tokenizer_cell
-
-
-def test_notebook_builds_both_surfaces_and_validates_the_projection() -> None:
-    cells = _notebook_code()
-    surfaces = next(i for i, s in enumerate(cells) if "build_atomic_projection(" in s)
-    preflight = next(i for i, s in enumerate(cells) if "run_alignment_diagnostic(" in s)
-    assert surfaces <= preflight
-    joined = "\n".join(cells)
-    assert "tokenize_atomic_words(" in joined
-    assert "map_segmented_words(" in joined
-    assert "project_to_atomic_word_embeddings(" in joined
-
-
-def test_notebook_initializes_vncorenlp_once_per_process() -> None:
-    joined = "\n".join(_notebook_code())
-    assert 'globals().get("VNCORENLP_ANNOTATOR")' in joined
-    assert joined.count("py_vncorenlp.VnCoreNLP(") == 1
-    assert "os.chdir(_cwd_before_jvm)" in joined
-
-
-def test_notebook_rejects_an_incompatible_checkpoint_on_reload() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "reject_incompatible_e4_checkpoint(payload)" in joined
-
-
-def test_notebook_saves_the_diagnostic_summary() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "e4_alignment_diagnostic.json" in joined
-    assert "DIAGNOSTIC_SHA256" in joined
+def test_the_checkpoint_schema_was_bumped_past_the_collapsed_implementation() -> None:
+    assert E4_CHECKPOINT_SCHEMA_VERSION == "phase2-e4-checkpoint-v3"

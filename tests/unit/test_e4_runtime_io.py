@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from mednorm_vi.training.phase2.e4_runtime_io import (
+from mednorm_vi.training.phase2.e4.runtime_io import (
     ARTIFACT_PERSISTENCE_VERSION,
     CONTRACT_STREAM_VERSION,
     DRIVE_HEALTH_PROBE_VERSION,
@@ -40,7 +40,6 @@ from mednorm_vi.training.phase2.e4_runtime_io import (
 )
 
 REPO = Path(__file__).resolve().parents[2]
-E4_NOTEBOOK = REPO / "notebooks" / "MedNorm_E4_PhoBERT_W2NER_Training.ipynb"
 
 # The real governed digests. The Audit-0040 report pasted the train value with 63
 # characters; the authoritative 64-character digest is used everywhere.
@@ -48,12 +47,6 @@ GOVERNED_TRAIN_SHA256 = "892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9
 GOVERNED_VALIDATION_SHA256 = "ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103"
 
 TRANSPORT_MESSAGE = "Transport endpoint is not connected"
-
-
-def _notebook_code() -> list[str]:
-    payload = json.loads(E4_NOTEBOOK.read_text(encoding="utf-8"))
-    return ["".join(cell["source"]) for cell in payload["cells"]
-            if cell["cell_type"] == "code"]
 
 
 def _write(path: Path, payload: str) -> str:
@@ -497,7 +490,7 @@ def test_memory_snapshot_reports_rss_and_available_ram() -> None:
 
 
 def _healthy():
-    from mednorm_vi.training.phase2.e4_runtime_io import DriveHealthReport
+    from mednorm_vi.training.phase2.e4.runtime_io import DriveHealthReport
 
     return DriveHealthReport(True, True, False, False)
 
@@ -581,107 +574,6 @@ def test_a_missing_staged_artifact_is_rejected(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # H/I. Notebook wiring
 # ---------------------------------------------------------------------------
-
-
-def test_notebook_no_longer_materializes_full_contract_lists() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "load_governed_w2ner_contracts" not in joined
-    assert "train_contracts, train_alignment_reports" not in joined
-    assert "alignment_reports.append(" not in joined
-    assert "GovernedW2NERContractSource(" in joined
-    assert "assert_not_materialized(" in joined
-
-
-def test_notebook_streams_a_fresh_iterator_per_epoch_and_validation_pass() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "train_source.iter_contracts()" in joined
-    assert "validation_source.iter_contracts()" in joined
-
-
-def test_notebook_materializes_splits_locally_before_heavy_work() -> None:
-    cells = _notebook_code()
-    materialize = next(i for i, s in enumerate(cells) if "materialize_governed_splits(" in s)
-    preflight = next(i for i, s in enumerate(cells) if "run_alignment_diagnostic(" in s)
-    encoder = next(i for i, s in enumerate(cells) if "AutoModel.from_pretrained(" in s)
-    assert materialize < preflight < encoder
-    source = cells[materialize]
-    assert "RUNTIME_SPLITS_DIR" in source
-    assert "is still on Drive" in source  # the active-path guard
-
-
-def test_notebook_checks_drive_health_before_corpus_io() -> None:
-    cells = _notebook_code()
-    health = next(i for i, s in enumerate(cells) if "ensure_drive_healthy(" in s)
-    materialize = next(i for i, s in enumerate(cells) if "materialize_governed_splits(" in s)
-    assert health <= materialize
-    joined = "\n".join(cells)
-    assert "force_remount=True" in joined
-    assert "max_remount_attempts=1" in joined
-
-
-def test_notebook_reports_memory_at_the_required_points() -> None:
-    joined = "\n".join(_notebook_code())
-    for label in ("before_preflight", "after_preflight", "after_first_micro_batch"):
-        assert f'memory_snapshot("{label}")' in joined
-
-
-def test_notebook_persists_every_artifact_local_first() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "save_and_persist_checkpoint(" in joined
-    for name in ("resolved_config.json", "validation_metrics.json",
-                 "e4_alignment_diagnostic.json", "grid_target_statistics.json",
-                 "training_history.jsonl", "training_manifest.json"):
-        assert name in joined
-    assert "STAGING_DIR" in joined
-    assert "persistent_checkpoint_custody_failed" in joined
-
-
-def test_notebook_keeps_the_encoder_after_the_preflight() -> None:
-    cells = _notebook_code()
-    preflight = next(i for i, s in enumerate(cells) if "run_alignment_diagnostic(" in s)
-    encoder = next(i for i, s in enumerate(cells) if "AutoModel.from_pretrained(" in s)
-    assert preflight < encoder
-    assert "PREFLIGHT_PASSED" in cells[encoder]
-
-
-def test_notebook_preserves_training_semantics() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "MICRO_BATCH_SIZE = 1" in joined
-    assert "GRADIENT_ACCUMULATION_STEPS = 8" in joined
-    assert "EFFECTIVE_BATCH_SIZE = MICRO_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS" in joined
-    assert "FULL_EPOCHS = 12" in joined
-    assert "ACCUMULATION.loss_scale_for(micro_batch_index)" in joined
-    assert "ACCUMULATION.is_optimizer_step_boundary(micro_batch_index)" in joined
-    assert "clip_grad_norm_(trainable, MAX_GRAD_NORM)" in joined
-    assert "use_safetensors=WEIGHT_FORMAT.use_safetensors" in joined
-    assert "assert_optimizer_step_accounting(" in joined
-
-
-def test_notebook_plans_accumulation_from_the_stream_not_a_list() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "plan_gradient_accumulation(\n    TRAIN_SOURCE.example_count," in joined
-    assert "len(train_contracts)" not in joined
-
-
-def test_notebook_keeps_smoke_defaults() -> None:
-    joined = "\n".join(_notebook_code())
-    for line in ("RUN_SMOKE_TRAINING = True", "RUN_FULL_TRAINING = False",
-                 'CONFIRM_FULL = ""', "RESUME_FROM_SMOKE_CHECKPOINT = False",
-                 "RESUME_FROM_FULL_CHECKPOINT = False"):
-        assert line in joined
-    assert "RUN_FULL_TRAINING = True" not in joined
-    assert 'CONFIRM_FULL = "I_AUTHORIZE_E4_FULL_TRAINING"' not in joined
-
-
-def test_notebook_never_reads_internal_test() -> None:
-    joined = "\n".join(_notebook_code())
-    assert "internal_test.jsonl" not in joined
-    assert joined.count('"internal_test_accessed": False') >= 5
-
-
-def test_every_notebook_code_cell_parses() -> None:
-    for index, source in enumerate(_notebook_code()):
-        compile(source, f"e4_cell_{index}", "exec")
 
 
 def test_no_model_checkpoint_cache_or_archive_is_tracked_in_git() -> None:

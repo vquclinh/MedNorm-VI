@@ -11,17 +11,18 @@ import pytest
 
 from mednorm_vi.mention_factory.w2ner import EntitySpan, decode_w2ner_grid
 from mednorm_vi.training.phase2.common import sha256_file
-from mednorm_vi.training.phase2.e4_w2ner_training import (
-    E4TrainingContractError,
+from mednorm_vi.training.phase2.e4.alignment import (
+    E4ContractError,
     build_w2ner_batch_contract_from_segmented_words,
     prepare_phobert_word_inputs,
+)
+from mednorm_vi.training.phase2.e4.contracts import (
     resolve_governed_split_by_sha256,
     validate_phobert_encoder_load_report,
 )
 from mednorm_vi.training.phobert_alignment import map_segmented_words, segmented_text_to_words
 
 REPO = Path(__file__).resolve().parents[2]
-E4_NOTEBOOK = REPO / "notebooks" / "MedNorm_E4_PhoBERT_W2NER_Training.ipynb"
 
 
 class FakeSlowPhoBERTTokenizer:
@@ -172,7 +173,7 @@ def test_truncation_fails_loudly_before_partial_grid_targets() -> None:
         words,
         max_words=8,
     )
-    with pytest.raises(E4TrainingContractError, match="refuses silent truncation"):
+    with pytest.raises(E4ContractError, match="refuses silent truncation"):
         prepare_phobert_word_inputs(
             FakeSlowPhoBERTTokenizer(),
             contract.segmented_words,
@@ -218,46 +219,13 @@ def test_phobert_encoder_load_report_accepts_only_expected_mlm_head_keys() -> No
         unexpected_keys=("lm_head.decoder.weight", "lm_head.layer_norm.bias"),
     )
     assert report["w2ner_head_expected_from_base"] is False
-    with pytest.raises(E4TrainingContractError):
+    with pytest.raises(E4ContractError):
         validate_phobert_encoder_load_report(
             missing_keys=("encoder.layer.0.attention.self.query.weight",),
             unexpected_keys=(),
         )
-    with pytest.raises(E4TrainingContractError):
+    with pytest.raises(E4ContractError):
         validate_phobert_encoder_load_report(
             missing_keys=(),
             unexpected_keys=("encoder.layer.0.output.dense.weight",),
         )
-
-
-def _e4_notebook_code() -> str:
-    doc = json.loads(E4_NOTEBOOK.read_text(encoding="utf-8"))
-    return "\n".join(
-        "".join(cell.get("source", []))
-        for cell in doc["cells"]
-        if cell.get("cell_type") == "code"
-    )
-
-
-def test_e4_notebook_bootstrap_orders_repo_import_before_project_modules() -> None:
-    code = _e4_notebook_code()
-    assert code.index("drive.mount") < code.index("[\"git\", \"clone\"")
-    assert code.index("[\"git\", \"clone\"") < code.index("sys.path.insert")
-    assert code.index("sys.path.insert") < code.index("import mednorm_vi")
-    assert code.index("import mednorm_vi") < code.index("from mednorm_vi.training.phase2")
-    assert code.index("OUTPUT_DIR.mkdir") > code.index("drive.mount")
-
-
-def test_e4_notebook_hash_revision_and_offset_contracts_are_static() -> None:
-    code = _e4_notebook_code()
-    assert "public_ner_train.jsonl" not in code
-    assert "public_ner_validation.jsonl" not in code
-    assert "resolve_e4_governed_splits" in code
-    assert code.index("PINNED_MODEL_REVISION = resolve_hf_revision") < code.index(
-        "require_resolved_revision(PINNED_MODEL_REVISION"
-    )
-    assert code.index("require_resolved_revision(PINNED_MODEL_REVISION") < code.index(
-        "AutoTokenizer.from_pretrained"
-    )
-    assert "prepare_phobert_word_inputs(tokenizer" in code
-    assert "offset_mapping leaked into encoder inputs" in code

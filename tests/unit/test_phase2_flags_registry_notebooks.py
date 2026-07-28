@@ -98,9 +98,25 @@ def test_phase2_inference_modules_do_not_create_optimizers_or_call_backward() ->
         assert "from_pretrained(" not in source
 
 
+def _executable_cell_source(source: str) -> str:
+    """Notebook cell source with IPython magics stripped.
+
+    A `%pip install` line is not Python and never compiles. Audit 0045 requires
+    the E4 notebook to install `py_vncorenlp==0.1.4` executably rather than
+    document it in prose, so the compile check strips magic and shell lines
+    instead of losing the check.
+    """
+    return "\n".join(
+        "" if line.lstrip().startswith(("%", "!")) else line
+        for line in source.splitlines())
+
+
 def test_phase2_notebooks_parse_and_expose_required_training_gates() -> None:
+    # The E4 notebook is deliberately absent. Audit 0045 replaced its single
+    # RUN_FULL_TRAINING/CONFIRM_FULL switch with a four-stage, hash-bound gate
+    # chain, so these token assertions no longer describe it. The stronger
+    # contract is asserted in tests/unit/test_e4_clean_training.py.
     for name in (
-        "MedNorm_E4_PhoBERT_W2NER_Training.ipynb",
         "MedNorm_E5_XLMR_MRC_NER_Training.ipynb",
         "MedNorm_L4_Learned_Resolver_v2_Training.ipynb",
     ):
@@ -112,7 +128,8 @@ def test_phase2_notebooks_parse_and_expose_required_training_gates() -> None:
         )
         for cell in doc["cells"]:
             if cell["cell_type"] == "code":
-                compile("".join(cell.get("source", [])), name, "exec")
+                compile(_executable_cell_source("".join(cell.get("source", []))),
+                        name, "exec")
         assert "RUN_FULL_TRAINING = False" in code
         assert "CONFIRM_FULL" in code
         assert "validate_corpus_hashes(CORPUS_DIR)" in code

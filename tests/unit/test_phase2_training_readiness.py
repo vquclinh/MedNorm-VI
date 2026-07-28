@@ -437,10 +437,23 @@ def test_phase2_budget_rejects_unpinned_or_missing_enabled_models() -> None:
     assert "checkpoint_hash_missing:bad" in bad.failures
 
 
+def _executable_cell_source(source: str) -> str:
+    """Notebook cell source with IPython magics stripped.
+
+    A `%pip install` line is not Python and never compiles. Audit 0045 requires
+    the E4 notebook to install `py_vncorenlp==0.1.4` executably rather than
+    document it in prose, so the compile check strips magic and shell lines
+    instead of losing the check.
+    """
+    return "\n".join(
+        "" if line.lstrip().startswith(("%", "!")) else line
+        for line in source.splitlines())
+
+
 def test_notebooks_and_git_do_not_track_runtime_weights() -> None:
     repo = Path(__file__).resolve().parents[2]
     for notebook in (
-        "MedNorm_E4_PhoBERT_W2NER_Training.ipynb",
+        "MedNorm_E4_Clean_Training.ipynb",
         "MedNorm_E5_XLMR_MRC_NER_Training.ipynb",
         "MedNorm_L4_Learned_Resolver_v2_Training.ipynb",
         "MedNorm_Phase2_Validation_Ablation.ipynb",
@@ -451,7 +464,8 @@ def test_notebooks_and_git_do_not_track_runtime_weights() -> None:
         assert "output.zip" in source
         for cell in doc["cells"]:
             if cell["cell_type"] == "code":
-                compile("".join(cell.get("source", [])), notebook, "exec")
+                compile(_executable_cell_source("".join(cell.get("source", []))),
+                        notebook, "exec")
     tracked = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True).splitlines()
     forbidden_suffixes = (".pt", ".pth", ".ckpt", ".safetensors", ".bin", ".zip")
     assert not [path for path in tracked if path.endswith(forbidden_suffixes)]

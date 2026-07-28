@@ -22,14 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ...mention_factory.w2ner import (
+from ....mention_factory.w2ner import (
     ATOMIC_WORD_POLICY_VERSION,
     EntitySpan,
     WordToken,
     entity_atomic_alignment,
     tokenize_atomic_words,
 )
-from ..phobert_alignment import (
+from ...phobert_alignment import (
     SegmentedWord,
     map_segmented_words,
     resolve_segmented_text,
