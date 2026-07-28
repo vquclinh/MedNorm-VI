@@ -1189,3 +1189,225 @@ def test_the_notebook_stage_three_activates_no_forbidden_expert() -> None:
     for forbidden in ("vihealthbert", "phobert_w2ner", "xlmr_mrc",
                       "backward", "AdamW", "torch.optim"):
         assert forbidden not in source, forbidden
+
+
+# ---------------------------------------------------------------------------
+# Stage-3 imports and call signatures (Audit 0050)
+# ---------------------------------------------------------------------------
+#
+# The first real Colab run died on `ImportError: cannot import name
+# 'load_l1_config'`. That name is a LOCAL ALIAS internal callers give to
+# `document_intelligence.load_config`; it is not a symbol anywhere in the tree.
+# Three more mismatches were hiding behind it. These tests execute the real
+# import block and check every call shape against the real implementations, so
+# the next such bug is caught here rather than on a GPU.
+
+import subprocess as _subprocess  # noqa: E402
+import sys as _sys  # noqa: E402
+
+
+def _stage3_source() -> str:
+    payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [("".join(c.get("source", [])))
+             for c in payload["cells"] if c.get("cell_type") == "code"]
+    return next(c for c in cells if "STAGE 3" in c)
+
+
+def _stage3_import_block() -> str:
+    """The contiguous import statements at the top of the Stage-3 cell."""
+    collected: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for line in _stage3_source().splitlines():
+        if line.strip().startswith(("from ", "import ")) or depth:
+            buffer.append(line)
+            depth += line.count("(") - line.count(")")
+            if depth == 0:
+                collected.append("\n".join(buffer))
+                buffer = []
+    return "\n".join(collected)
+
+
+def test_the_stage_three_import_block_executes_against_the_real_package(
+    tmp_path: Path,
+) -> None:
+    """Run the real imports in a clean subprocess, no mocks.
+
+    A clean interpreter is the point: importing them inside this process would
+    pass on names another test already imported.
+    """
+    block = _stage3_import_block()
+    assert "from mednorm_vi" in block
+    script = tmp_path / "stage3_imports.py"
+    script.write_text(block + "\nprint('ok')\n", encoding="utf-8")
+    completed = _subprocess.run(
+        [_sys.executable, str(script)],
+        cwd=str(REPO), env={"PYTHONPATH": str(REPO / "src"), "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True)
+    assert completed.returncode == 0, (
+        f"Stage-3 import block failed:\n{completed.stderr}")
+
+
+def test_stage_three_imports_the_real_public_names() -> None:
+    """The exact names that were wrong, pinned so they cannot regress."""
+    block = _stage3_import_block()
+    # `load_l1_config` is an alias, not a symbol. It must never reappear.
+    assert "load_l1_config" not in block
+    assert "from mednorm_vi.document_intelligence import" in block
+    assert "load_config" in block
+    # Phase1BConfig lives in deterministic_baseline, not phase1c_foundation.
+    assert "from mednorm_vi.phase1c_foundation import" not in block
+    assert "from mednorm_vi.deterministic_baseline import" in block
+    assert "Phase1BConfig" in block and "run_phase1b" in block
+
+
+def test_every_stage_three_imported_name_exists_in_its_stated_module() -> None:
+    """Parse the block and resolve each name against the real module."""
+    import ast
+    import importlib
+
+    tree = ast.parse(_stage3_import_block())
+    checked = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        module = importlib.import_module(node.module)
+        for alias in node.names:
+            assert hasattr(module, alias.name), (
+                f"{node.module} does not export {alias.name}")
+            checked += 1
+    assert checked >= 15, f"only {checked} names checked; the block shrank"
+
+
+def test_stage_three_call_signatures_match_the_real_implementations() -> None:
+    import inspect
+
+    from mednorm_vi.deterministic_baseline import Phase1BConfig, run_phase1b
+    from mednorm_vi.document_intelligence import analyze_document, load_config
+
+    # load_config(path) -> (L1Config, SectionLexicon); Stage 3 unpacks two.
+    assert len(inspect.signature(load_config).parameters) == 1
+    assert "tuple[L1Config, SectionLexicon]" in str(
+        inspect.signature(load_config).return_annotation)
+    # Phase1BConfig.load takes exactly three positional configs.
+    assert list(inspect.signature(Phase1BConfig.load).parameters) == [
+        "router_config", "medication_config", "laboratory_config"]
+    # analyze_document takes config/lexicon keyword-only; Stage 3 uses keywords.
+    parameters = inspect.signature(analyze_document).parameters
+    assert parameters["config"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["lexicon"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert "config=L1_CONFIG, lexicon=L1_LEXICON" in _stage3_source()
+    # run_phase1b(graph, config)
+    assert list(inspect.signature(run_phase1b).parameters) == ["graph", "config"]
+    # run_all_arms' keyword-only budget argument, as Stage 3 passes it.
+    assert inspect.signature(run_all_arms).parameters[
+        "active_parameters_by_arm"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert "active_parameters_by_arm=ACTIVE_BY_ARM" in _stage3_source()
+
+
+def test_stage_three_reads_the_real_span_proposal_fields() -> None:
+    """SpanProposal has proposed_types/local_score, not entity_type/score."""
+    import dataclasses
+
+    from mednorm_vi.mention_factory.models import SpanProposal
+
+    fields = {f.name for f in dataclasses.fields(SpanProposal)}
+    assert {"proposed_types", "local_score", "source_specialist"} <= fields
+    assert "entity_type" not in fields
+    assert "score" not in fields
+    source = _stage3_source()
+    assert "proposal.proposed_types" in source
+    assert "proposal.local_score" in source
+    assert "proposal.source_specialist" in source
+    assert "proposal.entity_type" not in source
+    assert "proposal.score" not in source
+
+
+def test_stage_three_maps_organizer_labels_into_internal_enums() -> None:
+    """E1/E2 emit "THUỐC"; ExpertSpanProposal requires "MEDICATION"."""
+    from mednorm_vi.lattice.models import LatticeError
+    from mednorm_vi.schemas.constants import (
+        ORGANIZER_LABEL_BY_TYPE,
+        TYPE_BY_ORGANIZER_LABEL,
+    )
+
+    organizer_label = ORGANIZER_LABEL_BY_TYPE["MEDICATION"]
+    assert TYPE_BY_ORGANIZER_LABEL[organizer_label] == "MEDICATION"
+    # The lattice genuinely refuses the organizer label, which is why the map
+    # is required rather than cosmetic.
+    with pytest.raises(LatticeError, match="unsupported proposed type"):
+        ExpertSpanProposal(
+            document_id="d", start=0, end=3, text="abc",
+            type_scores={organizer_label: 1.0}, local_score=1.0,
+            expert_id=EXPERT_MEDICATION_GRAMMAR, proposal_id="p",
+            original_start=0, original_end=3)
+    assert "TYPE_BY_ORGANIZER_LABEL" in _stage3_source()
+
+
+def test_stage_three_picks_the_expert_from_the_specialist_not_the_type() -> None:
+    """Inferring E1 vs E2 from the entity type would be a guess."""
+    source = _stage3_source()
+    assert 'proposal.source_specialist == "laboratory"' in source
+    assert 'proposal.entity_type in ("TEST_NAME", "TEST_RESULT")' not in source
+
+
+def test_the_deterministic_path_runs_end_to_end_on_a_real_document(
+    tmp_path: Path,
+) -> None:
+    """E1 + E2 over a real document, converted exactly as Stage 3 converts it.
+
+    Deterministic only: no pretrained model is downloaded or loaded.
+    """
+    from mednorm_vi.deterministic_baseline import Phase1BConfig, run_phase1b
+    from mednorm_vi.document_intelligence import analyze_document, load_config
+    from mednorm_vi.lattice.models import EXPERT_LABORATORY_PARSER
+    from mednorm_vi.schemas.constants import ENTITY_TYPES, TYPE_BY_ORGANIZER_LABEL
+
+    config, lexicon = load_config(str(REPO / "configs/document_intelligence/base.yaml"))
+    phase1b = Phase1BConfig.load(
+        str(REPO / "configs/case_router/base.yaml"),
+        str(REPO / "configs/medication/grammar_v1.yaml"),
+        str(REPO / "configs/laboratory/parser_v1.yaml"))
+    text = "Thuốc: Paracetamol 500mg uống 2 viên/ngày ."
+    source_path = tmp_path / "doc.txt"
+    source_path.write_text(text, encoding="utf-8")
+
+    graph = analyze_document(source_path, config=config, lexicon=lexicon)
+    result = run_phase1b(graph, phase1b)
+
+    converted = []
+    for ordinal, proposal in enumerate(result.proposals, start=1):
+        start, end = int(proposal.start), int(proposal.end)
+        if text[start:end] != proposal.text:
+            continue
+        internal = tuple(
+            t if t in ENTITY_TYPES else TYPE_BY_ORGANIZER_LABEL.get(t, "")
+            for t in proposal.proposed_types)
+        internal = tuple(t for t in internal if t)
+        if not internal:
+            continue
+        score = float(proposal.local_score)
+        converted.append(ExpertSpanProposal(
+            document_id="d1", start=start, end=end, text=proposal.text,
+            type_scores={t: score / len(internal) for t in internal},
+            local_score=score,
+            expert_id=(EXPERT_LABORATORY_PARSER
+                       if proposal.source_specialist == "laboratory"
+                       else EXPERT_MEDICATION_GRAMMAR),
+            proposal_id=f"zs0-det-d1-{ordinal:04d}",
+            original_start=start, original_end=end))
+
+    assert converted, "E1/E2 produced no convertible proposal on a medication line"
+    for proposal in converted:
+        assert text[proposal.start:proposal.end] == proposal.text
+        assert set(proposal.type_scores) <= ENTITY_TYPES
+    # And the resolver consumes them without raising.
+    assert len(resolve(converted)) >= 1
+
+
+def test_no_pretrained_model_is_loaded_by_the_local_tests() -> None:
+    """Lazy backend loading is what keeps these tests laptop-safe."""
+    assert GLiNERBackend().loaded is False
+    assert QwenBackend().loaded is False
+    source = Path(GLiNERBackend.__module__.replace(".", "/") + ".py")
+    del source  # the import-time behaviour is what matters, asserted above
