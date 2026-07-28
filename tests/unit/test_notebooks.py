@@ -94,13 +94,15 @@ LATER_NOTEBOOKS = {
         "0035-multi-expert-mention-ensemble-and-learned-l4-v2.md",
     "MedNorm_Phase2_Validation_Ablation.ipynb":
         "0036-phase2-training-readiness-and-artifact-validation.md",
+    "MedNorm_E4_TinyOverfit_Diagnostic.ipynb":
+        "0043-e4-post-training-collapse-diagnosis.md",
 }
 EXPECTED_INVENTORY = AUDIT_0017_INVENTORY | set(LATER_NOTEBOOKS)
 
 
 def test_notebook_inventory_matches_expected() -> None:
     assert set(ALL_NOTEBOOKS) == EXPECTED_INVENTORY
-    assert len(ALL_NOTEBOOKS) == 17
+    assert len(ALL_NOTEBOOKS) == 18
     audit_dir = REPO / "docs" / "audits"
     audit_0017 = (audit_dir / "0017-training-readiness-and-governed-corpus.md").read_text(
         encoding="utf-8")

@@ -85,3 +85,4 @@ Each audit should record, at minimum:
 - `0040-e4-colab-io-and-memory-robustness.md`
 - `0041-e4-training-progress-observability.md`
 - `0042-parallel-e5-s2-and-parameter-budget-readiness.md`
+- `0043-e4-post-training-collapse-diagnosis.md`

@@ -1,0 +1,135 @@
+# MedNorm-VI — E4 tiny-overfit diagnostic (Audit 0043)
+# =============================================================================
+# A bounded experiment, NOT a training stage. It takes a handful of governed
+# training examples that really do contain entities, trains on only those, and
+# evaluates on the very same examples. A correctly wired W2NER pipeline must be
+# able to memorize them.
+#
+# What it decides
+# ---------------
+#   exact train F1 -> ~1.0   the target / loss / decoder pipeline is coherent, so
+#                            the full-run collapse is an optimization or class
+#                            imbalance problem on the real corpus;
+#   loss -> ~0 while
+#   exact train F1 = 0.0     the loss is being minimized without producing
+#                            decodable mentions: a target/loss/decoder
+#                            inconsistency that no amount of data would fix.
+#
+# What it is NOT
+# --------------
+# Not a quality result. Not a deployable checkpoint. Never an initializer for a
+# full run. Evaluating on the training subset is the whole point and is recorded
+# as such in the resolved config.
+version: phase2-e4-tiny-overfit-diagnostic-v1
+stage_id: phase2-e4-tiny-overfit-diagnostic-v1
+expert_id: E4_phobert_w2ner
+mode: diagnostic
+
+# Committed in the not-authorized state. Both the flag and the exact string must
+# be set by an operator in Colab before anything trains.
+status: IMPLEMENTED_NOT_AUTHORIZED
+enabled_by_default: false
+authorization:
+  required: true
+  string: I_AUTHORIZE_E4_TINY_OVERFIT_DIAGNOSTIC
+  committed_confirmation_value: ""
+  committed_run_flag: false
+
+environment:
+  intended_runtime: Colab GPU (CUDA); the diagnostic is small enough for any tier
+  repository_dir: /content/MedNorm-VI
+  drive_root: /content/drive/MyDrive/MedNorm-VI
+  model_cache_dir: /content/drive/MyDrive/MedNorm-VI/model_cache/huggingface
+  local_training_forbidden: true
+
+artifacts:
+  # A SEPARATE directory. The completed full run's artifact is immutable
+  # evidence for Audit 0043 and is refused as a write target by
+  # assert_artifact_dir_is_not_protected().
+  diagnostic_dir: /content/drive/MyDrive/MedNorm-VI/artifacts/e4_tiny_overfit_diagnostic_v1
+  protected_directories_refused_as_write_targets:
+    - e4_phobert_w2ner_full_v1
+    - e4_phobert_w2ner_smoke_v1
+    - e4_phobert_w2ner_smoke_v2
+  files:
+    - resolved_config.json
+    - selection.json
+    - logs/tiny_overfit_history.jsonl
+    - outcome.json
+
+model:
+  id: vinai/phobert-large
+  observed_model_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
+  observed_tokenizer_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
+  pretrained_weight_format: pytorch_model.bin
+  use_safetensors: false
+
+data:
+  split: train
+  internal_test_allowed: false
+  train_split_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  # Deterministic single pass over the governed file order. No seed, no sampling.
+  selection:
+    version: e4-tiny-overfit-diagnostic-v1
+    min_examples: 8
+    max_examples: 16
+    target_examples: 12
+    max_atomic_words_per_example: 64
+    # TEST_NAME and TEST_RESULT are deliberately absent: the governed corpus
+    # contains zero instances of either, in train or validation. Requiring them
+    # would make the selection unsatisfiable. That absence is a corpus finding
+    # recorded in Audit 0043, not something worked around here.
+    required_entity_types: [DIAGNOSIS, SYMPTOM, MEDICATION]
+    skip_examples_whose_entities_do_not_align: true
+    repair_misaligned_entities: false
+
+training:
+  # Bounded on both ends: stop as soon as memorization is proved, and stop
+  # regardless at the epoch cap so a broken pipeline cannot burn a session.
+  max_epochs: 200
+  target_exact_f1: 0.95
+  evaluate_every_n_epochs: 5
+  evaluates_on_the_training_subset_by_design: true
+  micro_batch_size: 1
+  gradient_accumulation_steps: 1
+  optimizer:
+    name: AdamW
+    # Higher than the full run's 2e-5 on purpose: memorizing 12 examples is the
+    # objective, and a slow schedule would only make a negative result ambiguous.
+    learning_rate: 5.0e-5
+    weight_decay: 0.0
+  max_grad_norm: 1.0
+  requested_precision: fp32
+  freeze_base_model: false
+
+# The loss is NOT changed by this milestone. The diagnostic runs the same
+# unweighted cross-entropy the full run used, because changing it here would
+# destroy the comparison the experiment exists to make.
+loss:
+  unchanged_from_full_run: true
+  function: cross_entropy over all n*n grid cells
+  class_weights: none
+  ignore_index: none
+
+metrics:
+  # Reported separately and never averaged into one number: a model that predicts
+  # background everywhere scores ~0.998 grid accuracy while producing nothing.
+  - grid_cell_accuracy
+  - positive_cell_accuracy
+  - background_cell_accuracy
+  - exact_precision
+  - exact_recall
+  - exact_f1
+
+observability:
+  progress_heartbeats: true
+  heartbeat_every_n_epochs: 5
+  logs_no_clinical_text: true
+
+permitted:
+  local_training: false
+  internal_test_access: false
+  organizer_inference: false
+  output_zip_creation: false
+  overwrite_full_artifact: false
+  initialize_a_full_run_from_this_checkpoint: false
