@@ -21,7 +21,9 @@ REPO = Path(__file__).resolve().parents[2]
 def test_phase2_default_feature_flags_preserve_measured_baseline() -> None:
     assert DEFAULT_FEATURE_FLAGS["enable_e3_vihealthbert"] is True
     assert DEFAULT_FEATURE_FLAGS["enable_l4_deterministic_v1"] is False
-    assert DEFAULT_FEATURE_FLAGS["enable_e4_phobert_w2ner"] is False
+    # E4 is RETIRED_FROM_ACTIVE_ARCHITECTURE: the flag is absent, not false
+    # (Audit 0051). test_e4_retirement.py proves the loader refuses its return.
+    assert "enable_e4_phobert_w2ner" not in DEFAULT_FEATURE_FLAGS
     assert DEFAULT_FEATURE_FLAGS["enable_e5_xlmr_mrc"] is False
     assert DEFAULT_FEATURE_FLAGS["enable_e6_gliner"] is False
     assert DEFAULT_FEATURE_FLAGS["enable_e7_qwen_proposer"] is False
@@ -34,13 +36,13 @@ def test_phase2_ablation_reports_unavailable_untrained_instead_of_zero_predictio
     disabled_plan = plan_phase2_ablation(DEFAULT_FEATURE_FLAGS, {"e3_vihealthbert": "missing"})
     assert any(status.status == STATUS_DISABLED for status in disabled_plan)
     enabled_flags = dict(DEFAULT_FEATURE_FLAGS)
-    enabled_flags["enable_e4_phobert_w2ner"] = True
+    enabled_flags["enable_e5_xlmr_mrc"] = True
     plan = plan_phase2_ablation(
         enabled_flags,
-        {"e3_vihealthbert": "missing", "e4_phobert_w2ner": ""},
+        {"e3_vihealthbert": "missing", "e5_xlmr_mrc": ""},
     )
     assert any(
-        status.arm == "E3_plus_E4_phobert_w2ner"
+        status.arm == "E3_plus_E5_xlmr_mrc"
         and status.status == STATUS_UNAVAILABLE_UNTRAINED
         for status in plan
     )
@@ -49,7 +51,9 @@ def test_phase2_ablation_reports_unavailable_untrained_instead_of_zero_predictio
 def test_model_registry_safe_stack_counts_shared_backbones_and_has_metadata() -> None:
     roles = load_registry(REPO / "configs" / "model_registry" / "models_v1.yaml")
     budget = validate_profile_budget(roles, profile="Safe-8.85B", require_metadata=True)
-    assert budget.base_parameters == 8_852_000_000
+    # 8,852,000,000 less PhoBERT-large's 370,000,000, withdrawn from the registry
+    # with retired E4 (Audits 0048, 0051).
+    assert budget.base_parameters == 8_482_000_000
     assert budget.adapter_parameters > 0
     assert budget.within_9b
     assert not budget.metadata_errors
@@ -73,7 +77,6 @@ def test_model_registry_rejects_missing_revision_when_metadata_required() -> Non
 
 def test_phase2_configs_forbid_auto_download_and_keep_new_experts_disabled() -> None:
     for rel in (
-        "configs/mention_factory/phobert_w2ner_v1.yaml",
         "configs/mention_factory/xlmr_mrc_ner_v1.yaml",
         "configs/mention_factory/gliner_v1.yaml",
         "configs/mention_factory/qwen_proposer_v1.yaml",
@@ -86,10 +89,9 @@ def test_phase2_configs_forbid_auto_download_and_keep_new_experts_disabled() -> 
 
 def test_phase2_inference_modules_do_not_create_optimizers_or_call_backward() -> None:
     for rel in (
-        "src/mednorm_vi/mention_factory/w2ner.py",
         "src/mednorm_vi/mention_factory/mrc.py",
         "src/mednorm_vi/mention_factory/gliner.py",
-        "src/mednorm_vi/mention_factory/qwen_proposer.py",
+        "src/mednorm_vi/mention_factory/offsets.py",
         "src/mednorm_vi/resolution/learned_v2.py",
     ):
         source = (REPO / rel).read_text(encoding="utf-8")
@@ -98,13 +100,29 @@ def test_phase2_inference_modules_do_not_create_optimizers_or_call_backward() ->
         assert "from_pretrained(" not in source
 
 
+def test_the_only_model_loader_is_forward_only_and_strictly_local() -> None:
+    """`llm/backends.py` is the one module allowed to load a model.
+
+    It is excluded from the list above because loading is its job. The contract it
+    must satisfy instead: no training, and every `from_pretrained` pinned to a
+    local directory with `local_files_only=True` (spec Appendix A).
+    """
+    source = (REPO / "src" / "mednorm_vi" / "llm" / "backends.py").read_text(
+        encoding="utf-8")
+    assert ".backward(" not in source
+    assert "torch.optim" not in source
+    assert source.count("from_pretrained(") == source.count(
+        "local_files_only=LOCAL_FILES_ONLY")
+    assert "local_files_only=False" not in source
+    assert "torch.no_grad()" in source
+
+
 def _executable_cell_source(source: str) -> str:
     """Notebook cell source with IPython magics stripped.
 
-    A `%pip install` line is not Python and never compiles. Audit 0045 requires
-    the E4 notebook to install `py_vncorenlp==0.1.4` executably rather than
-    document it in prose, so the compile check strips magic and shell lines
-    instead of losing the check.
+    A `%pip install` line is not Python and never compiles. A notebook is still
+    required to install its pins executably rather than document them in prose, so
+    the compile check strips magic and shell lines instead of losing the check.
     """
     return "\n".join(
         "" if line.lstrip().startswith(("%", "!")) else line
@@ -112,10 +130,8 @@ def _executable_cell_source(source: str) -> str:
 
 
 def test_phase2_notebooks_parse_and_expose_required_training_gates() -> None:
-    # The E4 notebook is deliberately absent. Audit 0045 replaced its single
-    # RUN_FULL_TRAINING/CONFIRM_FULL switch with a four-stage, hash-bound gate
-    # chain, so these token assertions no longer describe it. The stronger
-    # contract is asserted in tests/unit/test_e4_clean_training.py.
+    # The E4 notebook was deleted in Audit 0051 (E4 is
+    # RETIRED_FROM_ACTIVE_ARCHITECTURE); test_e4_retirement.py asserts its absence.
     for name in (
         "MedNorm_E5_XLMR_MRC_NER_Training.ipynb",
         "MedNorm_L4_Learned_Resolver_v2_Training.ipynb",

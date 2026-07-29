@@ -1,6 +1,6 @@
 """Unified L3 neural-expert adapter contracts.
 
-The adapters define how ViHealthBERT, PhoBERT-W2NER, XLM-R MRC-NER, and GLiNER
+The adapters define how ViHealthBERT, XLM-R MRC-NER, and GLiNER
 checkpoints plug into the existing ``SpanProposal`` contract. They do not
 fabricate predictions: missing checkpoints fail unless a caller has explicitly
 configured a fallback-to-empty dry run. The production E7 Qwen3 proposer is the
@@ -132,13 +132,6 @@ def default_neural_adapters(
         NeuralExpertAdapter(
             "vihealthbert-span-type",
             CheckpointManifest("vihealthbert-span-type", "span_type", str(root / "vihealthbert")),
-            ("MEDICATION", "DIAGNOSIS", "SYMPTOM", "TEST_NAME", "TEST_RESULT"),
-            ("C1", "C2", "C3", "C4", "C5"),
-            fallback_to_empty,
-        ),
-        NeuralExpertAdapter(
-            "phobert-w2ner",
-            CheckpointManifest("phobert-w2ner", "w2ner", str(root / "phobert_w2ner")),
             ("MEDICATION", "DIAGNOSIS", "SYMPTOM", "TEST_NAME", "TEST_RESULT"),
             ("C1", "C2", "C3", "C4", "C5"),
             fallback_to_empty,

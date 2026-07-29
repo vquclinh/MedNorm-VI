@@ -162,10 +162,13 @@ docs/       architecture/ (digest, layer contracts, case routing) + decisions/ (
 src/mednorm_vi/
             schemas/                typed data contracts
             document_intelligence/  L1   case_router/         L2
-            mention_factory/        L3   boundary_type/       L4
-            specialists/{assertion,icd,rxnorm}/  L5
-            evidence_graph/         L6   confidence_cascade/  L7
+            mention_factory/        L3   lattice/    unified L3 span lattice
+            resolution/             L4   (boundary, type, overlap, abstention)
+            specialists/assertion/  L5   linking/{icd10,rxnorm,snapshot}/  L5
+            evidence_graph/         L6   confidence_cascade/ + llm/         L7
             metric_decoder/         L8   validator/           L9 (implemented)
+            governance/  parameter budget, 9B gate, retirement records
+            training/    S1 mention training, governed split identity
 tests/      unit/ integration/ fixtures/
 data/ models/ indices/ outputs/ reports/    git-ignored artifact roots (see each README)
 docs/audits/  numbered audit records of every meaningful change (see docs/audits/README.md)

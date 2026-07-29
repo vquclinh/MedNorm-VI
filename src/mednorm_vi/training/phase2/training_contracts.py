@@ -1,8 +1,8 @@
-"""Generic Phase-2 training primitives shared by E4 and E5 (Audit 0045).
+"""Expert-independent Phase-2 training primitives (Audit 0045).
 
 Gradient-accumulation accounting, mixed-precision resolution and the optimizer
-signature are not specific to any one expert. They lived inside the removed E4
-implementation, which meant E5 imported them from E4; when E4 was replaced they
+signature are not specific to any one expert. They once lived inside a single
+expert's implementation, which meant every other expert imported that expert; they
 moved here so no expert depends on another expert's training module.
 
 Nothing here trains or imports torch.
@@ -75,11 +75,11 @@ class AccumulationPlan:
     def final_partial_group_size(self) -> int:
         """Microbatches in the last group; equals ``accumulation_steps`` if exact.
 
-        Accounting only. The removed E4 implementation also used this to scale
+        Accounting only. A grid-relation objective would also use this to scale
         each microbatch's loss by its group size — a per-example normalization
         that is exactly the defect Audit 0044 measured, so no loss-scaling helper
         is provided here. Reduction happens once per effective batch, over valid
-        cells (``e4.recipes.BatchGlobalAccumulator``).
+        cells across an accumulation window.
         """
         remainder = self.micro_batches_per_epoch % self.accumulation_steps
         return remainder or self.accumulation_steps
@@ -205,7 +205,7 @@ def assert_training_device(device_type: str) -> None:
     """Training requires CUDA. No particular GPU model is required."""
     if device_type != DEVICE_CUDA:
         raise TrainingContractError(
-            "E4 training requires a CUDA device; the CPU path is valid only for "
+            "Phase-2 training requires a CUDA device; the CPU path is valid only for "
             "contract tests")
 
 
@@ -216,9 +216,10 @@ def optimizer_signature(
 ) -> str:
     """Compact single-learning-rate optimizer identity.
 
-    E5 uses one learning rate for its whole model. E4 does not — a pretrained
-    backbone and a freshly initialized head must not share one, so E4 defines its
-    signature over both parameter groups in ``e4.recipes.OptimizerGroups``.
+    E5 uses one learning rate for its whole model. An expert that pairs a
+    pretrained backbone with a freshly initialized head must not — the two need
+    separate rates, so such an expert defines its signature over both parameter
+    groups rather than reusing this one.
     """
     return f"{name}-lr{learning_rate:g}-wd{weight_decay:g}-clip{max_grad_norm:g}"
 

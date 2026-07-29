@@ -15,7 +15,7 @@ only documents where things live and what is tracked vs ignored.
 | `docs/` | Architecture digest, layer contracts, per-module docs, decisions, and `docs/audits/`. | Yes |
 | `docs/MedNorm-VI_Architecture.pdf` | **Protected** primary source of truth. Never modified. | Yes |
 | `docs/MedNorm-VI_Architecture_Vietnamese.pdf` | Vietnamese copy. | **Ignored** by policy |
-| `notebooks/` | Six Colab scaffolding notebooks (S0–S6 + offline inference). | Yes |
+| `notebooks/` | Colab notebooks (S0–S6 scaffolds, executed S1 mention training/evaluation, E5/L4 training, Phase-2 ablation, offline inference). Audit 0051 removed the retired-E4 and abandoned-ZS0 notebooks. | Yes |
 | `scripts/` | Helper scripts (currently `README.md`). | Yes |
 | `data/manifests/*.yaml` | Resource/KB/NER governance manifests (**metadata only**; raw payloads stay ignored). | Yes |
 | `experiments/registry/` | `EXP-*.json` experiment records. | Yes (records only) |
@@ -53,12 +53,17 @@ only documents where things live and what is tracked vs ignored.
 - No ambiguous tokens (`new`, `old`, `copy`, `temp`, `final2`, `latest2`).
 - Raw / derived / index / report / checkpoint / output roots stay separated.
 
-Known naming inconsistency (deferred to human decision): the route-contract
-vocabulary in `configs/routes.yaml` / `docs/architecture/CASE_ROUTING.md` uses the
-spec layer names `boundary_type`, `specialists.icd`, `specialists.rxnorm`, while
-the runtime pipeline implements those layers under `mednorm_vi.resolution`,
-`mednorm_vi.linking.icd10`, `mednorm_vi.linking.rxnorm`. The former are
-CONTRACT_ONLY bootstrap stubs. See `reports/repository_review/naming_review.json`.
+Naming inconsistency **resolved in Audit 0051**: the route contract in
+`configs/routes.yaml` and `docs/architecture/CASE_ROUTING.md` previously named
+`boundary_type`, `specialists.icd` and `specialists.rxnorm`, which existed only as
+bootstrap stubs alongside the real implementations. The stub packages were deleted
+and the contracts now name the modules that actually run — `mednorm_vi.resolution`
+(L4), `mednorm_vi.linking.icd10` and `mednorm_vi.linking.rxnorm` (L5). One layer,
+one import path.
+
+Current per-layer implementation status is recorded in
+`docs/architecture/ACTIVE_RUNTIME_MANIFEST.md`, which is the supplemental runtime
+companion to the architecture PDF.
 
 ## Reproducible rebuild commands
 

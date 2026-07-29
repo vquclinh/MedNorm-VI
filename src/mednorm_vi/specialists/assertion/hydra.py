@@ -1,14 +1,20 @@
-"""Assertion Hydra: independent deterministic assertion-label evidence."""
+"""Assertion Hydra: independent deterministic assertion-label evidence.
+
+The cue families come from :mod:`.cues`, which is the single source of truth for
+them across L5 (spec §8 stages A2/A3). This module keeps the wired symmetric
+window used by the current pipeline; :func:`.cues.decide_from_cues` implements the
+directional scope model spec §8.1 describes and additionally reports *uncertainty*,
+which is what will route a mention to the L7 adjudicator. Unifying the two onto the
+directional model is L5 work, not a cleanup, and is recorded as a gap in
+``docs/architecture/ACTIVE_RUNTIME_MANIFEST.md``.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 from ...resolution.models import EntityHypothesis
-
-NEGATION_CUES = ("không", "chưa", "âm tính", "phủ nhận")
-HISTORICAL_CUES = ("tiền sử", "đã từng", "trước đây", "cũ")
-FAMILY_CUES = ("gia đình", "bố", "mẹ", "anh", "chị", "em")
+from .cues import FAMILY_CUES, HISTORICAL_CUES, NEGATION_CUES
 
 
 @dataclass(frozen=True, slots=True)

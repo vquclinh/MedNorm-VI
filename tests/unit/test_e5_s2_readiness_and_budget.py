@@ -1,4 +1,13 @@
-"""E5 / S2 readiness, parameter budgeting and post-E4 gates (Audit 0042)."""
+"""E5 / S2 readiness and parameter budgeting (Audit 0042; retitled in Audit 0051).
+
+Audit 0051 removed section D. It exercised ``governance.post_e4_gates``, which
+blocked nine downstream tasks — including learned-L4-v2 training and leaderboard
+submission — on a validated E4 full artifact. E4 is
+RETIRED_FROM_ACTIVE_ARCHITECTURE and no such artifact can ever exist, so the gate
+was permanently shut and was blocking live work behind a dead expert. The module and
+its tests are gone; ``tests/unit/test_e4_retirement.py`` asserts E4 stays
+unreachable.
+"""
 
 from __future__ import annotations
 
@@ -27,14 +36,6 @@ from mednorm_vi.governance.parameter_budget import (
     count_parameters,
     load_candidate_registry,
     load_deployment_selection,
-)
-from mednorm_vi.governance.post_e4_gates import (
-    BLOCKED_ON_E4_FULL_ARTIFACT,
-    E4_GATE_CONDITIONS,
-    POST_E4_TASKS,
-    assert_frozen_proposals_allowed,
-    evaluate_post_e4_gate,
-    post_e4_task_table,
 )
 from mednorm_vi.training.phase2.e5_mrc_training import E5TrainingContractError
 from mednorm_vi.training.phase2.e5_readiness import (
@@ -236,11 +237,14 @@ def test_s2_head_parameter_count_is_programmatic() -> None:
 def test_tracked_registry_covers_every_planned_stage() -> None:
     registry = load_candidate_registry(REGISTRY_PATH)
     ids = {component.component_id for component in registry.components}
-    for expected in ("e3_vihealthbert_span_type", "e4_phobert_w2ner",
+    for expected in ("e3_vihealthbert_span_type",
                      "e5_xlmr_mrc_ner", "l4_learned_resolver_v2", "s2_assertion_head",
                      "s3_retrieval_dense", "s4_reranker", "s5_qwen_lora_critic",
                      "s6_calibration_meta_model"):
         assert expected in ids
+    # Audit 0051: a retired component is not a planned stage. The registry exists
+    # so a deployment can select from it, and E4 can never be selected.
+    assert "e4_phobert_w2ner" not in ids
 
 
 def test_tracked_registry_records_the_verified_vihealthbert_count() -> None:
@@ -261,7 +265,7 @@ def test_tracked_registry_records_the_reproducible_s2_head_count() -> None:
 
 def test_tracked_registry_leaves_uncounted_models_unverified() -> None:
     registry = load_candidate_registry(REGISTRY_PATH)
-    for component_id in ("e4_phobert_w2ner", "e5_xlmr_mrc_ner"):
+    for component_id in ("e5_xlmr_mrc_ner", "s5_qwen_lora_critic"):
         component = registry.by_id(component_id)
         assert component.parameter_count_verified is False
         assert component.total_parameters is None
@@ -282,52 +286,6 @@ def test_tracked_deployment_template_passes_the_gate() -> None:
     report = compute_deployment_budget(registry, selected, manifest_name=name)
     assert report.within_budget is True
     assert report.total_loaded_parameters == VIHEALTHBERT_PARAMETERS + 6_542
-
-
-# ---------------------------------------------------------------------------
-# D. Post-E4 gates
-# ---------------------------------------------------------------------------
-
-
-def test_post_e4_tasks_are_blocked_without_an_artifact() -> None:
-    table = post_e4_task_table()
-    assert table["blocked_task_count"] == len(POST_E4_TASKS) == 9
-    assert table["frozen_proposal_generation_allowed"] is False
-    for task in table["tasks"]:
-        assert task["status"] == BLOCKED_ON_E4_FULL_ARTIFACT
-
-
-def test_the_gate_fails_closed_on_missing_evidence() -> None:
-    assert evaluate_post_e4_gate(None).open is False
-    assert evaluate_post_e4_gate({}).open is False
-    partial = evaluate_post_e4_gate({"full_training_complete": True})
-    assert partial.open is False
-    assert "artifact_validator_ok" in partial.missing
-
-
-def test_the_gate_requires_internal_test_to_be_untouched() -> None:
-    evidence = dict.fromkeys(E4_GATE_CONDITIONS, True)
-    evidence["internal_test_accessed"] = True   # the artifact says it WAS read
-    status = evaluate_post_e4_gate(evidence)
-    assert status.open is False
-    assert "internal_test_not_accessed" in status.missing
-
-
-def test_a_complete_artifact_opens_the_gate() -> None:
-    evidence = {
-        "full_training_complete": True, "artifact_validator_ok": True,
-        "best_checkpoint_verified": True, "latest_checkpoint_verified": True,
-        "validation_metrics_available": True, "internal_test_accessed": False}
-    status = evaluate_post_e4_gate(evidence)
-    assert status.open is True
-    assert status.missing == ()
-    assert post_e4_task_table(status)["frozen_proposal_generation_allowed"] is True
-    assert_frozen_proposals_allowed(status)
-
-
-def test_frozen_proposals_are_refused_while_blocked() -> None:
-    with pytest.raises(RuntimeError, match=BLOCKED_ON_E4_FULL_ARTIFACT):
-        assert_frozen_proposals_allowed(evaluate_post_e4_gate(None))
 
 
 # ---------------------------------------------------------------------------
@@ -707,25 +665,21 @@ def test_e5_and_s2_notebook_cells_parse(relative_path: str, required_text: str) 
 
 
 # ---------------------------------------------------------------------------
-# H. Protected E4 paths and repository hygiene
+# H. Protected paths and repository hygiene
 # ---------------------------------------------------------------------------
 
-# Audit 0045 replaced the E4 implementation, so the paths pinned by Audit 0042 —
-# the v1 training module, its notebook and its config — no longer exist. What is
-# pinned here is what SURVIVED that replacement: the moved shared modules, the
-# canonical grid/decoder, the exact evaluator and the architecture PDF. The
-# guard's purpose is unchanged; only its subject moved.
-E4_PROTECTED_SHA256: dict[str, str] = {
-    "src/mednorm_vi/training/phase2/e4/runtime_io.py":
-        "ad74031f9a909eb6d40eddeed1bb3f0eeb9183f015e3024d7d8c425df3b43e77",
-    "src/mednorm_vi/training/phase2/e4/progress.py":
-        "2d770fa9c2c5551d4183d9d671c06d7965cda1ef104410de72d57adc29e95474",
-    "src/mednorm_vi/training/phase2/e4/alignment_diagnostic.py":
-        "6fdafbcf7ba262a60c2a25baeab0c69258ec0c67470ff992481668a4c1cf5366",
-    "src/mednorm_vi/mention_factory/w2ner.py":
-        "2ca5d434e4a4a252ee8b3cd942b3c4a4566fd9d9591a7a024426e21d53f1fd4f",
-    "src/mednorm_vi/training/phase2/artifacts.py":
-        "f7f2c9f9dc2a020bb03e7eec0fb7a92e12683815baaeeb6f374fa9bcb116e280",
+# Audit 0042 pinned the modules that a parallel E4 workstream must not touch.
+# Audit 0045 moved that subject once when the E4 implementation was replaced;
+# Audit 0051 deleted E4 entirely, so four of the seven pinned paths no longer
+# exist and `training/phase2/artifacts.py` legitimately changed (E4 was removed
+# from it).
+#
+# What is pinned now is what the guard was always really protecting: the exact
+# character-offset evaluator that every reported mention number depends on, and
+# the architecture PDF. A silent edit to either would invalidate measurements
+# rather than merely break a build, which is why they are pinned by digest and
+# not by a test of their behaviour.
+PROTECTED_SHA256: dict[str, str] = {
     "src/mednorm_vi/evaluation/exact_mention.py":
         "7b2ba8fd72afdde715f90ac321c85cf3ea1d6e88e3eb98701903b463f14e07f0",
     "docs/MedNorm-VI_Architecture.pdf":
@@ -733,12 +687,12 @@ E4_PROTECTED_SHA256: dict[str, str] = {
 }
 
 
-@pytest.mark.parametrize("relative_path", sorted(E4_PROTECTED_SHA256))
-def test_active_e4_paths_are_byte_for_byte_unchanged(relative_path: str) -> None:
+@pytest.mark.parametrize("relative_path", sorted(PROTECTED_SHA256))
+def test_protected_paths_are_byte_for_byte_unchanged(relative_path: str) -> None:
     digest = hashlib.sha256((REPO / relative_path).read_bytes()).hexdigest()
-    assert digest == E4_PROTECTED_SHA256[relative_path], (
-        f"{relative_path} changed; it survived the Audit-0045 E4 replacement "
-        "and must stay byte-identical")
+    assert digest == PROTECTED_SHA256[relative_path], (
+        f"{relative_path} changed; every reported measurement depends on it "
+        "staying byte-identical")
 
 
 def test_no_model_checkpoint_cache_or_archive_is_tracked_in_git() -> None:

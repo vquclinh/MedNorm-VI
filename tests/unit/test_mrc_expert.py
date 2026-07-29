@@ -12,7 +12,7 @@ from mednorm_vi.mention_factory.mrc import (
     decoded_spans_to_expert_proposals,
     pair_start_end,
 )
-from mednorm_vi.mention_factory.w2ner import EntitySpan
+from mednorm_vi.mention_factory.spans import EntitySpan
 
 
 def test_mrc_conversion_builds_five_versioned_query_examples() -> None:

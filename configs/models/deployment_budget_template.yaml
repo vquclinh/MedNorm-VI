@@ -28,6 +28,6 @@ selected_components:
 
 # Recorded for traceability; the loader reads `selected_components` only.
 notes: >-
-  Minimal verified-only deployment. Adding E4, E5, S2, S3, S4 or S5 requires a
+  Minimal verified-only deployment. Adding E5, S2, S3, S4 or S5 requires a
   verified programmatic parameter count for each, obtained from its real
   configuration or checkpoint.

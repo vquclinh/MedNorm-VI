@@ -31,6 +31,11 @@ models/**
 artifacts/**
 !artifacts/.gitkeep
 weights/**
+# Repository-root caches directory (pip/HF/torchinductor). The `/`-anchored rule
+# ignores the DIRECTORY itself, not only its contents, so `git status` cannot show
+# it as untracked and `git add -A` cannot pick up a partially matched path.
+# Audit 0051 deleted 1,075,833,774 bytes of reproducible cache from here.
+/caches/
 caches/**
 
 # --- Raw / private competition data & KB snapshots ---

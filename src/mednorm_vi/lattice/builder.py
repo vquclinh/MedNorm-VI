@@ -4,7 +4,7 @@ Flow (spec §16 steps 2-4)::
 
     L1 DocumentGraph  ->  L2 route tags  ->  L3 unified span lattice
 
-Only experts that are enabled and have valid local artifacts contribute. E4, E5,
+Only experts that are enabled and have valid local artifacts contribute. E5,
 E6 and E7 use the same generic expert proposal contract as E3 before L4; when a
 checkpoint is unavailable, the arm is reported as unavailable rather than
 simulated.

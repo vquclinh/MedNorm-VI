@@ -102,9 +102,16 @@ Overlap/duplicates. A segment may carry several (e.g. C1+C4+C6).
 ## 7. Mention Factory (section 6)
 
 Produces a unified **span lattice** from multiple experts; **no module emits a
-final entity directly**. Experts: E1 medication grammar, E2 lab parser, E3
-ViHealthBERT span model, E4 PhoBERT W2NER, E5 XLM-R MRC-NER, E6 GLiNER, E7
-Qwen3-1.7B proposer (proposal-only, hallucination-prone).
+final entity directly**. Experts the spec declares: E1 medication grammar, E2 lab
+parser, E3 ViHealthBERT span model, E4 PhoBERT W2NER, E5 XLM-R MRC-NER, E6 GLiNER,
+E7 Qwen3-1.7B proposer (proposal-only, hallucination-prone).
+
+> **E4 PhoBERT W2NER is `RETIRED_FROM_ACTIVE_ARCHITECTURE`** (Audits 0048, 0051).
+> The spec lists it as one candidate expert; the active runtime stack is a
+> validated subset of the spec, and E4 is no longer in that subset. It is absent
+> from `lattice.models.AVAILABLE_EXPERTS`, every profile, every registry and every
+> parameter ledger. See `docs/architecture/ACTIVE_RUNTIME_MANIFEST.md` for what is
+> actually implemented, and `governance/e4_retirement.py` for the record.
 
 - Medication grammar (6.1): `MED = NAME [SALT] [RELEASE] [STRENGTH|CONCENTRATION] [DOSE_FORM] [ROUTE] [FREQUENCY] [PRN]`; generate multiple boundary candidates, let the resolver learn the organizer's convention.
 - Lab parser (6.2): `TEST_NAME –has_result→ VALUE [UNIT] [FLAG] [REFERENCE_RANGE]`; internal relation, not emitted in round-one output.

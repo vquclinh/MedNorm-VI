@@ -18,8 +18,6 @@ expert_inputs:
     checkpoint: checkpoint/s1_mention_full_training_v1/best.pt
     checkpoint_sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
     model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
-  e4_phobert_w2ner:
-    status: optional_validated_checkpoint_required
   e5_xlmr_mrc:
     status: optional_validated_checkpoint_required
 leakage_controls:

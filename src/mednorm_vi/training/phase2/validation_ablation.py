@@ -17,9 +17,9 @@ from ...evaluation.exact_mention import (
 )
 from ...evaluation.l3_l4_ablation_v2 import (
     ARM_ALL_L3,
-    ARM_E3_E4,
-    ARM_E3_E4_E5,
     ARM_E3_E5,
+    ARM_E3_E5_E6,
+    ARM_E3_E6,
     ARM_E3_ONLY,
     ARM_L4_V1,
     ARM_L4_V2,
@@ -33,9 +33,9 @@ VALIDATION_ABLATION_SCHEMA_VERSION = "phase2-validation-ablation-v1"
 VALIDATION_ABLATION_AUTHORIZATION = "I_AUTHORIZE_PHASE2_VALIDATION_ABLATION"
 SUPPORTED_VALIDATION_ARMS: tuple[str, ...] = (
     ARM_E3_ONLY,
-    ARM_E3_E4,
     ARM_E3_E5,
-    ARM_E3_E4_E5,
+    ARM_E3_E6,
+    ARM_E3_E5_E6,
     ARM_ALL_L3,
     ARM_L4_V1,
     ARM_L4_V2,

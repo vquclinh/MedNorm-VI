@@ -1,16 +1,17 @@
-"""E5 XLM-R MRC readiness, brought to the E4 pre-smoke standard (Audit 0042).
+"""E5 XLM-R MRC pre-smoke readiness (Audit 0042).
 
 Audit 0036 left E5 with correct MRC contracts — queries, start/end targets, loss,
-decoding, manifest — but without the operational hardening E4 gained afterwards
+decoding, manifest — but without the operational hardening a first real run
+demands
 in Audits 0039-0041: real gradient accumulation, a resolved precision policy,
 gradient clipping, resume custody, supervised-type reporting and progress
 telemetry.
 
-This module closes that gap **without touching any E4 file**. The generic
-infrastructure E4 happens to host (accumulation planning, precision resolution,
+This module closes that gap. The expert-independent infrastructure
+(accumulation planning, precision resolution,
 optimizer signatures, local-first persistence, progress heartbeats) is *imported
 read-only*: reusing it is strictly better than duplicating it, and importing a
-module never changes its bytes. The E4 protected files are verified unchanged in
+module never changes its bytes. The shared contracts are verified unchanged in
 Audit 0042.
 
 Nothing here downloads a model, trains, or reads internal_test.
@@ -144,7 +145,7 @@ def resolve_e5_weight_format(
     """Resolve XLM-R's serialization from a real listing when one is supplied.
 
     Unlike the pinned PhoBERT revision, XLM-R normally publishes safetensors; the
-    answer is still derived from evidence rather than assumed, and the E4 lesson
+    answer is still derived from evidence rather than assumed, and the lesson
     (a wrong assumption costs a whole Colab session) is applied here in reverse.
     """
     if repository_files is not None:
@@ -164,7 +165,7 @@ def resolve_e5_weight_format(
 
 def plan_e5_accumulation(example_count: int, *, micro_batch_size: int,
                          accumulation_steps: int, epochs: int) -> AccumulationPlan:
-    """Same derived accounting E4 uses; nothing is relabelled."""
+    """Derived accounting only; nothing is relabelled."""
     return plan_gradient_accumulation(
         example_count, micro_batch_size=micro_batch_size,
         accumulation_steps=accumulation_steps, epochs=epochs)
@@ -197,7 +198,7 @@ def build_e5_full_resolved_config(
     optimizer_name: str = "AdamW",
     progress: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The complete E5 resolved config, at the E4 readiness standard."""
+    """The complete E5 resolved config, at the shared readiness standard."""
     config: dict[str, Any] = {
         "stage_id": E5_STAGE_ID,
         "expert_id": "E5_xlmr_mrc_ner",

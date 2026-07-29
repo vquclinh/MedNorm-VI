@@ -8,8 +8,8 @@ import pytest
 
 from mednorm_vi.lattice import (
     EXPERT_GLINER,
-    EXPERT_PHOBERT_W2NER,
     EXPERT_VIHEALTHBERT,
+    EXPERT_XLMR_MRC,
     ExpertSpanProposal,
     LatticeError,
     build_span_lattice,
@@ -51,14 +51,14 @@ def test_phase2_experts_merge_only_on_exact_coordinates_and_keep_sources() -> No
         text,
         neural_spans=(NeuralSpan(first, first + 7, "SYMPTOM", "ho khan", 0.7, 2),),
         expert_spans=(
-            _expert("doc", text, first, first + 7, EXPERT_PHOBERT_W2NER, "e4-a"),
+            _expert("doc", text, first, first + 7, EXPERT_XLMR_MRC, "e5-a"),
             _expert("doc", text, second, second + 7, EXPERT_GLINER, "e6-b"),
         ),
     )
     assert len(lattice.proposals) == 2
     first_node = lattice.proposals[0]
-    assert first_node.expert_ids == (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER)
-    assert {source.proposal_id for source in first_node.sources} == {"e3-doc-0001", "e4-a"}
+    assert first_node.expert_ids == (EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC)
+    assert {source.proposal_id for source in first_node.sources} == {"e3-doc-0001", "e5-a"}
     assert lattice.repeated_surface_forms() == ("ho khan",)
 
 
@@ -68,7 +68,7 @@ def test_phase2_lattice_rejects_bad_document_or_bad_offsets() -> None:
         build_span_lattice(
             "doc",
             text,
-            expert_spans=(_expert("other", text, 0, 7, EXPERT_PHOBERT_W2NER, "bad"),),
+            expert_spans=(_expert("other", text, 0, 7, EXPERT_XLMR_MRC, "bad"),),
         )
     bad = ExpertSpanProposal(
         document_id="doc",
@@ -77,7 +77,7 @@ def test_phase2_lattice_rejects_bad_document_or_bad_offsets() -> None:
         text="XXX",
         type_scores={"DIAGNOSIS": 0.8},
         local_score=0.8,
-        expert_id=EXPERT_PHOBERT_W2NER,
+        expert_id=EXPERT_XLMR_MRC,
         proposal_id="bad",
     )
     with pytest.raises(LatticeError):
@@ -86,7 +86,7 @@ def test_phase2_lattice_rejects_bad_document_or_bad_offsets() -> None:
 
 def test_phase2_lattice_preserves_decomposed_unicode_offsets() -> None:
     text = unicodedata.normalize("NFD", "sốt cao")
-    proposal = _expert("doc", text, 0, len(text), EXPERT_PHOBERT_W2NER, "e4")
+    proposal = _expert("doc", text, 0, len(text), EXPERT_XLMR_MRC, "e5")
     lattice = build_span_lattice("doc", text, expert_spans=(proposal,))
     assert lattice.proposals[0].text == text
     assert lattice.proposals[0].sources[0].model_revision == "rev"

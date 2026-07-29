@@ -22,7 +22,7 @@ budget:
   max_total_base_params: 9_000_000_000   # HARD cap on the SUM of base_params
   adapters_excluded: true                # adapter/LoRA/head params never count
   count_status: in_profile               # which per-model flag the budget sums
-  active_profile: Safe-8.85B             # the planned profile described below
+  active_profile: Safe-8.85B-minus-E4    # Safe-8.85B less retired PhoBERT-large
   # Advisory soft target for a metadata safety margin (spec section 17). Set to
   # 8.9B so the planned ~8.852B stack sits comfortably under it (no spurious
   # warning). Exceeding this is a WARNING, never a failure.
@@ -90,13 +90,29 @@ models:
     installed: false
     notes: "Safe-8.85B variant. Alt-8.99B swaps in GLiNER-large 459M and drops SapBERT."
 
+  # PhoBERT-large was planned as the L3 W2NER / boundary model (spec section 17).
+  # Its only consumer, E4 PhoBERT-W2NER, is RETIRED_FROM_ACTIVE_ARCHITECTURE
+  # (Audits 0048, 0051): a completed Stage-2 ablation selected no recipe, so no E4
+  # checkpoint ever passed the acceptance gate. `in_profile: false` removes this
+  # row's 370M PLANNING figure from the summed active plan, which now totals
+  # ~8.482B base. The row is kept so the withdrawal is visible rather than silently
+  # absent from the spec's stack; re-enabling it requires a new measured decision.
+  #
+  # `base_params` below is spec section 17's APPROXIMATE PLANNING ESTIMATE. It is
+  # NOT the measured E4 model size. E4 was programmatically verified in Audit 0044
+  # at 369,163,264 encoder + 2,125,897 W2NER head = 371,289,161 total. The exact
+  # measured figures live in src/mednorm_vi/governance/e4_retirement.py; never cite
+  # this planning row as the historical model count.
   - name: PhoBERT-large
-    role: Vietnamese W2NER / boundary model (L3 Mention Factory, L4 Resolver)
+    role: "RETIRED_FROM_ACTIVE_ARCHITECTURE - was L3 W2NER / boundary model"
     base_params: 370_000_000
     adapter_params: 0
-    in_profile: true
+    in_profile: false
     installed: false
-    notes: "Approximate count; verify with parameter-count script."
+    notes: >-
+      Spec section 17 planning estimate, NOT a measured count. Retired with E4
+      (Audits 0048, 0051) and not summed. The measured E4 total was 371,289,161
+      (PROGRAMMATICALLY_VERIFIED, Audit 0044); see governance/e4_retirement.py.
 
   - name: ViHealthBERT
     role: Vietnamese clinical span/assertion backbone (L3, L5 Assertion)
@@ -120,8 +136,13 @@ models:
 # edit counts). None of these implies any model is installed.
 variants:
   Safe-8.85B:
-    description: "Default plan. GLiNER medium 209M. ~8.85B base."
+    description: "Spec section 17 default plan. GLiNER medium 209M. ~8.85B base."
     approx_total: 8_852_000_000
+  Safe-8.85B-minus-E4:
+    description: >-
+      The ACTIVE plan: Safe-8.85B with PhoBERT-large withdrawn alongside retired
+      E4 (Audits 0048, 0051). This is what `in_profile: true` sums to.
+    approx_total: 8_482_000_000
   Alt-8.99B:
     description: "GLiNER large 459M; remove separate SapBERT. Higher open-type recall. ~8.99B base."
     approx_total: 8_990_000_000

@@ -1,4 +1,10 @@
-"""Pipeline configuration loading and readiness validation."""
+"""Pipeline configuration loading and readiness validation.
+
+Loading is the enforcement point for retirement (Audit 0051). A profile that still
+declares a retired expert's feature flag, or requires its checkpoint, is refused at
+load time rather than silently normalized to ``False`` — a config carrying a dead
+flag is a config someone can flip.
+"""
 
 from __future__ import annotations
 
@@ -6,11 +12,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..governance.e4_retirement import (
+    assert_e4_absent_from_flags,
+    assert_no_e4_checkpoint_required,
+)
+
 DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     "enable_e1_medication_grammar": True,
     "enable_e2_laboratory_parser": True,
     "enable_e3_vihealthbert": True,
-    "enable_e4_phobert_w2ner": False,
     "enable_e5_xlmr_mrc": False,
     "enable_e6_gliner": False,
     "enable_e7_qwen_proposer": False,
@@ -20,7 +30,6 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
 
 CHECKPOINT_BY_FEATURE_FLAG: dict[str, str] = {
     "enable_e3_vihealthbert": "mention/vihealthbert",
-    "enable_e4_phobert_w2ner": "mention/phobert_w2ner",
     "enable_e5_xlmr_mrc": "mention/xlmr_mrc",
     "enable_e6_gliner": "mention/gliner",
     "enable_e7_qwen_proposer": "mention/qwen3_1_7b_proposer",
@@ -49,10 +58,25 @@ class PipelineConfig:
         import yaml
 
         doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        profile_name = str(doc.get("name", Path(path).stem))
         feature_flags = dict(DEFAULT_FEATURE_FLAGS)
         raw_flags = doc.get("feature_flags", {})
         if isinstance(raw_flags, dict):
             feature_flags.update({str(key): bool(value) for key, value in raw_flags.items()})
+
+        # Retirement is enforced here, and in every nested per-mode profile, so a
+        # dead flag cannot survive anywhere in the tree waiting to be flipped.
+        assert_e4_absent_from_flags(feature_flags, profile=profile_name)
+        raw_profiles = doc.get("profiles", {})
+        if isinstance(raw_profiles, dict):
+            for mode, spec in raw_profiles.items():
+                if isinstance(spec, dict) and isinstance(spec.get("feature_flags"), dict):
+                    assert_e4_absent_from_flags(
+                        spec["feature_flags"], profile=f"{profile_name}:{mode}")
+        for key in ("full_requires_checkpoints", "specialist_requires_checkpoints"):
+            assert_no_e4_checkpoint_required(
+                [str(v) for v in doc.get(key, [])], profile=f"{profile_name}.{key}")
+
         return PipelineConfig(
             l1_config=str(doc.get("l1_config", "configs/document_intelligence/base.yaml")),
             router_config=str(doc.get("router_config", "configs/case_router/base.yaml")),

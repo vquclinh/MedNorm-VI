@@ -93,3 +93,4 @@ Each audit should record, at minimum:
 - `0048-e4-retirement-and-zs0-zero-shot-baseline.md`
 - `0049-zs0-stage3-real-execution.md`
 - `0050-zs0-stage3-import-and-public-api-repair.md`
+- `0051-repository-wide-architecture-review-and-cleanup.md`

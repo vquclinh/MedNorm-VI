@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 
 from mednorm_vi.evaluation.l3_l4_ablation_v2 import (
-    ARM_E3_E4,
-    ARM_E3_E4_E5,
+    ARM_E3_E5,
+    ARM_E3_E5_E6,
     ARM_E3_ONLY,
     STATUS_EVALUABLE,
     STATUS_UNAVAILABLE_UNTRAINED,
     AblationArmStatus,
 )
 from mednorm_vi.lattice import ExpertSpanProposal, build_span_lattice
-from mednorm_vi.lattice.models import EXPERT_PHOBERT_W2NER, EXPERT_VIHEALTHBERT
+from mednorm_vi.lattice.models import EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC
 from mednorm_vi.mention_factory.mrc import TYPE_QUERY_ORDER
 from mednorm_vi.mention_factory.neural.decoding import NeuralSpan
 from mednorm_vi.model_registry.registry import ModelRole
@@ -34,7 +34,6 @@ from mednorm_vi.training.phase2.artifacts import (
     ArtifactValidationReport,
     Phase2TrainingManifest,
     checkpoint_payload,
-    validate_e4_artifact,
     validate_e5_artifact,
     write_checkpoint_payload,
 )
@@ -88,15 +87,9 @@ def _write_history(path: Path) -> None:
 def _write_valid_artifact(
     root: Path,
     *,
-    expert_id: str = EXPERT_PHOBERT_W2NER,
-    label_space: tuple[str, ...] = (
-        "DIAGNOSIS",
-        "MEDICATION",
-        "SYMPTOM",
-        "TEST_NAME",
-        "TEST_RESULT",
-    ),
-    query_revision: str = "",
+    expert_id: str = EXPERT_XLMR_MRC,
+    label_space: tuple[str, ...] = TYPE_QUERY_ORDER,
+    query_revision: str = "mrc-type-queries-v1",
     query_digest: str = "",
 ) -> None:
     resolved_config = {
@@ -165,22 +158,22 @@ def _write_valid_artifact(
 
 
 def test_artifact_validator_accepts_six_file_contract(tmp_path: Path) -> None:
-    _write_valid_artifact(tmp_path)
+    _write_valid_artifact(tmp_path, query_digest=query_hash())
     assert sorted(str(path) for path in REQUIRED_ARTIFACT_FILES)
-    report = validate_e4_artifact(tmp_path)
+    report = validate_e5_artifact(tmp_path)
     assert report.ok, report.failures
     assert set(report.checkpoint_hashes) == {"best", "latest"}
 
 
 def test_artifact_validator_reports_multiple_failures(tmp_path: Path) -> None:
-    _write_valid_artifact(tmp_path)
+    _write_valid_artifact(tmp_path, query_digest=query_hash())
     (tmp_path / "validation_metrics.json").unlink()
     manifest_path = tmp_path / "training_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["internal_test_accessed"] = True
     manifest["model_revision"] = "main"
     manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    report = validate_e4_artifact(tmp_path)
+    report = validate_e5_artifact(tmp_path)
     assert not report.ok
     assert "missing_required_file:validation_metrics.json" in report.failures
     assert "manifest_internal_test_accessed" in report.failures
@@ -188,13 +181,7 @@ def test_artifact_validator_reports_multiple_failures(tmp_path: Path) -> None:
 
 
 def test_e5_artifact_requires_query_hash(tmp_path: Path) -> None:
-    _write_valid_artifact(
-        tmp_path,
-        expert_id="E5_xlmr_mrc_ner",
-        label_space=TYPE_QUERY_ORDER,
-        query_revision="mrc-type-queries-v1",
-        query_digest=query_hash(),
-    )
+    _write_valid_artifact(tmp_path, query_digest=query_hash())
     assert validate_e5_artifact(tmp_path).ok
     manifest_path = tmp_path / "training_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -212,8 +199,8 @@ def _expert_proposal(document_id: str, text: str) -> ExpertSpanProposal:
         text=text[start:],
         type_scores={"SYMPTOM": 0.8},
         local_score=0.8,
-        expert_id=EXPERT_PHOBERT_W2NER,
-        proposal_id="e4-1",
+        expert_id=EXPERT_XLMR_MRC,
+        proposal_id="e5-1",
         original_start=start,
         original_end=len(text),
         model_revision="a" * 40,
@@ -226,14 +213,14 @@ def test_frozen_proposal_dataset_is_deterministic_and_hashes_jsonl(tmp_path: Pat
     document = ProposalDocument("doc", "Bệnh nhân ho khan", "source-a", "train")
     availability = (
         FrozenExpertAvailability(
-            expert_id=EXPERT_PHOBERT_W2NER,
+            expert_id=EXPERT_XLMR_MRC,
             status=STATUS_AVAILABLE,
             config_sha256="c" * 64,
             checkpoint_sha256="b" * 64,
             model_revision="a" * 40,
         ),
         FrozenExpertAvailability(
-            expert_id="E5_xlmr_mrc_ner",
+            expert_id="E6_gliner_open_type",
             status=PROPOSAL_UNAVAILABLE,
             config_sha256="d" * 64,
             reason="untrained",
@@ -322,13 +309,13 @@ def test_validation_ablation_uses_validation_only_and_unavailable_statuses() -> 
     statuses = (
         AblationArmStatus(ARM_E3_ONLY, STATUS_EVALUABLE, "ok", (EXPERT_VIHEALTHBERT,), ()),
         AblationArmStatus(
-            ARM_E3_E4,
+            ARM_E3_E5,
             STATUS_UNAVAILABLE_UNTRAINED,
             "missing",
-            (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER),
-            ("e4",),
+            (EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC),
+            ("e5",),
         ),
-        AblationArmStatus(ARM_E3_E4_E5, STATUS_UNAVAILABLE_UNTRAINED, "missing", (), ()),
+        AblationArmStatus(ARM_E3_E5_E6, STATUS_UNAVAILABLE_UNTRAINED, "missing", (), ()),
     )
     report = run_validation_ablation(
         examples,
@@ -350,7 +337,7 @@ def test_validation_ablation_uses_validation_only_and_unavailable_statuses() -> 
     )
     rows = {row["arm"]: row for row in report.as_dict()["results"]}
     assert rows[ARM_E3_ONLY]["exact_f1"] == 1.0
-    assert rows[ARM_E3_E4]["status"] == STATUS_UNAVAILABLE_UNTRAINED
+    assert rows[ARM_E3_E5]["status"] == STATUS_UNAVAILABLE_UNTRAINED
     with pytest.raises(ValueError):
         run_validation_ablation(
             ({**examples[0], "split": "internal_test"},),
@@ -364,7 +351,7 @@ def test_validation_ablation_uses_validation_only_and_unavailable_statuses() -> 
 def test_internal_test_gate_requires_authorization_and_valid_hashes() -> None:
     artifact = ArtifactValidationReport(
         artifact_dir="/tmp/art",
-        expected_expert_id=EXPERT_PHOBERT_W2NER,
+        expected_expert_id=EXPERT_XLMR_MRC,
         expected_mode=MODE_FULL,
         ok=True,
         failures=(),
@@ -453,7 +440,9 @@ def _executable_cell_source(source: str) -> str:
 def test_notebooks_and_git_do_not_track_runtime_weights() -> None:
     repo = Path(__file__).resolve().parents[2]
     for notebook in (
-        "MedNorm_E4_Clean_Training.ipynb",
+        # MedNorm_E4_Clean_Training.ipynb was deleted in Audit 0051: E4 is
+        # RETIRED_FROM_ACTIVE_ARCHITECTURE and there is no notebook to hold to a
+        # contract. A test asserting its absence lives in test_e4_retirement.py.
         "MedNorm_E5_XLMR_MRC_NER_Training.ipynb",
         "MedNorm_L4_Learned_Resolver_v2_Training.ipynb",
         "MedNorm_Phase2_Validation_Ablation.ipynb",

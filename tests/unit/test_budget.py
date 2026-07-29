@@ -94,9 +94,13 @@ def test_shipped_budget_config_is_valid_and_within_cap() -> None:
     cfg = load_budget_config(BUDGET_YAML)
     result = validate_parameter_budget(cfg)
     assert result.ok, [i.message for i in result.errors]
-    # Spec Safe-8.85B stack: ~8.852B base, under the 9B cap.
+    # The ACTIVE plan is spec section 17's Safe-8.85B stack LESS PhoBERT-large,
+    # withdrawn with retired E4 (Audits 0048, 0051): 8,852,000,000 - 370,000,000.
+    # The row is still in the manifest with `in_profile: false`, so the spec's own
+    # figure stays visible and only the summed active plan changed.
     assert total_base_params(cfg) <= 9_000_000_000
-    assert total_base_params(cfg) == 8_852_000_000
+    assert total_base_params(cfg) == 8_482_000_000
+    assert total_base_params(cfg) == 8_852_000_000 - 370_000_000
 
 
 def test_default_profile_has_no_soft_target_advisory() -> None:

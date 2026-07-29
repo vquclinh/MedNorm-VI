@@ -11,9 +11,9 @@ from typing import Any
 
 from ...lattice import ExpertSpanProposal, SpanLattice, build_span_lattice
 from ...lattice.models import (
+    EXPERT_GLINER,
     EXPERT_LABORATORY_PARSER,
     EXPERT_MEDICATION_GRAMMAR,
-    EXPERT_PHOBERT_W2NER,
     EXPERT_VIHEALTHBERT,
     EXPERT_XLMR_MRC,
     SourceEvidence,
@@ -187,8 +187,8 @@ def _record_from_lattice_node(
         "has_e1": float(EXPERT_MEDICATION_GRAMMAR in source_experts),
         "has_e2": float(EXPERT_LABORATORY_PARSER in source_experts),
         "has_e3": float(EXPERT_VIHEALTHBERT in source_experts),
-        "has_e4": float(EXPERT_PHOBERT_W2NER in source_experts),
         "has_e5": float(EXPERT_XLMR_MRC in source_experts),
+        "has_e6": float(EXPERT_GLINER in source_experts),
     }
     return FrozenProposalRecord(
         document_id=document.document_id,

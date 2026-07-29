@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 NB = REPO / "notebooks"
+
+
+def _tracked_notebooks() -> list[str]:
+    """Notebook names git actually tracks.
+
+    The inventory is deliberately taken from git rather than from a directory
+    listing. An untracked `.ipynb` is not part of any reproducible workflow — it
+    cannot be cloned, reviewed or pinned — so it must neither join the contract
+    silently nor make the inventory assertion fail for an operator who happens to
+    have a scratch copy on disk. `test_no_untracked_notebook_is_present` reports
+    strays separately, which is where a stray belongs: in a named failure, not
+    hidden inside a count.
+    """
+    out = subprocess.check_output(
+        ["git", "ls-files", "notebooks"], cwd=REPO, text=True).splitlines()
+    return sorted(Path(name).name for name in out if name.endswith(".ipynb"))
 STAGE_NOTEBOOKS = [
     "MedNorm_S0_DomainAdaptation.ipynb",
     "MedNorm_S1_MentionExtraction.ipynb",
@@ -19,7 +36,7 @@ STAGE_NOTEBOOKS = [
     "MedNorm_S5_QwenLoRA.ipynb",
     "MedNorm_S6_Calibration.ipynb",
 ]
-ALL_NOTEBOOKS = sorted(p.name for p in NB.glob("*.ipynb"))
+ALL_NOTEBOOKS = _tracked_notebooks()
 _SECRET = re.compile(r"(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|-----BEGIN)")
 _PERSONAL = re.compile(r"/home/\w+|/Users/[A-Za-z0-9]+")
 
@@ -86,10 +103,6 @@ LATER_NOTEBOOKS = {
         "0025-s1-smoke-artifact-validation-and-full-training-prep.md",
     "MedNorm_S1_Mention_InternalTest_Evaluation.ipynb":
         "0031-s1-full-training-run-validation-and-internal-test-evaluation.md",
-    "MedNorm_E4_Clean_Training.ipynb":
-        "0045-clean-slate-e4-replacement-and-gated-training.md",
-    "MedNorm_ZS0_Baseline_Submission.ipynb":
-        "0048-e4-retirement-and-zs0-zero-shot-baseline.md",
     "MedNorm_E5_XLMR_MRC_NER_Training.ipynb":
         "0035-multi-expert-mention-ensemble-and-learned-l4-v2.md",
     "MedNorm_L4_Learned_Resolver_v2_Training.ipynb":
@@ -100,9 +113,24 @@ LATER_NOTEBOOKS = {
 EXPECTED_INVENTORY = AUDIT_0017_INVENTORY | set(LATER_NOTEBOOKS)
 
 
+# Notebooks Audit 0051 deleted, with the audit that removed them. They must stay
+# absent: a notebook whose only purpose is a retired expert or an abandoned
+# baseline is a live entry point into work the project has stopped doing.
+REMOVED_NOTEBOOKS = {
+    "MedNorm_E4_Clean_Training.ipynb":
+        "0051-repository-wide-architecture-review-and-cleanup.md",
+    "MedNorm_ZS0_Baseline_Submission.ipynb":
+        "0051-repository-wide-architecture-review-and-cleanup.md",
+    # Untracked stray deleted by owner decision (Audit 0051 section 11.3). Listed
+    # here so it cannot quietly return, tracked or untracked.
+    "MedNorm_E4_PhoBERT_W2NER_Training.ipynb":
+        "0051-repository-wide-architecture-review-and-cleanup.md",
+}
+
+
 def test_notebook_inventory_matches_expected() -> None:
     assert set(ALL_NOTEBOOKS) == EXPECTED_INVENTORY
-    assert len(ALL_NOTEBOOKS) == 18
+    assert len(ALL_NOTEBOOKS) == 16
     audit_dir = REPO / "docs" / "audits"
     audit_0017 = (audit_dir / "0017-training-readiness-and-governed-corpus.md").read_text(
         encoding="utf-8")
@@ -111,6 +139,34 @@ def test_notebook_inventory_matches_expected() -> None:
     for name, audit_name in LATER_NOTEBOOKS.items():
         audit = (audit_dir / audit_name).read_text(encoding="utf-8")
         assert name in audit, f"{audit_name} does not list notebook {name}"
+
+
+def test_no_untracked_notebook_is_present() -> None:
+    """A notebook on disk but not in git is unreviewable and unreproducible.
+
+    It cannot be cloned, pinned or reviewed, and because `notebooks/` is not
+    git-ignored it is one `git add -A` away from entering the repository unread.
+    There are **no exceptions**: Audit 0051 briefly carried a quarantine list for one
+    such stray, the owner decided to delete it, and the list was removed with it.
+    """
+    on_disk = {path.name for path in NB.glob("*.ipynb")}
+    stray = sorted(on_disk - set(ALL_NOTEBOOKS))
+    assert not stray, (
+        f"untracked notebook(s) present: {stray}. Either commit them with an audit "
+        "or remove them; an untracked notebook is one `git add -A` away from "
+        "entering the repository unreviewed.")
+
+
+def test_removed_notebooks_stay_removed_and_are_documented() -> None:
+    audit_dir = REPO / "docs" / "audits"
+    for name, audit_name in REMOVED_NOTEBOOKS.items():
+        assert not (NB / name).exists(), (
+            f"{name} was deleted and must not return to disk")
+        assert name not in _tracked_notebooks(), (
+            f"{name} was deleted and must not be tracked again")
+        assert name not in set(ALL_NOTEBOOKS)
+        audit = (audit_dir / audit_name).read_text(encoding="utf-8")
+        assert name in audit, f"{audit_name} does not record removing {name}"
 
 
 def test_vietmed_preprocess_is_cpu_dataprep_not_training() -> None:

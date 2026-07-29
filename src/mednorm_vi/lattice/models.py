@@ -35,7 +35,6 @@ from ..schemas.spans import Span
 EXPERT_MEDICATION_GRAMMAR = "E1_medication_grammar"
 EXPERT_LABORATORY_PARSER = "E2_laboratory_parser"
 EXPERT_VIHEALTHBERT = "E3_vihealthbert_span_type"
-EXPERT_PHOBERT_W2NER = "E4_phobert_w2ner"
 EXPERT_XLMR_MRC = "E5_xlmr_mrc_ner"
 EXPERT_GLINER = "E6_gliner_open_type"
 EXPERT_QWEN_PROPOSER = "E7_qwen3_1_7b_proposer"
@@ -44,11 +43,17 @@ AVAILABLE_EXPERTS: tuple[str, ...] = (
     EXPERT_MEDICATION_GRAMMAR,
     EXPERT_LABORATORY_PARSER,
     EXPERT_VIHEALTHBERT,
-    EXPERT_PHOBERT_W2NER,
     EXPERT_XLMR_MRC,
     EXPERT_GLINER,
     EXPERT_QWEN_PROPOSER,
 )
+
+# E4 PhoBERT-W2NER is RETIRED_FROM_ACTIVE_ARCHITECTURE (Audits 0048, 0051). It is
+# absent from AVAILABLE_EXPERTS, so a proposal that names it is refused by the same
+# unknown-expert check as any typo — no separate code path, and no way to re-enter
+# the lattice. ``governance.e4_retirement`` holds the record; the audits hold the
+# evidence.
+RETIRED_EXPERTS: tuple[str, ...] = ("E4_phobert_w2ner",)
 
 # Provenance families, so deterministic and neural contributions stay separable in
 # every report (Audit 0033 grouping).
@@ -61,7 +66,6 @@ EXPERT_FAMILY: dict[str, str] = {
     EXPERT_MEDICATION_GRAMMAR: FAMILY_DETERMINISTIC,
     EXPERT_LABORATORY_PARSER: FAMILY_DETERMINISTIC,
     EXPERT_VIHEALTHBERT: FAMILY_NEURAL,
-    EXPERT_PHOBERT_W2NER: FAMILY_NEURAL,
     EXPERT_XLMR_MRC: FAMILY_NEURAL,
     EXPERT_GLINER: FAMILY_OPEN_TYPE,
     EXPERT_QWEN_PROPOSER: FAMILY_LLM_INTERFACE,
@@ -357,12 +361,12 @@ def order_proposals(proposals: Sequence[SpanProposal]) -> tuple[SpanProposal, ..
 
 
 __all__ = [
+    "RETIRED_EXPERTS",
     "AVAILABLE_EXPERTS",
     "EXPERT_FAMILY",
     "EXPERT_GLINER",
     "EXPERT_LABORATORY_PARSER",
     "EXPERT_MEDICATION_GRAMMAR",
-    "EXPERT_PHOBERT_W2NER",
     "EXPERT_QWEN_PROPOSER",
     "EXPERT_VIHEALTHBERT",
     "EXPERT_XLMR_MRC",

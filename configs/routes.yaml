@@ -35,9 +35,9 @@ cases:
       - current_medication_list
     thresholds: {}            # inherits thresholds_default
     activated_modules:
-      - specialists.rxnorm
+      - linking.rxnorm
       - mention_factory.medication_grammar   # E1
-      - boundary_type
+      - resolution
 
   C2:
     name: Lab-semi-structured
@@ -57,7 +57,7 @@ cases:
     thresholds: {}
     activated_modules:
       - mention_factory.lab_parser           # E2 (TEST_NAME -has_result-> VALUE)
-      - boundary_type
+      - resolution
 
   C3:
     name: Clinical-narrative
@@ -74,8 +74,8 @@ cases:
       - conclusion
     thresholds: {}
     activated_modules:
-      - mention_factory.span_ner_ensemble     # E3-E6 (ViHealthBERT/W2NER/MRC/GLiNER)
-      - boundary_type
+      - mention_factory.span_ner_ensemble     # E3/E5/E6 (ViHealthBERT/MRC/GLiNER)
+      - resolution
       - specialists.assertion
 
   C4:
@@ -92,7 +92,7 @@ cases:
     thresholds: {}
     activated_modules:
       - specialists.assertion                  # cue + scope + section + relation
-      - boundary_type
+      - resolution
 
   C5:
     name: Abbreviation-noise
@@ -120,8 +120,8 @@ cases:
     thresholds:
       strong: 0.75
     activated_modules:
-      - specialists.icd
-      - specialists.rxnorm
+      - linking.icd10
+      - linking.rxnorm
       - confidence_cascade                     # cross-encoder + constrained judge
 
   C7:

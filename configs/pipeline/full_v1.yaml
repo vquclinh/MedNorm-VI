@@ -35,11 +35,10 @@ feature_flags:
   # Preserved measured default from Audit 0033: E3 ViHealthBERT remains the only
   # enabled trained mention expert unless an ablation validates a wider lattice.
   enable_e3_vihealthbert: true
-  # E4 is RETIRED_FROM_ACTIVE_STACK (Audit 0048). Its completed Stage-2 ablation
-  # selected no recipe (best exact F1 0.7333 by group_balanced_ce against a 0.95
-  # gate). Source, tests and Audits 0043-0047 are preserved as evidence; only
-  # activation is withdrawn. This flag must never be true again.
-  enable_e4_phobert_w2ner: false
+  # E4 PhoBERT-W2NER carried a flag here until Audit 0051. It is
+  # RETIRED_FROM_ACTIVE_ARCHITECTURE and the flag is GONE, not set false: a dead
+  # flag is a flag somebody can flip. PipelineConfig.load now REFUSES any profile
+  # that still declares it, in this file or in any nested per-mode profile.
   enable_e5_xlmr_mrc: false
   enable_e6_gliner: false
   # Interface-only in this milestone. Do not execute or fabricate Qwen proposals.
@@ -53,8 +52,8 @@ specialist_requires_checkpoints:
   - assertion/assertion_hydra
 full_requires_checkpoints:
   - mention/vihealthbert
-  # mention/phobert_w2ner removed: E4 is RETIRED_FROM_ACTIVE_STACK (Audit 0048).
-  # A retired expert has no checkpoint and none is expected.
+  # mention/phobert_w2ner is absent and refused by the loader: a retired expert
+  # has no checkpoint and none is expected (Audits 0048, 0051).
   - mention/xlmr_mrc
   - mention/gliner
   - mention/qwen3_1_7b_proposer
@@ -73,7 +72,6 @@ profiles:
       enable_e1_medication_grammar: true
       enable_e2_laboratory_parser: true
       enable_e3_vihealthbert: false
-      enable_e4_phobert_w2ner: false
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false
@@ -86,7 +84,6 @@ profiles:
       enable_e1_medication_grammar: true
       enable_e2_laboratory_parser: true
       enable_e3_vihealthbert: true
-      enable_e4_phobert_w2ner: false
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false
@@ -119,7 +116,6 @@ profiles:
       enable_e1_medication_grammar: true
       enable_e2_laboratory_parser: true
       enable_e3_vihealthbert: true
-      enable_e4_phobert_w2ner: false
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false

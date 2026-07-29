@@ -1,36 +1,38 @@
-"""ZS0 ontology-grounded linking (Audit 0048).
+"""Locked-snapshot candidate grounding for L5 (spec §9, §10, P7).
 
-Codes are **retrieved, never generated**. Qwen may reorder or select from a
-candidate set that ontology retrieval produced; it can never introduce a code,
-and every emitted code is re-checked against the locked snapshot before it
-leaves this module.
+Principle P7 is absolute: "LLMs must not recall ontology IDs from memory. They may
+only select from retrieved candidates". Spec §16 adds the fail-fast rule — a code
+absent from the frozen KB snapshot stops the file rather than being silently
+repaired. This module is where both are enforced, for either ontology, independent
+of which retriever or which model is in play:
 
-That double check is deliberate. A language model asked for an ICD-10 code will
-happily produce a well-formed one that does not exist, and a plausible code is
-far more dangerous than an empty candidate list.
+    1  exact normalized alias lookup      (highest precision; wins outright)
+    2  lexical / sparse retrieval
+    3  dense retrieval
+    4  optional reranking
 
-Candidate generation, in order:
+Fallback order: an exact high-confidence alias hit is emitted alone; otherwise the
+calibrated top-k; otherwise **empty**. An empty candidate list is a correct
+statement that retrieval found nothing, and it is strictly safer than a plausible
+invented code — a language model asked for an ICD-10 code will happily produce a
+well-formed one that does not exist.
 
-    1  exact normalized alias lookup
-    2  lexical / fuzzy retrieval
-    3  one approved pretrained dense embedder
-    4  optional supported pretrained reranker
-
-Fallback: an exact high-confidence alias hit wins outright; otherwise the
-calibrated top-k; otherwise **empty**.
+Membership in the locked snapshot is checked twice: once as each retrieval stage is
+read, so an index that has drifted from the snapshot cannot smuggle a code through,
+and once again before anything leaves this module.
 """
 
 from __future__ import annotations
 
-import json
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..llm.structured_output import normalize_json_completion
 from ..schemas.constants import CANDIDATE_ONTOLOGY_BY_TYPE
 
-LINKING_CONTRACT_VERSION = "zs0-linking-v1"
+SNAPSHOT_LINKING_CONTRACT_VERSION = "snapshot-linking-v1"
 
 SOURCE_ALIAS_EXACT = "alias_exact"
 SOURCE_LEXICAL = "lexical"
@@ -40,13 +42,13 @@ RETRIEVAL_SOURCES: tuple[str, ...] = (
     SOURCE_ALIAS_EXACT, SOURCE_LEXICAL, SOURCE_DENSE, SOURCE_RERANKER)
 
 DEFAULT_TOP_K = 5
-# An exact alias hit at or above this is emitted alone; the ontology already
+# An exact alias hit at or above this is emitted alone: the ontology already
 # answered the question and a model reordering it can only make it worse.
 DEFAULT_ALIAS_CONFIDENCE = 0.99
 
 
-class LinkingError(ValueError):
-    """Raised when linking would emit a code the ontology does not contain."""
+class SnapshotLinkingError(ValueError):
+    """Raised when linking would emit a code the locked snapshot does not contain."""
 
 
 def normalize_alias(text: str) -> str:
@@ -66,7 +68,7 @@ class Candidate:
 
     def __post_init__(self) -> None:
         if self.source not in RETRIEVAL_SOURCES:
-            raise LinkingError(f"unknown retrieval source {self.source!r}")
+            raise SnapshotLinkingError(f"unknown retrieval source {self.source!r}")
 
     def as_dict(self) -> dict[str, Any]:
         return {"code": self.code, "ontology": self.ontology, "score": self.score,
@@ -75,7 +77,7 @@ class Candidate:
 
 @dataclass(frozen=True, slots=True)
 class OntologySnapshot:
-    """A locked ontology. Membership is the final authority on any code."""
+    """A frozen ontology. Membership is the final authority on any code."""
 
     ontology: str
     snapshot_id: str
@@ -94,7 +96,7 @@ class OntologySnapshot:
 
 
 def ontology_for_type(entity_type: str) -> str | None:
-    """Which ontology a type carries, if any. Cross-links are forbidden."""
+    """Which ontology a type carries, if any. Cross-links are forbidden (spec §7.3)."""
     return CANDIDATE_ONTOLOGY_BY_TYPE.get(entity_type)
 
 
@@ -109,22 +111,17 @@ def generate_candidates(
     top_k: int = DEFAULT_TOP_K,
     alias_confidence: float = DEFAULT_ALIAS_CONFIDENCE,
 ) -> tuple[Candidate, ...]:
-    """Ontology-grounded candidates, in the documented order.
-
-    Every stage is filtered by snapshot membership as it is read, so a retrieval
-    index that has drifted from the snapshot cannot smuggle a code through.
-    """
+    """Snapshot-grounded candidates, in the documented order."""
     expected = ontology_for_type(entity_type)
     if expected is None:
         return ()
     if expected != snapshot.ontology:
-        raise LinkingError(
+        raise SnapshotLinkingError(
             f"{entity_type} takes {expected} candidates but the snapshot is "
-            f"{snapshot.ontology}; cross-ontology linking is forbidden")
+            f"{snapshot.ontology}; cross-ontology linking is forbidden (spec §7.3)")
 
     exact = [c for c in snapshot.alias_hits(mention_text) if snapshot.contains(c)]
     if exact:
-        # The ontology answered exactly. Emit it alone.
         return tuple(
             Candidate(code=code, ontology=snapshot.ontology,
                       score=alias_confidence, source=SOURCE_ALIAS_EXACT, rank=rank)
@@ -146,7 +143,9 @@ def generate_candidates(
         for rank, (code, (score, source)) in enumerate(ordered[:top_k], start=1))
 
 
-QWEN_SELECTION_SCHEMA: Mapping[str, Any] = {
+# Spec §12.1's constrained output shape for candidate selection. The model chooses
+# from an offered set; it has no field with which to introduce a code.
+SELECTION_SCHEMA: Mapping[str, Any] = {
     "type": "object",
     "required": ["selected"],
     "properties": {
@@ -157,23 +156,25 @@ QWEN_SELECTION_SCHEMA: Mapping[str, Any] = {
 }
 
 
-def select_from_candidates(
+def constrain_selection(
     payload: str, candidates: Sequence[Candidate], *, snapshot: OntologySnapshot,
 ) -> tuple[tuple[Candidate, ...], tuple[str, ...]]:
-    """Constrain a Qwen selection to the offered set.
+    """Constrain a model's selection to the offered set (spec P7, §12.1).
 
-    Returns ``(selected, rejected_codes)``. A code Qwen returns that was not
-    offered is dropped and reported — never emitted, even if it happens to exist
-    in the snapshot, because it was not retrieved for this mention.
+    Returns ``(selected, rejected_codes)``. A code the model returns that was not
+    offered is dropped and reported — never emitted, **even if it exists in the
+    snapshot**, because it was not retrieved for this mention. A malformed payload
+    falls back to the retrieved order unchanged rather than to an empty answer.
     """
+    import json
+
     offered = {candidate.code: candidate for candidate in candidates}
     try:
-        document = json.loads(payload)
+        document = json.loads(normalize_json_completion(payload))
         proposed = document["selected"]
         if not isinstance(proposed, list):
             raise TypeError("selected is not a list")
     except (json.JSONDecodeError, TypeError, KeyError):
-        # Malformed selection falls back to the retrieved order, unchanged.
         return tuple(candidates), ()
 
     selected: list[Candidate] = []
@@ -192,17 +193,16 @@ def select_from_candidates(
 def assert_codes_in_snapshot(
     codes: Sequence[str], *, snapshot: OntologySnapshot,
 ) -> None:
-    """Every emitted code must exist in the locked snapshot."""
+    """Every emitted code must exist in the locked snapshot (spec §16 fail-fast)."""
     missing = [code for code in codes if not snapshot.contains(code)]
     if missing:
-        raise LinkingError(
+        raise SnapshotLinkingError(
             f"{sorted(missing)} are not in {snapshot.ontology} snapshot "
-            f"{snapshot.snapshot_id}; ZS0 emits retrieved codes only and never "
-            "generates one")
+            f"{snapshot.snapshot_id}; codes are retrieved, never generated")
 
 
 @dataclass(frozen=True, slots=True)
-class LinkingResult:
+class SnapshotLinkingResult:
     """Candidates for one mention, with full retrieval provenance."""
 
     entity_type: str
@@ -216,6 +216,7 @@ class LinkingResult:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "contract_version": SNAPSHOT_LINKING_CONTRACT_VERSION,
             "entity_type": self.entity_type,
             "ontology": self.ontology,
             "candidates": [c.as_dict() for c in self.candidates],
@@ -226,7 +227,7 @@ class LinkingResult:
         }
 
 
-def link_mention(
+def link_against_snapshot(
     *,
     mention_text: str,
     entity_type: str,
@@ -234,54 +235,55 @@ def link_mention(
     lexical: Sequence[tuple[str, float]] = (),
     dense: Sequence[tuple[str, float]] = (),
     reranked: Sequence[tuple[str, float]] = (),
-    qwen_payload: str = "",
+    selection_payload: str = "",
     top_k: int = DEFAULT_TOP_K,
-) -> LinkingResult:
+) -> SnapshotLinkingResult:
     """Full candidate pipeline for one mention, ending in the snapshot check."""
     ontology = ontology_for_type(entity_type)
     if ontology is None or snapshot is None:
-        return LinkingResult(entity_type=entity_type, ontology=ontology,
-                             candidates=(), fallback="type_carries_no_candidates")
+        return SnapshotLinkingResult(
+            entity_type=entity_type, ontology=ontology, candidates=(),
+            fallback="type_carries_no_candidates")
     candidates = generate_candidates(
         mention_text=mention_text, entity_type=entity_type, snapshot=snapshot,
         lexical=lexical, dense=dense, reranked=reranked, top_k=top_k)
     if not candidates:
-        # Empty beats invented: an empty candidate list is a correct statement
-        # that retrieval found nothing.
-        return LinkingResult(entity_type=entity_type, ontology=ontology,
-                             candidates=(), fallback="no_candidate_retrieved")
+        return SnapshotLinkingResult(
+            entity_type=entity_type, ontology=ontology, candidates=(),
+            fallback="no_candidate_retrieved")
     if candidates[0].source == SOURCE_ALIAS_EXACT:
         assert_codes_in_snapshot([c.code for c in candidates], snapshot=snapshot)
-        return LinkingResult(entity_type=entity_type, ontology=ontology,
-                             candidates=candidates, fallback="exact_alias")
+        return SnapshotLinkingResult(
+            entity_type=entity_type, ontology=ontology, candidates=candidates,
+            fallback="exact_alias")
     rejected: tuple[str, ...] = ()
-    if qwen_payload:
-        candidates, rejected = select_from_candidates(
-            qwen_payload, candidates, snapshot=snapshot)
+    if selection_payload:
+        candidates, rejected = constrain_selection(
+            selection_payload, candidates, snapshot=snapshot)
     assert_codes_in_snapshot([c.code for c in candidates], snapshot=snapshot)
-    return LinkingResult(entity_type=entity_type, ontology=ontology,
-                         candidates=candidates, rejected_codes=rejected,
-                         fallback="calibrated_top_k")
+    return SnapshotLinkingResult(
+        entity_type=entity_type, ontology=ontology, candidates=candidates,
+        rejected_codes=rejected, fallback="calibrated_top_k")
 
 
 __all__ = [
     "DEFAULT_ALIAS_CONFIDENCE",
     "DEFAULT_TOP_K",
-    "LINKING_CONTRACT_VERSION",
-    "QWEN_SELECTION_SCHEMA",
     "RETRIEVAL_SOURCES",
+    "SELECTION_SCHEMA",
+    "SNAPSHOT_LINKING_CONTRACT_VERSION",
     "SOURCE_ALIAS_EXACT",
     "SOURCE_DENSE",
     "SOURCE_LEXICAL",
     "SOURCE_RERANKER",
     "Candidate",
-    "LinkingError",
-    "LinkingResult",
     "OntologySnapshot",
+    "SnapshotLinkingError",
+    "SnapshotLinkingResult",
     "assert_codes_in_snapshot",
+    "constrain_selection",
     "generate_candidates",
-    "link_mention",
+    "link_against_snapshot",
     "normalize_alias",
     "ontology_for_type",
-    "select_from_candidates",
 ]

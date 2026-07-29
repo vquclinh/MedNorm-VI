@@ -1,9 +1,14 @@
-"""Phase-2 L3/L4 ablation plan and availability reporting.
+"""Phase-2 L3/L4 ablation plan and availability reporting (spec §18.2).
 
 This entry point defines the required Phase-2 arms without fabricating scores
 for untrained experts. Arms whose checkpoints are not present are reported as
 ``UNAVAILABLE_UNTRAINED`` and must be excluded from metric tables until a frozen
 validation-selected checkpoint exists.
+
+Audit 0051 removed every arm that contained E4 PhoBERT-W2NER. An arm whose
+membership can never be satisfied is not a deferred measurement — it is a
+permanently `UNAVAILABLE_UNTRAINED` row that makes the plan look larger than the
+set of questions this project can still answer.
 """
 
 from __future__ import annotations
@@ -14,7 +19,6 @@ from pathlib import Path
 
 from ..lattice.models import (
     EXPERT_GLINER,
-    EXPERT_PHOBERT_W2NER,
     EXPERT_VIHEALTHBERT,
     EXPERT_XLMR_MRC,
 )
@@ -25,10 +29,9 @@ STATUS_UNAVAILABLE_UNTRAINED = "UNAVAILABLE_UNTRAINED"
 STATUS_DISABLED = "DISABLED_BY_PROFILE"
 
 ARM_E3_ONLY = "E3_only"
-ARM_E3_E4 = "E3_plus_E4_phobert_w2ner"
 ARM_E3_E5 = "E3_plus_E5_xlmr_mrc"
 ARM_E3_E6 = "E3_plus_E6_gliner"
-ARM_E3_E4_E5 = "E3_plus_E4_plus_E5"
+ARM_E3_E5_E6 = "E3_plus_E5_plus_E6"
 ARM_ALL_L3 = "all_available_l3_experts"
 ARM_L4_V1 = "deterministic_l4_v1"
 ARM_L4_V2 = "learned_l4_v2"
@@ -69,12 +72,6 @@ PHASE2_ABLATION_ARMS: tuple[AblationArmSpec, ...] = (
         ("e3_vihealthbert",),
     ),
     AblationArmSpec(
-        ARM_E3_E4,
-        (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER),
-        ("enable_e3_vihealthbert", "enable_e4_phobert_w2ner"),
-        ("e3_vihealthbert", "e4_phobert_w2ner"),
-    ),
-    AblationArmSpec(
         ARM_E3_E5,
         (EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC),
         ("enable_e3_vihealthbert", "enable_e5_xlmr_mrc"),
@@ -87,21 +84,20 @@ PHASE2_ABLATION_ARMS: tuple[AblationArmSpec, ...] = (
         ("e3_vihealthbert", "e6_gliner"),
     ),
     AblationArmSpec(
-        ARM_E3_E4_E5,
-        (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER, EXPERT_XLMR_MRC),
-        ("enable_e3_vihealthbert", "enable_e4_phobert_w2ner", "enable_e5_xlmr_mrc"),
-        ("e3_vihealthbert", "e4_phobert_w2ner", "e5_xlmr_mrc"),
+        ARM_E3_E5_E6,
+        (EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC, EXPERT_GLINER),
+        ("enable_e3_vihealthbert", "enable_e5_xlmr_mrc", "enable_e6_gliner"),
+        ("e3_vihealthbert", "e5_xlmr_mrc", "e6_gliner"),
     ),
     AblationArmSpec(
         ARM_ALL_L3,
-        (EXPERT_VIHEALTHBERT, EXPERT_PHOBERT_W2NER, EXPERT_XLMR_MRC, EXPERT_GLINER),
+        (EXPERT_VIHEALTHBERT, EXPERT_XLMR_MRC, EXPERT_GLINER),
         (
             "enable_e3_vihealthbert",
-            "enable_e4_phobert_w2ner",
             "enable_e5_xlmr_mrc",
             "enable_e6_gliner",
         ),
-        ("e3_vihealthbert", "e4_phobert_w2ner", "e5_xlmr_mrc", "e6_gliner"),
+        ("e3_vihealthbert", "e5_xlmr_mrc", "e6_gliner"),
     ),
     AblationArmSpec(
         ARM_L4_V1,
@@ -172,10 +168,9 @@ def plan_phase2_ablation(
 
 __all__ = [
     "ARM_ALL_L3",
-    "ARM_E3_E4",
     "ARM_E3_E5",
+    "ARM_E3_E5_E6",
     "ARM_E3_E6",
-    "ARM_E3_E4_E5",
     "ARM_E3_ONLY",
     "ARM_L4_V1",
     "ARM_L4_V2",

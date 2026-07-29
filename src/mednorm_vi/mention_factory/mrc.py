@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ..lattice.models import EXPERT_XLMR_MRC, ExpertSpanProposal
-from .w2ner import EntitySpan
+from .spans import EntitySpan
 
 MRC_CONFIG_VERSION = "xlmr-mrc-ner-v1"
 MRC_QUERY_VERSION = "mrc-type-queries-v1"

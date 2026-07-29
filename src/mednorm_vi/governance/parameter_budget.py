@@ -55,28 +55,31 @@ STATUS_PLANNED = "PLANNED"            # architecture-declared, not implemented y
 STATUS_IMPLEMENTED = "IMPLEMENTED"    # code exists, no trained checkpoint
 STATUS_TRAINED = "TRAINED"            # a validated checkpoint exists
 STATUS_EXCLUDED_BY_ABLATION = "EXCLUDED_BY_ABLATION"  # researched, not deployed
-# Audit 0048: researched to completion, then withdrawn from the active stack by
-# an owner decision. Distinct from EXCLUDED_BY_ABLATION, which is a measurement
-# outcome — retirement is a decision recorded on top of one.
-STATUS_RETIRED_FROM_ACTIVE_STACK = "RETIRED_FROM_ACTIVE_STACK"
+# Audits 0048/0051: researched to completion, then withdrawn from the active
+# architecture by an owner decision. Distinct from EXCLUDED_BY_ABLATION, which is a
+# measurement outcome — retirement is a decision recorded on top of one.
+STATUS_RETIRED_FROM_ACTIVE_ARCHITECTURE = "RETIRED_FROM_ACTIVE_ARCHITECTURE"
 
 REGISTRY_STATUSES: tuple[str, ...] = (
     STATUS_PLANNED, STATUS_IMPLEMENTED, STATUS_TRAINED,
-    STATUS_EXCLUDED_BY_ABLATION, STATUS_RETIRED_FROM_ACTIVE_STACK)
+    STATUS_EXCLUDED_BY_ABLATION, STATUS_RETIRED_FROM_ACTIVE_ARCHITECTURE)
 
 # Statuses a deployment manifest may never select.
 NON_DEPLOYABLE_STATUSES: tuple[str, ...] = (
-    STATUS_PLANNED, STATUS_EXCLUDED_BY_ABLATION, STATUS_RETIRED_FROM_ACTIVE_STACK)
+    STATUS_PLANNED, STATUS_EXCLUDED_BY_ABLATION,
+    STATUS_RETIRED_FROM_ACTIVE_ARCHITECTURE)
 
-# How a parameter count was obtained. Only COUNTED_FROM_CONFIG is trustworthy for
-# a deployment decision.
+# How a parameter count was obtained. Only a programmatic count is trustworthy for
+# a deployment decision; a published estimate never is.
 METHOD_COUNTED_FROM_CONFIG = "counted_from_config"
 METHOD_COUNTED_FROM_CHECKPOINT = "counted_from_checkpoint"
+METHOD_COUNTED_FROM_SAFETENSORS_INDEX = "counted_from_safetensors_index"
 METHOD_PUBLISHED_ESTIMATE = "published_estimate"
 METHOD_UNKNOWN = "unknown"
 
 VERIFIED_METHODS: frozenset[str] = frozenset(
-    {METHOD_COUNTED_FROM_CONFIG, METHOD_COUNTED_FROM_CHECKPOINT})
+    {METHOD_COUNTED_FROM_CONFIG, METHOD_COUNTED_FROM_CHECKPOINT,
+     METHOD_COUNTED_FROM_SAFETENSORS_INDEX})
 
 
 class ParameterBudgetError(ValueError):
@@ -106,6 +109,11 @@ class CandidateModel:
     trainable_parameters: int | None = None
     adapter_parameters: int = 0
     loaded_at_inference: bool = False
+    # Spec §21 lists "Full stack cannot reside in memory simultaneously" as a real
+    # risk, controlled by sequential load/unload. A component that is loaded at
+    # inference but unloaded before the next one still counts against the 9B cap,
+    # yet it does not count against peak residency — so the two are tracked apart.
+    concurrent_with_other_models: bool = False
     shares_weights_with: str = ""
     parameter_count_method: str = METHOD_UNKNOWN
     parameter_count_verified: bool = False
@@ -166,6 +174,7 @@ class CandidateModel:
             "trainable_parameters": self.trainable_parameters,
             "adapter_parameters": self.adapter_parameters,
             "loaded_at_inference": self.loaded_at_inference,
+            "concurrent_with_other_models": self.concurrent_with_other_models,
             "shares_weights_with": self.shares_weights_with,
             "parameter_count_method": self.parameter_count_method,
             "parameter_count_verified": self.parameter_count_verified,
@@ -251,7 +260,11 @@ class DeploymentBudgetReport:
     adapter_parameters: int
     within_budget: bool
     remaining_margin: int
+    concurrently_resident_parameters: int = 0
     version: str = DEPLOYMENT_BUDGET_VERSION
+
+    def component_ids(self) -> tuple[str, ...]:
+        return tuple(component.component_id for component in self.components)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -261,6 +274,7 @@ class DeploymentBudgetReport:
             "total_loaded_parameters": self.total_loaded_parameters,
             "base_only_parameters_spec_section_17": self.base_only_parameters,
             "adapter_parameters": self.adapter_parameters,
+            "concurrently_resident_parameters": self.concurrently_resident_parameters,
             "within_budget": self.within_budget,
             "remaining_margin": self.remaining_margin,
             "components": [component.as_dict() for component in self.components],
@@ -295,6 +309,7 @@ def compute_deployment_budget(
     total = 0
     base_total = 0
     adapter_total = 0
+    concurrent_total = 0
 
     for component_id in selected:
         component = registry.by_id(component_id)
@@ -326,6 +341,8 @@ def compute_deployment_budget(
         total += contribution
         base_total += base_contribution
         adapter_total += int(component.adapter_parameters)
+        if component.concurrent_with_other_models:
+            concurrent_total += contribution
         entries.append(DeploymentComponent(
             component_id=component_id, counted_parameters=contribution,
             base_only_parameters=base_contribution,
@@ -337,7 +354,8 @@ def compute_deployment_budget(
         manifest_name=manifest_name, components=tuple(entries),
         total_loaded_parameters=total, base_only_parameters=base_total,
         adapter_parameters=adapter_total, within_budget=within,
-        remaining_margin=MAX_DEPLOYMENT_PARAMETERS - total)
+        remaining_margin=MAX_DEPLOYMENT_PARAMETERS - total,
+        concurrently_resident_parameters=concurrent_total)
     if enforce and not within:
         raise DeploymentBudgetExceeded(
             f"{manifest_name}: deployment loads {total:,} parameters, which exceeds the "
@@ -425,6 +443,8 @@ def _component_from_mapping(payload: Mapping[str, Any]) -> CandidateModel:
         trainable_parameters=None if trainable is None else int(trainable),
         adapter_parameters=int(payload.get("adapter_parameters", 0) or 0),
         loaded_at_inference=bool(payload.get("loaded_at_inference", False)),
+        concurrent_with_other_models=bool(
+            payload.get("concurrent_with_other_models", False)),
         shares_weights_with=str(payload.get("shares_weights_with", "") or ""),
         parameter_count_method=str(
             payload.get("parameter_count_method", METHOD_UNKNOWN)),
@@ -461,6 +481,7 @@ def render_budget_report(report: DeploymentBudgetReport) -> str:
         f"total loaded (gated):  {report.total_loaded_parameters:>15,}",
         f"base only (spec §17):  {report.base_only_parameters:>15,}",
         f"adapters:              {report.adapter_parameters:>15,}",
+        f"peak concurrent:       {report.concurrently_resident_parameters:>15,}",
         f"remaining margin:      {report.remaining_margin:>15,}",
         f"within budget:         {report.within_budget}",
         "",
@@ -485,6 +506,7 @@ __all__ = [
     "MAX_DEPLOYMENT_PARAMETERS",
     "METHOD_COUNTED_FROM_CHECKPOINT",
     "METHOD_COUNTED_FROM_CONFIG",
+    "METHOD_COUNTED_FROM_SAFETENSORS_INDEX",
     "METHOD_PUBLISHED_ESTIMATE",
     "METHOD_UNKNOWN",
     "PARAMETER_REGISTRY_VERSION",
@@ -493,7 +515,7 @@ __all__ = [
     "STATUS_IMPLEMENTED",
     "NON_DEPLOYABLE_STATUSES",
     "STATUS_PLANNED",
-    "STATUS_RETIRED_FROM_ACTIVE_STACK",
+    "STATUS_RETIRED_FROM_ACTIVE_ARCHITECTURE",
     "STATUS_TRAINED",
     "VERIFIED_METHODS",
     "CandidateModel",

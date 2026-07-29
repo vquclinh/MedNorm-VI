@@ -47,34 +47,16 @@ components:
       Spec §17 lists "approximately 0.135B"; the verified count is 134,998,272.
 
   # --------------------------------------------------------------------------
-  # E4 — real full training executing on Colab during this milestone
+  # E4 PhoBERT-W2NER — removed from this registry by Audit 0051.
+  #
+  # It is RETIRED_FROM_ACTIVE_ARCHITECTURE. Its completed Stage-2 tiny-recipe
+  # ablation selected no recipe (best exact F1 0.7333 by group_balanced_ce against
+  # a 0.95 gate), no checkpoint was ever produced, and its parameter count was
+  # never programmatically verified. A registry entry exists so a deployment can
+  # select from it; a component that can never be selected does not belong here.
+  #
+  # The record: src/mednorm_vi/governance/e4_retirement.py, Audits 0043-0048, 0051.
   # --------------------------------------------------------------------------
-  - component_id: e4_phobert_w2ner
-    architecture_layer: L3
-    training_stage: S1
-    # Audit 0048: retired by the human owner after a completed, valid Stage-2
-    # ablation. Best exact F1 0.7333 (group_balanced_ce) against a 0.95 gate;
-    # no recipe was selected, so Stage 3 and full training never ran.
-    status: RETIRED_FROM_ACTIVE_STACK
-    retired_by_audit: "0048"
-    best_measured_tiny_exact_f1: 0.7333
-    in_active_deployment: false
-    model_id: vinai/phobert-large
-    pinned_revision: 1c7880f20db59c0054c6de5afd71b012369f6ee4
-    checkpoint_role: w2ner_relation_grid
-    # NOT verified: the PhoBERT config is not cached locally and this milestone
-    # does not download model weights. Spec §17 lists "approximately 0.370B" as a
-    # planning figure only.
-    total_parameters: null
-    trainable_parameters: null
-    adapter_parameters: 0
-    loaded_at_inference: false
-    shares_weights_with: ""
-    parameter_count_method: published_estimate
-    parameter_count_verified: false
-    notes: >-
-      Full training was running externally on Colab while this registry was
-      written. Its artifact must be validated before any deployment selection.
 
   # --------------------------------------------------------------------------
   # E5 — ready for Colab smoke, never trained

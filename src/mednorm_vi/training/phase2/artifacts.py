@@ -8,9 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ...lattice.models import EXPERT_PHOBERT_W2NER, EXPERT_XLMR_MRC
+from ...lattice.models import EXPERT_XLMR_MRC
 from ...mention_factory.mrc import MRC_QUERY_VERSION, TYPE_QUERY_ORDER
-from ...mention_factory.w2ner import DEFAULT_TYPE_ORDER
 from ...resolution.learned_v2 import (
     RESOLVER_V2_VERSION,
     SUPPORTED_BOUNDARY_ACTIONS,
@@ -45,7 +44,6 @@ REQUIRED_ARTIFACT_FILES: tuple[str, ...] = (
 )
 
 MODEL_ARTIFACT_KINDS: dict[str, str] = {
-    "e4": EXPERT_PHOBERT_W2NER,
     "e5": EXPERT_XLMR_MRC,
     "l4": RESOLVER_V2_VERSION,
 }
@@ -102,10 +100,10 @@ class Phase2TrainingManifest:
     artifact_schema_version: str = ARTIFACT_SCHEMA_VERSION
     best_latest_identical_allowed: bool = False
     best_latest_identical_reason: str = ""
-    # Optional per-expert accounting (Audit 0039). E4 records real optimizer-step,
-    # gradient-accumulation, precision and weight-format accounting here so a
-    # manifest cannot merely relabel a batch size. Experts that do not use it
-    # leave it empty, so E5 and L4 manifests are unaffected.
+    # Optional per-expert accounting (Audit 0039). An expert that records real
+    # optimizer-step, gradient-accumulation, precision and weight-format
+    # accounting here cannot merely relabel a batch size. Experts that do not use
+    # it leave it empty, so E5 and L4 manifests are unaffected.
     training_accounting: Mapping[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -288,8 +286,6 @@ def checkpoint_payload(
 
 
 def _expected_label_space(expert_id: str) -> tuple[str, ...]:
-    if expert_id == EXPERT_PHOBERT_W2NER:
-        return DEFAULT_TYPE_ORDER
     if expert_id == EXPERT_XLMR_MRC:
         return TYPE_QUERY_ORDER
     if expert_id == RESOLVER_V2_VERSION:
@@ -304,7 +300,7 @@ def _check_revision_fields(
 ) -> None:
     model_revision = str(manifest.get("model_revision", ""))
     tokenizer_revision = str(manifest.get("tokenizer_revision", ""))
-    if expected_expert_id in {EXPERT_PHOBERT_W2NER, EXPERT_XLMR_MRC}:
+    if expected_expert_id == EXPERT_XLMR_MRC:
         if not is_immutable_revision(model_revision):
             failures.append("model_revision_not_immutable")
         if not is_immutable_revision(tokenizer_revision):
@@ -506,18 +502,6 @@ def validate_phase2_artifact(
     )
 
 
-def validate_e4_artifact(
-    artifact_dir: str | Path,
-    *,
-    mode: str = MODE_FULL,
-) -> ArtifactValidationReport:
-    return validate_phase2_artifact(
-        artifact_dir,
-        expected_expert_id=EXPERT_PHOBERT_W2NER,
-        expected_mode=mode,
-    )
-
-
 def validate_e5_artifact(
     artifact_dir: str | Path,
     *,
@@ -563,7 +547,6 @@ __all__ = [
     "Phase2TrainingManifest",
     "checkpoint_payload",
     "require_valid_artifact",
-    "validate_e4_artifact",
     "validate_e5_artifact",
     "validate_l4_artifact",
     "validate_phase2_artifact",

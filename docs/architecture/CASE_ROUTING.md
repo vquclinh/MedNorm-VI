@@ -33,8 +33,8 @@ change must run regression tests so recall gains do not silently cost precision.
   the section implies it).
 - **Preferred flow (spec):** medication grammar + section propagation +
   structured RxNorm linker.
-- **Activates:** `mention_factory.medication_grammar` (E1), `specialists.rxnorm`,
-  `boundary_type`.
+- **Activates:** `mention_factory.medication_grammar` (E1), `linking.rxnorm`,
+  `resolution` (L4).
 
 ### C2 — Lab semi-structured
 - **What:** `name: value unit [flag] [reference-range]` rows; colons/semicolons,
@@ -44,7 +44,7 @@ change must run regression tests so recall gains do not silently cost precision.
   hematology, chemistry).
 - **Preferred flow (spec):** finite-state parser + test-result bipartite
   matching (`TEST_NAME –has_result→ VALUE [UNIT] [FLAG] [REFERENCE_RANGE]`).
-- **Activates:** `mention_factory.lab_parser` (E2), `boundary_type`.
+- **Activates:** `mention_factory.lab_parser` (E2), `resolution` (L4).
 
 ### C3 — Clinical narrative
 - **What:** long sentences, multiple symptoms/diagnoses, soft boundaries.
@@ -53,7 +53,8 @@ change must run regression tests so recall gains do not silently cost precision.
   conclusion). Default fallback route.
 - **Preferred flow (spec):** span-NER ensemble + MRC/W2NER + contextual type
   scorer.
-- **Activates:** `mention_factory.span_ner_ensemble` (E3–E6), `boundary_type`,
+- **Activates:** `mention_factory.span_ner_ensemble` (E3/E5/E6 — E4 is retired,
+  Audit 0051), `resolution` (L4),
   `specialists.assertion`.
 
 ### C4 — Assertion-heavy
@@ -63,7 +64,7 @@ change must run regression tests so recall gains do not silently cost precision.
   negation); section priors (medical history, family history).
 - **Preferred flow (spec):** cue detector + scope model + section prior +
   relation classifier.
-- **Activates:** `specialists.assertion`, `boundary_type`.
+- **Activates:** `specialists.assertion`, `resolution` (L4).
 
 ### C5 — Abbreviation/noise
 - **What:** abbreviations (THA, DTD, qhs), accent errors, English-Vietnamese
@@ -82,7 +83,7 @@ change must run regression tests so recall gains do not silently cost precision.
 - **Routing signals:** competing ontology candidates; strength/form variation.
 - **Preferred flow (spec):** ontology hard negatives + cross-encoder +
   constrained judge.
-- **Activates:** `specialists.icd`, `specialists.rxnorm`, `confidence_cascade`.
+- **Activates:** `linking.icd10`, `linking.rxnorm`, `confidence_cascade`.
 
 ### C7 — Overlap/duplicates
 - **What:** same text at multiple positions; nested/adjacent spans.
@@ -114,6 +115,6 @@ change must run regression tests so recall gains do not silently cost precision.
 | C6   | ✅     | ✅  |           |             |            |                   |                |                | ✅                 |                |
 | C7   |        |     |           |             |            |                   |                | ✅             |                    | ✅             |
 
-`boundary_type` (L4) runs for every route that produces spans; L4–L9 always
+`resolution` (L4) runs for every route that produces spans; L4–L9 always
 execute on the merged span lattice regardless of case. The matrix records the
 **case-specific** activations from spec section 5.

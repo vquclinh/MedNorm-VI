@@ -16,7 +16,7 @@ from ...mention_factory.mrc import (
     build_mrc_examples,
     pair_start_end,
 )
-from ...mention_factory.w2ner import EntitySpan
+from ...mention_factory.spans import EntitySpan
 from .artifacts import (
     MODE_SMOKE,
     Phase2TrainingManifest,

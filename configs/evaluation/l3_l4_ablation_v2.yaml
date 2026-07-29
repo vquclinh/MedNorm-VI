@@ -5,10 +5,9 @@ internal_test_policy:
   accessed_during_phase2_implementation: false
 arms:
   - E3_only
-  - E3_plus_E4_phobert_w2ner
   - E3_plus_E5_xlmr_mrc
   - E3_plus_E6_gliner
-  - E3_plus_E4_plus_E5
+  - E3_plus_E5_plus_E6
   - all_available_l3_experts
   - deterministic_l4_v1
   - learned_l4_v2
