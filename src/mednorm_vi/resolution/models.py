@@ -9,7 +9,9 @@ entities. Heuristic scores are not calibrated probabilities.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 # All five organizer-facing types are now resolvable when proposal evidence is
 # present. Earlier deterministic experts still emit only medication/lab types.
@@ -85,10 +87,25 @@ class EntityHypothesis:
     has_result_pair_group_ids: tuple[str, ...] = field(default_factory=tuple)
     score: float = 0.0
     features: dict[str, float] = field(default_factory=dict)
+    # Which L3 experts proposed these exact coordinates (Audit 0052). Empty on the
+    # legacy Phase-1B path; populated by the canonical lattice L4.
+    expert_ids: tuple[str, ...] = field(default_factory=tuple)
+    # Structured sub-span evidence carried through from E1/E2 (spec §10.1, §6.2).
+    # L5 needs the field decomposition — ingredient/strength/unit/dose-form/route —
+    # and it used to be destroyed at the lattice boundary. Kept as frozen mappings
+    # so this contract does not depend on the specialist's dataclass.
+    components: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
 
     @property
     def position(self) -> tuple[int, int]:
         return (self.start, self.end)
+
+    def components_by_role(self) -> dict[str, tuple[Mapping[str, Any], ...]]:
+        """Structured sub-components grouped by grammar role (spec §10.1)."""
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for component in self.components:
+            grouped.setdefault(str(component.get("role", "")), []).append(component)
+        return {role: tuple(items) for role, items in sorted(grouped.items())}
 
 
 @dataclass(frozen=True, slots=True)

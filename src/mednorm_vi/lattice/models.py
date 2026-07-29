@@ -107,6 +107,22 @@ class SourceEvidence:
     model_revision: str = ""
     checkpoint_sha256: str = ""
     config_sha256: str = ""
+    # Structured sub-span evidence, carried through verbatim (Audit 0052).
+    #
+    # E1's medication grammar already produces the field decomposition spec §10.1
+    # requires — ingredient/strength/unit/dose-form/route — as `ComponentSpan`s, and
+    # E2 produces TEST_NAME->TEST_RESULT pairings as `RelationProposal`s. Before this
+    # audit the lattice reduced both to a single float (`grammar_component_count`),
+    # so the structured parse was destroyed one layer above the linker that needs
+    # it. These two fields carry it instead, so L5 can consume it in Milestone 2
+    # without a second contract migration.
+    #
+    # Each component is a frozen mapping: role, start, end, text, normalized, detail.
+    # Coordinates are absolute and end-exclusive, exactly as the specialist emitted
+    # them; nothing here is re-derived.
+    components: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    # Pair-group ids linking a TEST_NAME to its TEST_RESULT (spec §6.2).
+    relation_refs: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def family(self) -> str:
@@ -137,6 +153,8 @@ class SourceEvidence:
             "model_revision": self.model_revision,
             "checkpoint_sha256": self.checkpoint_sha256,
             "config_sha256": self.config_sha256,
+            "components": [dict(component) for component in self.components],
+            "relation_refs": list(self.relation_refs),
         }
 
 
@@ -279,6 +297,33 @@ class SpanProposal:
 
     def overlaps(self, other: SpanProposal) -> bool:
         return self.start < other.end and other.start < self.end
+
+    # -- structured sub-span evidence (Audit 0052) -----------------------------
+    #
+    # The union across every source that proposed these exact coordinates, ordered
+    # deterministically. A node merged from E1 and E3 keeps E1's field
+    # decomposition; the neural expert contributes none, and contributing none is
+    # not the same as erasing E1's.
+
+    def components(self) -> tuple[Mapping[str, Any], ...]:
+        """Every structured sub-component contributed by any source."""
+        out: list[Mapping[str, Any]] = []
+        for source in self.sources:
+            out.extend(source.components)
+        return tuple(sorted(
+            out, key=lambda c: (int(c.get("start", 0)), int(c.get("end", 0)),
+                                str(c.get("role", "")))))
+
+    def components_by_role(self) -> dict[str, tuple[Mapping[str, Any], ...]]:
+        """Structured sub-components grouped by grammar role (spec §10.1)."""
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for component in self.components():
+            grouped.setdefault(str(component.get("role", "")), []).append(component)
+        return {role: tuple(items) for role, items in sorted(grouped.items())}
+
+    def relation_refs(self) -> tuple[str, ...]:
+        """Pair-group ids linking this span to its counterpart (spec §6.2)."""
+        return tuple(sorted({ref for s in self.sources for ref in s.relation_refs}))
 
     def as_dict(self) -> dict[str, Any]:
         return {

@@ -8,6 +8,7 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
+- **Last updated by:** Audit 0052 (canonical L3 lattice + E3 activation + assertion fix)
 - **Date:** 2026-07-29
 - **Rule this file obeys:** a module is never described as implemented when it has
   no trained checkpoint, no wiring, or only a contract. "Implemented" here means
@@ -53,13 +54,39 @@ apart deliberately.
 | Fact | Value |
 | --- | --- |
 | Layers with a trained checkpoint | **1 of 9** (L3, the E3 mention expert) |
-| Layers implemented and wired | L1, L2, L3 (deterministic + E3), L4 (deterministic), L5 assertion (deterministic), L5 linking (lexical), L6, L7 (deterministic fallback), L8 (deterministic), L9 |
+| **E3 runs through the canonical runner** | **YES, since Audit 0052** — real inference, verified checkpoint, provenance recorded |
+| Canonical L3 lattice wired into the runner | **YES, since Audit 0052** |
+| Canonical L4 entry points | **1** (`resolution.canonical`), since Audit 0052 |
+| Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), L5 linking (lexical), L6, L7 (deterministic fallback), L8 (deterministic), L9 |
 | Layers that are contract-or-scaffold only | L7 LLM cascade (no local weights), L8 expected-Jaccard/WER decoding |
 | `output.zip` ever produced | **No** |
-| Organizer metric ever computed | **No** — only span/token proxies |
+| Organizer metric ever computed | **No** — only exact mention span/type |
 | Organizer inference ever run | **No** |
 
-**Organizer readiness is not claimed.**
+**Organizer readiness is not claimed.** One mention expert now runs end to end; the
+candidate-set and assertion halves of the metric remain unimplemented and unmeasured.
+
+### Measured, Audit 0052 (bounded: 200 of 1,045 governed validation examples)
+
+Exact character-offset span **and** type, through the canonical runner:
+
+```text
+arm                       P        R       F1     TP    FP    FN
+E1+E2 deterministic   0.0000   0.0000   0.0000     0    11   406
+E3 only               0.6220   0.5025   0.5559   204   124   202
+E1+E2+E3 lattice      0.6018   0.5025   0.5477   204   135   202
+```
+
+Two things this says plainly. **E1/E2 score zero on this corpus** — it is narrative
+DIAGNOSIS/SYMPTOM text and they are medication/laboratory parsers, so their 11
+proposals are all false positives; this reproduces Audit 0034's Arm-2 result exactly.
+And **adding them to E3 lowers F1** (0.5477 against 0.5559), which is why
+`deterministic` and `specialist` are separate modes rather than one merged profile.
+
+This figure is **not comparable** to Audit 0032's `validation_span_micro_f1`
+0.7194: that was a token-index span proxy over the full 1,045 rows computed during
+training, this is exact character offsets **plus** exact type over 200 rows. Neither
+is the organizer's complete metric.
 
 ---
 
@@ -97,8 +124,9 @@ apart deliberately.
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/mention_factory/` (28 files, 3,527 lines); unified lattice `src/mednorm_vi/lattice/` (4 files, 826 lines) |
-| Status | `PARTIAL` — one of six declared experts has weights |
+| Implementation | `src/mednorm_vi/mention_factory/` (registry + experts + specialists); unified lattice `src/mednorm_vi/lattice/` |
+| Status | `PARTIALLY_IMPLEMENTED_AND_INTEGRATED` — three experts run (E1, E2, E3); three await weights or training |
+| Expert entry point | `mention_factory/registry.py` — the runner consults the registry and names no expert of its own, so a new expert needs **no** runner edit |
 | Contract version | `mention-span-v1` (`spans.py`), `mention-offsets-v1` (`offsets.py`), lattice `EXPERT_FAMILY`/`AVAILABLE_EXPERTS` |
 | Parameter-ledger behaviour | E1/E2 contribute 0; every neural expert must be counted programmatically before deployment |
 
@@ -108,21 +136,24 @@ Per expert:
 | --- | --- | --- | --- | --- |
 | E1 medication grammar | `IMPLEMENTED_AND_WIRED` | none needed | **yes** | Finite-state grammar per spec §6.1; `configs/medication/grammar_v1.yaml` |
 | E2 laboratory parser | `IMPLEMENTED_AND_WIRED` | none needed | **yes** | `TEST_NAME –has_result→ VALUE` per spec §6.2; `configs/laboratory/parser_v1.yaml` |
-| E3 ViHealthBERT span+type | `IMPLEMENTED_AND_TRAINED` | **exists** — `checkpoint/s1_mention_full_training_v1/best.pt`, SHA-256 `a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c`, 1,615,513,303 bytes, git-ignored | **yes** | Only trained model in the project. Validation span micro F1 0.7194053623573136; held-out `internal_test` span micro F1 0.746182 (Audit 0032). Neither is the organizer metric |
+| E3 ViHealthBERT span+type | **`IMPLEMENTED_AND_INTEGRATED`** | **exists and RUNS** — `checkpoint/s1_mention_full_training_v1/best.pt`, SHA-256 `a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c`, 1,615,513,303 bytes, git-ignored; byte-identical Drive backup verified by MD5 in Audit 0052 | **yes, in `specialist`** | Adapter `mention_factory/experts/e3_vihealthbert.py`; lazy, `local_files_only=True`, backbone never downloaded (the checkpoint carries the full state dict). Exact span+type F1 **0.5559** on 200 governed validation rows (Audit 0052). Audit 0032's 0.7194 / 0.746182 are token-index proxies and are not the same measurement |
 | E4 PhoBERT W2NER | **`RETIRED_FROM_ACTIVE_ARCHITECTURE`** | **none retained.** Training, diagnostic and reproduction checkpoints WERE produced; none passed the acceptance gate; none remains in the tree | **removed** | See §0 |
 | E5 XLM-R MRC-NER | `REQUIRES_FUTURE_TRAINING` | none | no | Contract + training path implemented (`mention_factory/mrc.py`, `training/phase2/e5_mrc_training.py`). Its task head is **randomly initialized**; it must never run at inference untrained |
 | E6 GLiNER open-type | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Strict adapter `mention_factory/gliner.py` fails closed without a verified local checkpoint; loader `llm/backends.OpenTypeSpanBackend` |
 | E7 Qwen proposer | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Proposal-only. Loader `llm/backends.CausalLMBackend`; offsets are never taken from it — resolved by `mention_factory/offsets.resolve_occurrence` and re-verified |
 
-Known missing: E5/E6/E7 have no local weights; TEST_NAME and TEST_RESULT have
-**zero** governed supervision, so two of the five spec types are unlearned by E3.
+Known missing: E5's head is untrained; E6/E7 have no local weights; TEST_NAME and
+TEST_RESULT have **zero** governed supervision, so two of the five spec types are
+unlearned by E3 (confirmed by the Audit-0052 per-type table: E3 predicts only
+DIAGNOSIS and SYMPTOM).
 
 ## 4. L4 — Boundary & Type Resolver
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/resolution/` (13 files, 2,486 lines) |
-| Status | `PARTIAL` — deterministic v1 implemented and **measured below baseline**; learned v2 implemented, untrained |
+| Implementation | **canonical entry point `resolution/canonical.py`** over `SpanLattice`, wrapping `resolution/resolver_v1.py`'s decision logic; `resolution/learned_v2.py` is the future learned slot |
+| Status | `IMPLEMENTED_AND_INTEGRATED` (deterministic); learned v2 implemented, untrained |
+| Canonical entry points | **1.** Audit 0052 replaced the two-live-L4 situation: `resolution/resolver.py` (Phase-1C-A) is no longer on the canonical path and is retained only until its remaining per-type boundary policy is provably covered |
 | Deterministic implementation | Yes: `resolver_v1.py`, `boundary.py`, `typing.py`, `overlap.py` (interval/graph selection, abstention, coordinate-identity merge) |
 | Pretrained adapter | None |
 | Trained checkpoint | **None** |
@@ -131,7 +162,7 @@ Known missing: E5/E6/E7 have no local weights; TEST_NAME and TEST_RESULT have
 | Contract version | `boundary-type-resolver-v1`, `learned-l4-v2` |
 | Configuration source | `configs/resolution/resolver_v1.yaml`, `configs/resolution/boundary_type_resolver_v1.yaml`, `configs/resolution/learned_l4_v2.yaml` |
 | Parameter-ledger behaviour | v1 contributes 0; v2 is a small MLP that **is** counted when loaded |
-| Known missing | v1 is off on evidence, not oversight: Audit 0034 measured exact F1 0.7039 against the E3-only 0.7103. No boundary-offset head (spec §7.1) exists. Enabling v1 requires an ablation showing it ≥ baseline |
+| Known missing | No boundary-offset head (spec §7.1). No learned v2 checkpoint. `resolution/resolver.py` still exists as a second, non-canonical implementation pending test migration |
 
 Note: the former `src/mednorm_vi/boundary_type/` bootstrap stub was a second, dead
 L4 import path raising `NotImplementedError`; Audit 0051 deleted it. `resolution/`
@@ -143,15 +174,16 @@ is the one L4 module.
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/specialists/assertion/` — `hydra.py` (wired), `cues.py` (cue+scope contract, 4 files/372 lines in the package tree) |
-| Status | `PARTIAL` — deterministic only |
-| Deterministic implementation | Yes: cue families, scope window, multi-label output, empty-on-uncertainty |
+| Implementation | `src/mednorm_vi/specialists/assertion/` — `cues.py` owns the lexicons and the §8.1 scope model; `hydra.py` is the wired per-hypothesis path and delegates every decision to it |
+| Status | `PARTIALLY_IMPLEMENTED_AND_INTEGRATED` — deterministic A1-A3 only |
+| Deterministic implementation | Yes, and **corrected in Audit 0052**: directional cues, sentence + clause boundaries, contrast markers (§8.1), word-boundary cue matching, entity-type eligibility, section priors (§4.2), multi-label output, empty-on-uncertainty |
 | Trained checkpoint | **None** |
 | Future checkpoint slot | S2 assertion head (`training/phase2/s2_assertion_training.py`, 754 lines; `MedNorm_S2_Assertion.ipynb`) |
 | Enabled | Deterministic path is wired into `inference/pipeline.py` |
 | Contract version | `assertion-cue-scope-v1` |
 | Parameter-ledger behaviour | Deterministic path 0; the S2 head shares the ViHealthBERT backbone and is counted as base + adapter |
-| Known missing | **The governed corpus has zero assertion supervision** (Audit 0042), so no assertion metric can be computed at all. Stages A1 (learned section prior), A3 (learned scope), A4 (entity–cue relation) and A6 (per-label calibration) are unimplemented. `hydra.py` uses a symmetric ±80-character window; `cues.py` implements the directional scope model spec §8.1 describes and additionally reports uncertainty. **Unifying the two onto the directional model is open L5 work** |
+| Known missing | **The governed corpus has zero assertion supervision** (Audit 0042), so no assertion metric can be computed at all — the Audit-0052 fix is verified by regression tests against constructed cases, not by a gold score. Learned A1/A3, A4 (entity–cue relation) and A6 (per-label calibration) are unimplemented. |
+| Fixed in Audit 0052 | A measured false-positive defect: the old ±80-character symmetric window assigned all three labels to **10 entities** in one fixture. Three causes — no direction/boundary, no contrast handling, and bare-substring matching ("ông" inside "không"). 32 regression tests now hold the fix |
 
 ### 5.2 ICD-10 Super Linker (spec §9)
 
@@ -245,6 +277,56 @@ object with `start_pos`/`end_pos` — contradicting the confirmed layout above o
 three points. `validator/` is the one L9 module.
 
 ---
+
+## 9a. The canonical L3 -> L4 contract lineage (Audit 0052)
+
+One versioned lineage, one owner per type. Four types were named ``SpanProposal``;
+they are not interchangeable, so each now declares whether it is runtime.
+
+```text
+L1   document_intelligence.models.DocumentGraph            RUNTIME  (8 fields)
+     schemas.document.DocumentGraph                        non-runtime sketch
+
+L2   case_router.models.NodeRouting                        RUNTIME
+     schemas.routing.RouteDecision                         non-runtime sketch
+
+L3   E1/E2  -> mention_factory.models.SpanProposal         RUNTIME  (22 fields,
+                                                             + ComponentSpan,
+                                                             + RelationProposal)
+     E3..E7 -> lattice.models.ExpertSpanProposal            RUNTIME  (20 fields,
+                                                             + model_revision,
+                                                             + checkpoint_sha256)
+     schemas.hypotheses.SpanProposal                        non-runtime sketch
+                    |
+                    v  lattice.builder.build_span_lattice
+     merged -> lattice.models.SpanProposal                  RUNTIME  (10 fields,
+                                                             sources[] keeps every
+                                                             contributing expert)
+                    |
+                    v  resolution.canonical.resolve_lattice_to_hypotheses
+L4   resolution.models.EntityHypothesis                     RUNTIME  (+ expert_ids,
+                                                             + components)
+                    |
+                    v
+L5-L9  assertions / linking / graph / cascade / decoder / validator
+```
+
+**Invariants the lineage enforces**, each checked in code rather than documented:
+
+| Invariant | Where |
+| --- | --- |
+| `original_text[start:end] == text` | expert (`propose`), registry, lattice `register`, L4, L9 — four independent checks |
+| end-exclusive absolute coordinates preserved | `ExpertSpanProposal.__post_init__` rejects a mismatched `original_start`/`original_end` |
+| full provenance preserved | `SourceEvidence` per contributing expert; never averaged into the node |
+| E1 `ComponentSpan` survives to L5 | `SourceEvidence.components` -> `SpanProposal.components()` -> `EntityHypothesis.components` |
+| E2 `RelationProposal` pairing survives to L5 | `SourceEvidence.relation_refs` -> `EntityHypothesis.has_result_pair_group_ids` |
+| model revision + checkpoint SHA recorded | `ExpertSpanProposal`, and `ExpertRunRecord` per document |
+| no expert emits `EntityHypothesis` or organizer JSON | the `L3Expert` protocol has no such method; `run_registered_experts` accepts only `ExpertSpanProposal` |
+| a new expert needs no runner edit | `mention_factory/registry.py`; a test asserts the runner names no expert |
+
+Before Audit 0052 the third and fourth rows were false: the lattice reduced E1's
+components to a single float and dropped the relation pairing entirely, one layer
+above the linker that spec §10.1/§6.2 needs them for.
 
 ## 10. Cross-cutting components
 

@@ -1,11 +1,14 @@
-"""L1 Document Intelligence contracts (spec section 4).
+"""L1 document contracts (spec §4).
 
-The ``DocumentGraph`` is the immutable backbone every later layer reads. It
-holds the authoritative ``original_text``, a reversible ``NormalizedView``, and
-a tree/graph of section and segment nodes — each carrying absolute offsets into
-``original_text``.
+**NON-RUNTIME, except ``NormalizedView``** (Audit 0052).
 
-Contracts only; no parsing logic here (see ``document_intelligence`` package).
+``DocumentGraph`` in this module is the spec's five-field sketch. The runtime graph
+is ``document_intelligence.models.DocumentGraph`` (eight fields, with builder version
+and config hash), which is what ``analyze_document`` returns and what every layer
+consumes. This copy is kept as documentation of §4's contract; nothing constructs it.
+
+``NormalizedView`` *is* runtime — ``document_intelligence.models`` imports it from
+here, which is why this module is not simply deleted.
 """
 
 from __future__ import annotations

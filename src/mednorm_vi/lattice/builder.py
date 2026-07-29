@@ -25,6 +25,7 @@ from typing import Any
 from ..case_router.models import NodeRouting
 from ..deterministic_baseline.models import Phase1BResult
 from ..document_intelligence.models import DocumentGraph
+from ..mention_factory.models import RelationProposal
 from ..mention_factory.models import SpanProposal as SpecialistProposal
 from ..mention_factory.neural.decoding import NeuralSpan
 from ..schemas.constants import TYPE_BY_ORGANIZER_LABEL
@@ -73,6 +74,26 @@ class RouteIndex:
         return {r.node_id: tuple(r.route_tags) for _s, _e, r in self._units}
 
 
+def _pair_group_ids(
+    relations: Sequence[RelationProposal],
+) -> dict[str, tuple[str, ...]]:
+    """Proposal id -> the relation pair groups it participates in (spec §6.2).
+
+    Both endpoints of a ``has_result`` relation are indexed, so a TEST_NAME and its
+    TEST_RESULT carry the same group id into the lattice and L4 can keep the pair
+    together instead of resolving each side blind to the other.
+    """
+    out: dict[str, set[str]] = {}
+    for relation in relations:
+        group = getattr(relation, "pair_group_id", "")
+        if not group:
+            continue
+        for endpoint in (relation.source_proposal_id, relation.target_proposal_id):
+            if endpoint:
+                out.setdefault(endpoint, set()).add(group)
+    return {key: tuple(sorted(value)) for key, value in out.items()}
+
+
 def _primary_route(routes: Sequence[str]) -> str:
     """One route label for reporting. Deterministic: the lowest case id."""
     return sorted(routes)[0] if routes else ""
@@ -80,8 +101,15 @@ def _primary_route(routes: Sequence[str]) -> str:
 
 def specialist_evidence(
     proposal: SpecialistProposal, index: RouteIndex,
+    *, pair_group_ids: Mapping[str, tuple[str, ...]] | None = None,
 ) -> tuple[SourceEvidence, dict[str, float]]:
-    """Adapt one deterministic E1/E2 proposal to lattice evidence."""
+    """Adapt one deterministic E1/E2 proposal to lattice evidence.
+
+    ``pair_group_ids`` maps a proposal id to the relation pair groups it belongs
+    to, so an E2 TEST_NAME and its TEST_RESULT stay linked through the lattice
+    (spec §6.2). It is optional so existing callers keep working; when omitted the
+    evidence simply carries no relation references.
+    """
     expert_id = _SPECIALIST_EXPERT.get(proposal.source_specialist)
     if expert_id is None:
         raise LatticeError(
@@ -98,6 +126,21 @@ def specialist_evidence(
     merged_routes = tuple(sorted(set(routes) | set(declared)))
     features = dict(proposal.features)
     features["grammar_component_count"] = float(len(proposal.components))
+    # Carry the structured field decomposition through verbatim (Audit 0052).
+    # The count above is kept for scoring; the components themselves are what
+    # spec §10.1 linking needs, and reducing them to a count destroyed the parse.
+    components = tuple(
+        {
+            "role": component.role,
+            "start": component.start,
+            "end": component.end,
+            "text": component.text,
+            "normalized": component.normalized or "",
+            "detail": component.detail or "",
+        }
+        for component in proposal.components
+    )
+    relation_refs = tuple((pair_group_ids or {}).get(proposal.proposal_id, ()))
     evidence = SourceEvidence(
         expert_id=expert_id,
         proposal_id=proposal.proposal_id,
@@ -118,6 +161,8 @@ def specialist_evidence(
         warnings=tuple(proposal.warnings),
         config_version=proposal.config_version,
         lexicon_version=proposal.lexicon_version,
+        components=components,
+        relation_refs=relation_refs,
     )
     return evidence, type_scores
 
@@ -159,6 +204,7 @@ def build_span_lattice(
     specialist_proposals: Sequence[SpecialistProposal] = (),
     neural_spans: Sequence[NeuralSpan] = (),
     expert_spans: Sequence[ExpertSpanProposal] = (),
+    relations: Sequence[RelationProposal] = (),
     normalized_view: str = "",
     config_hash: str = "",
 ) -> SpanLattice:
@@ -168,6 +214,7 @@ def build_span_lattice(
     proposal is never trimmed, dropped, or repaired into something plausible.
     """
     index = RouteIndex(routings)
+    pair_group_ids = _pair_group_ids(relations)
     warnings: list[str] = []
     merged: dict[tuple[int, int], list[SourceEvidence]] = {}
     scores: dict[tuple[int, int], dict[str, float]] = {}
@@ -194,7 +241,8 @@ def build_span_lattice(
     for proposal in sorted(
             specialist_proposals,
             key=lambda p: (p.start, p.end, p.source_specialist, p.proposal_id)):
-        evidence, type_scores = specialist_evidence(proposal, index)
+        evidence, type_scores = specialist_evidence(
+            proposal, index, pair_group_ids=pair_group_ids)
         register(proposal.start, proposal.end, proposal.text, evidence, type_scores)
 
     ordered_neural = sorted(
@@ -281,6 +329,7 @@ def build_from_phase1b(
         specialist_proposals=phase1b.proposals,
         neural_spans=neural_spans,
         expert_spans=expert_spans,
+        relations=phase1b.relations,
         config_hash=config_hash)
 
 
