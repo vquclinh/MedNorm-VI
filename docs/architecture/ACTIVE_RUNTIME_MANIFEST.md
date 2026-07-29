@@ -8,7 +8,11 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
-- **Last updated by:** Audit 0052 (canonical L3 lattice + E3 activation + assertion fix)
+- **Last updated by:** Audit 0053 (route gating + honest L8 + L9 KB membership +
+  reproducibility infrastructure). Audit 0053 is a **partial** milestone: of the
+  **thirteen implementation tasks** in the Milestone 2 prompt (its sections 2-14;
+  sections 1 and 15 were verification and the audit itself), **seven were not
+  attempted**, and §13 below marks them.
 - **Date:** 2026-07-29
 - **Rule this file obeys:** a module is never described as implemented when it has
   no trained checkpoint, no wiring, or only a contract. "Implemented" here means
@@ -57,11 +61,16 @@ apart deliberately.
 | **E3 runs through the canonical runner** | **YES, since Audit 0052** — real inference, verified checkpoint, provenance recorded |
 | Canonical L3 lattice wired into the runner | **YES, since Audit 0052** |
 | Canonical L4 entry points | **1** (`resolution.canonical`), since Audit 0052 |
-| Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), L5 linking (lexical), L6, L7 (deterministic fallback), L8 (deterministic), L9 |
-| Layers that are contract-or-scaffold only | L7 LLM cascade (no local weights), L8 expected-Jaccard/WER decoding |
+| **Deterministic experts are route-gated with recorded suppression** | **YES, since Audit 0053** — `required_evidence` per case in `signals_v1`; suppression reasons carried on `NodeRouting.gate_reasons` |
+| **L8 no longer claims metric-aware decoding** | **Renamed and re-implemented in Audit 0053** — `decode_entities`, evidence-tier + relative-score band; the calibrated path raises `CalibratedDecoderUnavailable` |
+| **L9 enforces KB membership independently of the linker** | **YES, since Audit 0053** — `validator/kb_membership.py`, imports no linker or model, and the canonical packaging path invokes it before writing anything |
+| Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), L5 linking (lexical), L6, L7 (deterministic fallback), L8 (deterministic, honestly named), L9 (incl. KB membership) |
+| Layers that are contract-or-scaffold only | L7 LLM cascade (no local weights), L8 **calibrated** expected-Jaccard/WER decoding (fails loudly), L6 global reasoning |
+| Reproducibility infrastructure | **Authored in Audit 0053** — `Dockerfile` + `requirements.lock`. **The image has never been built.** |
 | `output.zip` ever produced | **No** |
 | Organizer metric ever computed | **No** — only exact mention span/type |
 | Organizer inference ever run | **No** |
+| Candidate Recall@K ever measured | **No** — the governed corpus carries **zero** ontology codes (see §0 measurement note) |
 
 **Organizer readiness is not claimed.** One mention expert now runs end to end; the
 candidate-set and assertion halves of the metric remain unimplemented and unmeasured.
@@ -87,6 +96,55 @@ This figure is **not comparable** to Audit 0032's `validation_span_micro_f1`
 0.7194: that was a token-index span proxy over the full 1,045 rows computed during
 training, this is exact character offsets **plus** exact type over 200 rows. Neither
 is the organizer's complete metric.
+
+### Measured, Audit 0053 (same bounded 200 rows, same digest-resolved split)
+
+Route gating changed only E1/E2 behaviour, so the E3-only arm is unchanged:
+
+```text
+arm                                        P        R       F1     TP    FP    FN
+E1+E2, before gating (equivalent)     0.0000   0.0000   0.0000     0    11   406
+E1+E2, after gating                   0.0000   0.0000   0.0000     0     5   406
+E3 only (reference, unchanged)        0.6220   0.5025   0.5559   204   124   202
+E1+E2 gated + E3 lattice              0.6126   0.5025   0.5521   204   130   202
+```
+
+E1/E2 still score zero — this corpus is narrative DIAGNOSIS/SYMPTOM text and they
+are medication/laboratory parsers, so **zero is the correct score and the only
+improvement available is fewer false positives**. Gating delivered that:
+
+```text
+E2 proposals on 200 narrative docs      16  ->   6     (-62%)
+documents producing E1/E2 proposals      8  ->   4
+E1/E2 false positives after L4          11  ->   5
+C2 routes suppressed for lack of positive evidence      7 nodes
+fixture recall (medication/laboratory/mixed/hard-neg)   UNCHANGED, exactly
+merged-arm F1                       0.5477  -> 0.5521
+```
+
+Adding gated E1/E2 to E3 still costs F1 (0.5521 against E3-only 0.5559), so
+`deterministic` and `specialist` remain separate modes; gating narrowed the gap
+without closing it.
+
+L8 candidate-set sizes over the same 200 documents, where the old decoder returned
+an unconditional 10:
+
+```text
+size    0:133   1:7   2:4   3:4   4:1   5:4   6:1   7:3   8:1   9:6  10:2
+       11:4  12:4  13:1  14:1  15:1  16:2  17:2  18:3  19:4  20:145
+candidates offered by L6 4,000  ->  emitted 3,390     (610 dropped by band/tier)
+L9 KB membership violations                     0
+```
+
+The 145 sets of exactly 20 are the **retriever's** top-K cap, not a decoder rule:
+those mentions had 20 same-tier candidates inside the score band. The 133 empty sets
+are SYMPTOM/TEST\_\* entities, which take no candidates at all (spec §7.3).
+
+**Candidate Recall@K remains unmeasurable and is not reported.** Every one of the
+406 gold entities in these rows carries `target_type` and `mapping_status:
+MAP_EXACT` but **no ontology code** — the governed corpus has no ICD-10 or RxNorm
+gold, and no weak-evidence code field either. Recall@K needs a gold code set that
+does not exist yet.
 
 ---
 
@@ -116,9 +174,11 @@ is the organizer's complete metric.
 | Trained checkpoint | None |
 | Future checkpoint slot | A learned router is **not** in the active plan |
 | Enabled | Always; `configs/case_router/base.yaml`, `configs/case_router/signals_v1.yaml`, `configs/routes.yaml` |
-| Contract version | `signals_v1` |
+| Contract version | `signals_v1` (extended in Audit 0053 with `required_evidence`) |
 | Parameter-ledger behaviour | Contributes 0 |
-| Known missing | **Routing accuracy has never been measured.** No labelled route data exists, so the router is unvalidated rather than validated-and-good |
+| Positive-evidence gate | **Added in Audit 0053.** A case may declare `required_evidence`; reaching `activate` is then necessary but not sufficient. C2 requires one of `numeric_key_value`, `lab_unit`, `reference_range`, `flag`, `lab_section`. `numeric_value` is deliberately **excluded** — it fires on any numeral and was present in every measured false positive |
+| Suppression is recorded | `NodeRouting.gate_reasons` names each suppressed case, its score and what it required, so a routing defect is visible without reading parser source |
+| Known missing | **Routing accuracy has never been measured.** No labelled route data exists, so the router is unvalidated rather than validated-and-good. The Audit-0053 gate was validated by its *effect* (false positives down 62% at unchanged fixture recall), not against route gold |
 
 ## 3. L3 — Mention Factory
 
@@ -127,7 +187,8 @@ is the organizer's complete metric.
 | Implementation | `src/mednorm_vi/mention_factory/` (registry + experts + specialists); unified lattice `src/mednorm_vi/lattice/` |
 | Status | `PARTIALLY_IMPLEMENTED_AND_INTEGRATED` — three experts run (E1, E2, E3); three await weights or training |
 | Expert entry point | `mention_factory/registry.py` — the runner consults the registry and names no expert of its own, so a new expert needs **no** runner edit |
-| Contract version | `mention-span-v1` (`spans.py`), `mention-offsets-v1` (`offsets.py`), lattice `EXPERT_FAMILY`/`AVAILABLE_EXPERTS` |
+| Contract version | `mention-span-v1` (`spans.py`), `mention-offsets-v1` (`offsets.py`), lattice `EXPERT_FAMILY`/`AVAILABLE_EXPERTS`, `route-gate-diagnostics-v1` (`route_gate.py`) |
+| Route eligibility is reported | **Audit 0053.** `mention_factory/route_gate.py` declares each expert's routes (E1 → C1/C5/C3, E2 → C2) and `PipelineResult.route_gate` carries eligible/skipped nodes, per-expert eligibility, proposals per expert and suppression reasons. It carries **no clinical text** — a test asserts this |
 | Parameter-ledger behaviour | E1/E2 contribute 0; every neural expert must be counted programmatically before deployment |
 
 Per expert:
@@ -227,7 +288,8 @@ path spec §19 names — is the one L5 linking module.
 | Trained checkpoint | None; none planned |
 | Enabled | Yes |
 | Parameter-ledger behaviour | 0 |
-| Known missing | Most of spec §11. Absent edges: `has_result`, `modified_by`, `in_section`, `treats`, `overlaps`, `same_surface`. **No global reasoning at all** — no beam search with global features, no ILP, no consistency constraints. The graph currently records evidence rather than using it |
+| Measured, Audit 0053 (200 rows) | Exactly three relations occur: `has_assertion` 333, `has_candidate` 4,000, `supports` 333. There is **no consistency-check module and no typed public contract**, so "consistency violations" is not a measurable quantity today and Audit 0053 reports it as unmeasurable rather than as zero |
+| Known missing | Most of spec §11. Absent edges: `has_result`, `modified_by`, `in_section`, `treats`, `overlaps`, `same_surface`. **No global reasoning at all** — no beam search with global features, no ILP, no consistency constraints. The graph currently records evidence rather than using it, and nothing downstream reads it: L7 and L8 both take L4 output directly (Audit 0053 items 5-6, not attempted) |
 
 ## 7. L7 — Confidence Cascade
 
@@ -248,20 +310,22 @@ path spec §19 names — is the one L5 linking module.
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/metric_decoder/` (2 files, 53 lines) |
-| Status | `PARTIAL` — deterministic selection only, **not metric-aware** |
-| Deterministic implementation | `decode_expected_jaccard` selects cascade-accepted entities and truncates candidates at `max_candidates=10` |
+| Implementation | `src/mednorm_vi/metric_decoder/` — rewritten in Audit 0053 |
+| Status | `PARTIAL` — deterministic evidence-ranked selection. **Still not metric-aware, and no longer claims to be** |
+| Deterministic implementation | `decode_entities(accepted, cascade, assertions, links)`, contract `l8-deterministic-evidence-ranked-v1`: candidates are grouped into evidence tiers (`exact_alias` > `strong_lexical` > `weak_lexical`); an exact alias alone wins alone; otherwise the best tier is kept down to a relative score floor of 0.60 of its top score. `CANDIDATE_SAFETY_BOUND = 25` is a **bound**, not the rule — a per-candidate `CandidateDecision` records the reason (`KEEP_EXACT`, `KEEP_WITHIN_TIER`, `DROP_BELOW_BAND`, `DROP_WEAKER_TIER`, `DROP_SAFETY_BOUND`, `DROP_DUPLICATE`, `DROP_TYPE_MISMATCH`) |
+| Calibrated path | `decode_expected_jaccard_calibrated` exists and **raises `CalibratedDecoderUnavailable`**. It fails loudly rather than returning a plausible-looking set, because a silent stand-in for §13 is what the old name did |
 | Trained checkpoint | **None** |
 | Future checkpoint slot | S6 calibration meta-model (`calibration/full_v1`) |
-| Enabled | Yes |
+| Enabled | Yes; `decoder_status()` reports the active contract |
 | Parameter-ledger behaviour | Small meta-model counted when it exists |
-| Known missing | **The function name overstates the implementation and this is the most misleading gap in the repository.** Spec §13 requires expected-Jaccard candidate-set search, an expected-WER boundary utility, per-label assertion thresholds and an entity-retention utility that subtracts wrong-type risk. None is implemented: there is no probability calibration, no set search, and the fixed top-10 truncation is exactly the "fixed top-K" spec §13.2 rules out. Renaming/implementing this is next-milestone work |
+| Fixed in Audit 0053 | `decode_expected_jaccard` was the most misleading name in the repository: it applied a **fixed top-10**, exactly the "fixed top-K" spec §13.2 rules out, under a name promising expected-Jaccard search. The name is gone; a test asserts it cannot be imported |
+| Known missing | Spec §13 proper: expected-Jaccard candidate-set search, expected-WER boundary utility, per-label assertion thresholds, entity-retention utility subtracting wrong-type risk. All of it needs calibrated probabilities, which **no stage produces** — so S6 remains the true blocker. `DecodedEntity.as_dict()` asserts `performs_expected_jaccard_decoding: False` |
 
 ## 9. L9 — Validator & Packager
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/validator/` (9 files, 1,370 lines); `organizer_policy/` (3 files, 257 lines); packaging `inference/packaging.py` |
+| Implementation | `src/mednorm_vi/validator/` (10 files, incl. `kb_membership.py` added in Audit 0053); `organizer_policy/` (3 files, 257 lines); packaging `inference/packaging.py` |
 | Status | `IMPLEMENTED_AND_WIRED` — never run to a real submission |
 | Deterministic implementation | Yes, fail-fast: exact-substring/offset checks, organizer label + per-type field policy, duplicate detection, candidate syntax, `1.json`..`100.json` set, UTF-8, deterministic ordering, `output.zip` containing exactly one top-level `output/` |
 | Pretrained adapter | None |
@@ -269,7 +333,9 @@ path spec §19 names — is the one L5 linking module.
 | Enabled | Always |
 | Contract version | Confirmed organizer layout (Audit 0002); `schemas/constants.py` is authoritative for labels, per-type fields and end-exclusive positions |
 | Parameter-ledger behaviour | 0 |
-| Known missing | **KB membership of emitted candidate codes is not enforced by the L9 validator** (it is enforced inside `linking/snapshot.py`); the two should meet. No packaging-stress suite per spec §18.3. `output.zip` has never been produced |
+| KB membership | **Enforced in Audit 0053** by `validator/kb_membership.py` (`l9-kb-membership-v1`). Deliberately **model- and retriever-independent**: it imports no linker, no index builder and no model — a test asserts this, because the linker is the component whose bug this gate exists to catch. Checks: candidate present in the snapshot its type requires; correct ontology per type (`icd10_vi` / `rxnorm`, wrong-snapshot detected); no candidates on a type that takes none (spec §7.3); duplicates; missing snapshot treated as **cannot validate**, never as pass; and `offered_codes`, so a code that exists but was not retrieved for that mention fails under spec P7 |
+| **The gate is on the canonical path** | **YES.** `inference/pipeline._gate_kb_membership` runs inside `run_input_dir` on the **serialized** organizer JSON, **before** anything is written, and raises `KbMembershipViolation`. A violating run therefore leaves **no `output/` and no `output.zip`**. As first written in Audit 0053 this validator had **no caller under `inference/`** — it was wired in the same audit's correction pass, with an integration test that injects an out-of-snapshot code at the linker and asserts packaging stops |
+| Known missing | It **never repairs** — the caller stops the run, and the run-manifest wiring that *records* the stop is not built (Audit 0053 item 10, not attempted). Consequently the wired gate enforces membership and ontology but **not** P7's `offered_codes`: nothing records which codes were offered per mention. Candidate *ordering* determinism is asserted by running the pipeline twice in tests, not by this validator. No packaging-stress suite per spec §18.3. `output.zip` has never been produced for a real submission |
 
 Audit 0051 deleted a second, divergent packager/validator (`zs0/submission.py`)
 that required the 100 files at the **ZIP root** and expected a `{"entities": …}`
@@ -337,7 +403,7 @@ above the linker that spec §10.1/§6.2 needs them for.
 | Governed corpus + split identity | `data_engine/`, `training/governed_splits.py` | `IMPLEMENTED_AND_WIRED` | Splits resolved by SHA-256, never by name; `internal_test` refused by name |
 | KB intake | `kb/`, `data/manifests/*.yaml` | `IMPLEMENTED_AND_WIRED` | ICD-10 TT06-2026 derived deterministically from the protected source PDFs; RxNorm Full + Prescribable 2026-07-06 |
 | Experiment registry | `experiments/` | `IMPLEMENTED_NOT_WIRED` | `EXP-*.json` records tracked; no leaderboard decision has used it |
-| Reproducibility | `reproducibility/`, `Dockerfile` | **MISSING** | There is **no Dockerfile and no `requirements.lock`**, both required by spec §19 and Appendix A |
+| Reproducibility | `Dockerfile`, `requirements.lock` | `AUTHORED_NOT_BUILT` | Added in Audit 0053. `python:3.14.5-slim-bookworm`, JRE only, `HF_HUB_OFFLINE=1`, `PYTHONHASHSEED=0`, non-root uid 10001, one `ENTRYPOINT` (the canonical inference CLI), weights and KB payloads **mounted, never baked in**. `requirements.lock` pins every version from `importlib.metadata` in the environment that produced these measurements. **The image has never been built and no organizer inference has run**; building it is a separate authorized step |
 
 ## 11. Training stages (spec §15)
 
@@ -382,21 +448,46 @@ programmatically from its real configuration or checkpoint.
 
 ## 13. Ranked remaining architecture work
 
-1. **L8 metric-aware decoding** — candidates are 40% of the score and the decoder
-   currently applies a fixed top-10. Highest expected value per unit of work.
-2. **L5 RxNorm structured parse + graph search** and **L5 ICD hierarchy
-   specificity controller** — the two linkers are lexical-only.
+**Carried forward from Audit 0053, which did not attempt them.** Audit 0053
+completed six of the **thirteen implementation tasks** in its scope — prompt sections
+2, 8, 9, 11, 13 and 14 (sections 1 and 15 were verification and the audit itself, so
+the denominator is thirteen, not fifteen). The following seven were declared out of
+scope for that turn and remain open. Its acceptance criteria are therefore
+**not met**.
+
+1. **L5 RxNorm structured linking** (Audit 0053 item 4) — consume
+   `EntityHypothesis.components` (the E1 parse that Audit 0052 preserved to L5 and
+   the linker still ignores), traverse `ingredient → component → SCD → SBD` over
+   the loaded `index["graph"]` (77,055 nodes), add strength/dose-form/release hard
+   negatives. Highest expected value: candidates are 40% of the score and this is
+   the one gap where the required inputs already exist and are unused.
+2. **L5 ICD-10 hierarchy + specificity controller** (item 3, spec §9.3) —
+   `LocalIndex.graph` carries 14,534 nodes, is materialized, is loaded, and
+   `linking/icd10.py` never reads it.
 3. **Calibration (S6)** — nothing downstream of L4 has calibrated probabilities, so
-   L8 has nothing to optimize over.
-4. **L4 boundary-offset head** and a re-run ablation, since deterministic L4 v1
-   currently measures below the E3-only baseline.
-5. **Assertion supervision** — build an assertion corpus; until then no assertion
+   the real §13 decoder has nothing to optimize over. Audit 0053's L8 is honest
+   about being a deterministic stand-in; only S6 removes the stand-in.
+4. **L6 edges, consistency checks and a typed downstream contract** (items 5-6,
+   spec §11) — six missing relations, eight deterministic consistency checks, and a
+   contract L7/L8 actually consume. Until then L6 is write-only.
+5. **L7 deterministic escalation contract with locked option sets** (item 7,
+   spec §12.1) — the constrained-decision *parsing* exists; the locked
+   assertion/candidate/boundary option sets an escalation must choose from do not.
+6. **Inference run manifest** (item 10) — deterministic, no clinical-text leakage.
+   It closes two loops on L9's wired gate: the gate now stops a violating run but
+   nothing **records** the stop, and it cannot enforce spec P7 until something
+   records which codes were offered per mention.
+7. **Migrate and delete `resolution/resolver.py`** (item 12) — its per-type
+   boundary policy must be provably covered by the canonical L4 first, with
+   equivalence tests, then the file goes. Two L4 implementations must not coexist.
+8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4
+   v1 still measures below the E3-only baseline (0.5521 against 0.5559).
+9. **Assertion supervision** — build an assertion corpus; until then no assertion
    metric is computable and S2 cannot be validated.
-6. **L6 global reasoning** — edges and constraints from spec §11.
-7. **Reproducibility (Phase 7)** — Dockerfile, lockfile, offline weights,
-   one-command inference. Required for the private-test rebuild.
-8. **L7 LLM cascade** — last, per spec §20's ordering: evaluator, offsets and
-   validator before heavy architecture.
+10. **Build and verify the Docker image** — the file exists; the image does not.
+    Required for the private-test rebuild, and a separate authorized step.
+11. **L7 LLM cascade** — last, per spec §20's ordering: evaluator, offsets and
+    validator before heavy architecture.
 
 ## 14. Maintenance rule
 

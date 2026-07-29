@@ -31,6 +31,13 @@ from .entities import (
     validate_entity_schema,
     validate_entity_type,
 )
+from .kb_membership import (
+    KbMembershipViolation,
+    LockedSnapshots,
+    MembershipReport,
+    validate_document_candidates,
+    validate_entity_candidates,
+)
 from .offsets import validate_offset_invariant, validate_offsets
 from .organizer import validate_organizer_document, validate_organizer_entity
 from .results import Severity, ValidationIssue, ValidationResult
@@ -65,6 +72,11 @@ def validate_document(
 
 
 __all__ = [
+    "KbMembershipViolation",
+    "LockedSnapshots",
+    "MembershipReport",
+    "validate_document_candidates",
+    "validate_entity_candidates",
     # results
     "ValidationIssue",
     "ValidationResult",

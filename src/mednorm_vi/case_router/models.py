@@ -55,6 +55,10 @@ class NodeRouting:
     warnings: tuple[str, ...] = field(default_factory=tuple)
     router_version: str = ""
     signals_version: str = ""
+    # Why a case that scored was NOT attached (Audit 0053). Reported so a
+    # suppressed route is auditable rather than silent; a route withheld for lack
+    # of positive evidence must be as visible as one that fired.
+    gate_reasons: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def route_tags(self) -> tuple[str, ...]:

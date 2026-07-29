@@ -93,8 +93,24 @@ cases:
   C2:
     name: lab_semi_structured
     # A key/value or table row alone is NOT enough — C2 requires lab-specific
-    # evidence (a numeric value, lab unit, reference range, flag, or lab section),
-    # so ordinary "key: value" prose (e.g. family history) does not route to C2.
+    # evidence, so ordinary "key: value" prose (e.g. family history) does not
+    # route to C2.
+    #
+    # Audit 0053: that intent was previously stated here but NOT enforced. It was
+    # expressed only through weights, and the weights permit it:
+    # `key_value_row 0.30 + table_row 0.25 = 0.55`, already past the 0.50
+    # activation threshold with zero laboratory content. Audit 0052 measured the
+    # result on the governed validation split — narrative sentences scoring C2 at
+    # 0.85 from `key_value_row + table_row + numeric_value`, and E2 (correctly
+    # gated on C2) producing 11 false positives and 0 true positives.
+    #
+    # `required_evidence` enforces it: at least one of these signals must fire.
+    # `numeric_value` is deliberately EXCLUDED — it matches any numeral, so it was
+    # present in every one of the measured false positives and including it would
+    # leave the defect untouched. A real lab row satisfies this list trivially
+    # ("WBC: 14,43 G/L (4-10)" fires lab_unit and reference_range); a prose
+    # sentence containing a colon and a number does not.
+    required_evidence: [numeric_key_value, lab_unit, reference_range, flag, lab_section]
     activated_specialists: [laboratory]
     signals:
       - {name: key_value_row,   kind: soft, weight: 0.30, detector: structural.is_key_value_row}
@@ -105,6 +121,10 @@ cases:
       - {name: flag,            kind: soft, weight: 0.20, detector: cue.flags}
       - {name: numeric_value,   kind: soft, weight: 0.30, detector: structural.numeric_present}
       - {name: lab_section,     kind: soft, weight: 0.40, detector: structural.section_prior}
+      # A key/value row whose VALUE is numeric. This is the signal that
+      # distinguishes "PLT: 250" from "... ( 1,2 ) : phẫu thuật", and it
+      # accepts a unit-less result (spec §14.2).
+      - {name: numeric_key_value, kind: soft, weight: 0.30, detector: structural.numeric_key_value}
   C3:
     name: clinical_narrative
     activated_specialists: [narrative_hook]

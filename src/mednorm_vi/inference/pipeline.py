@@ -20,6 +20,7 @@ E1/E2 pair that Phase 1B owns.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,12 +43,21 @@ from ..mention_factory.registry import (
     L3Expert,
     run_registered_experts,
 )
-from ..metric_decoder import decode_expected_jaccard
+from ..mention_factory.route_gate import (
+    RouteGateDiagnostics,
+    build_route_gate_diagnostics,
+)
+from ..metric_decoder import decode_entities
 from ..resolution.canonical import resolution_counts, resolve_lattice_to_hypotheses
 from ..resolution.config_v1 import load_resolver_v1_config
 from ..resolution.models import EntityHypothesis
 from ..schemas.prediction import EntityPrediction
 from ..specialists.assertion import resolve_assertions
+from ..validator.kb_membership import (
+    KbMembershipViolation,
+    LockedSnapshots,
+    validate_document_candidates,
+)
 from .config import PipelineConfig, flags_for_mode, validate_readiness
 from .packaging import package_output_zip, write_output_directory
 from .serialization import to_entity_predictions, to_submission_json
@@ -68,6 +78,10 @@ class PipelineResult:
     lattice: SpanLattice | None = None
     expert_records: tuple[ExpertRunRecord, ...] = field(default_factory=tuple)
     l4_counts: dict[str, int] = field(default_factory=dict)
+    # Route eligibility per document (Audit 0053). Reported so a route defect is
+    # visible without reading parser source — which is how the Audit-0052 C2
+    # over-routing stayed hidden.
+    route_gate: RouteGateDiagnostics | None = None
 
     def experts_that_ran(self) -> tuple[str, ...]:
         return tuple(
@@ -182,9 +196,15 @@ def run_document(
     icd_index, rxnorm_index = _indexes(config)
     links = _link(accepted, icd_index=icd_index, rxnorm_index=rxnorm_index)
     cascade = apply_confidence_cascade(accepted)
-    decoded = decode_expected_jaccard(accepted, cascade, assertions, links)
+    decoded = decode_entities(accepted, cascade, assertions, links)
     predictions = to_entity_predictions(decoded)
     evidence_graph = build_evidence_graph(graph.document_id, accepted, assertions, links)
+    proposals_by_expert: dict[str, int] = {}
+    for proposal in lattice.proposals:
+        for source in proposal.sources:
+            proposals_by_expert[source.expert_id] = (
+                proposals_by_expert.get(source.expert_id, 0) + 1)
+
     return PipelineResult(
         document_id=Path(path).stem,
         predictions=predictions,
@@ -193,7 +213,35 @@ def run_document(
         lattice=lattice,
         expert_records=expert_records,
         l4_counts=resolution_counts(resolved),
+        route_gate=build_route_gate_diagnostics(
+            graph.document_id, phase1b.routings,
+            proposals_by_expert=proposals_by_expert),
     )
+
+
+def _gate_kb_membership(payloads: dict[str, str], config: PipelineConfig) -> None:
+    """L9's membership gate on the canonical packaging path (spec §16).
+
+    This is the step that makes ``validator/kb_membership`` matter: without a caller
+    it was a validator nothing invoked. It runs on the **serialized organizer JSON**,
+    after L8 has chosen the candidate sets, because that is the payload the organizer
+    receives — validating an in-memory model would leave the serializer unchecked.
+
+    On any violation it raises, so no output directory and no ``output.zip`` is ever
+    written. Spec §16 forbids silent repair, and writing a package while reporting a
+    violation elsewhere would be exactly that.
+    """
+    icd_index, rxnorm_index = _indexes(config)
+    snapshots = LockedSnapshots(icd10=icd_index, rxnorm=rxnorm_index)
+    violations: list[str] = []
+    for name in sorted(payloads, key=lambda n: (0, int(Path(n).stem))
+                       if Path(n).stem.isdigit() else (1, n)):
+        document_id = Path(name).stem
+        result = validate_document_candidates(
+            json.loads(payloads[name]), snapshots, document_id=document_id)
+        violations.extend(f"{name}:{issue.code}" for issue in result.errors)
+    if violations:
+        raise KbMembershipViolation(violations)
 
 
 def run_input_dir(
@@ -222,6 +270,9 @@ def run_input_dir(
         f"{result.document_id}.json": to_submission_json(result.predictions)
         for result in results
     }
+    # L9 membership gate BEFORE anything is written: a violating run must not leave a
+    # partial package on disk for someone to submit by mistake.
+    _gate_kb_membership(payloads, config)
     output_dir = Path(output_zip).with_suffix("")
     if output_dir.name != "output":
         output_dir = Path(output_zip).parent / "output"
@@ -230,4 +281,9 @@ def run_input_dir(
     return results
 
 
-__all__ = ["PipelineResult", "run_document", "run_input_dir"]
+__all__ = [
+    "KbMembershipViolation",
+    "PipelineResult",
+    "run_document",
+    "run_input_dir",
+]

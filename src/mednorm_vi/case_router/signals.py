@@ -35,6 +35,24 @@ class CaseSpec:
     name: str
     activated_specialists: tuple[str, ...]
     signals: tuple[SignalSpec, ...]
+    # Signal names that constitute POSITIVE evidence for this case (Audit 0053).
+    #
+    # A weighted sum over soft structural cues is necessary but not sufficient.
+    # Audit 0052 measured the consequence: Vietnamese narrative prose containing a
+    # colon and any numeral scored C2 at 0.85 (key_value_row 0.30 + table_row 0.25
+    # + numeric_present 0.30) with **no laboratory evidence at all**, so E2 —
+    # correctly gated on C2 — fired on prose and produced only false positives.
+    #
+    # When this tuple is non-empty, the case activates only if at least one of
+    # these signals fired. Empty means "score alone decides", which is the correct
+    # behaviour for a case whose signals are already specific.
+    required_evidence: tuple[str, ...] = ()
+
+    def evidence_satisfied(self, fired_signal_names: frozenset[str]) -> bool:
+        """Whether this case has the positive evidence it requires."""
+        if not self.required_evidence:
+            return True
+        return bool(fired_signal_names & set(self.required_evidence))
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +138,8 @@ def load_router_config(base_path: str | Path) -> RouterConfig:
             name=str(spec.get("name", case_id)),
             activated_specialists=tuple(spec.get("activated_specialists", []) or []),
             signals=signals,
+            required_evidence=tuple(
+                str(name) for name in spec.get("required_evidence", []) or ()),
         ))
     cases.sort(key=lambda c: c.case)
 
@@ -149,6 +169,14 @@ def cue_hit(config: RouterConfig, group: str, text: str) -> str | None:
     return None
 
 
+# A key/value pair whose value side starts with a number: "PLT: 250",
+# "WBC:14.43", "NEUT%: 76.4 %". The key is bounded to keep it short and row-like —
+# a long clause before a colon is prose, not a test name. Decimal comma and point
+# are both accepted (spec §14.2).
+_NUMERIC_KEY_VALUE = re.compile(
+    r"(?:^|[;\n])\s*([^:;\n]{1,40}?)\s*:\s*[<>~]?\s*\d+(?:[.,]\d+)?")
+
+
 def evaluate_detector(
     detector: str, ctx: LineContext, config: RouterConfig
 ) -> tuple[bool, float | None, str | None]:
@@ -176,6 +204,19 @@ def evaluate_detector(
         return (fired, None, None)
     if name == "numeric_present":
         return (ctx.numeric_present, None, None)
+    if name == "numeric_key_value":
+        # A key/value row whose VALUE side is numeric — "PLT: 250", "WBC:14.43",
+        # "NEUT%: 76.4 %" (Audit 0053).
+        #
+        # This is the signal that actually separates a laboratory row from prose
+        # that merely contains a colon and a number. `is_key_value_row` fires on
+        # "Tiền sử gia đình: bố tăng huyết áp" and `numeric_present` fires on any
+        # numeral anywhere, so their sum routed narrative text to C2 (Audit 0052
+        # measured 11 false positives from exactly that). Requiring the value
+        # *itself* to be numeric accepts a unit-less result — which spec §14.2
+        # lists as a required laboratory variation — while rejecting a text value.
+        match = _NUMERIC_KEY_VALUE.search(ctx.text)
+        return (match is not None, None, match.group(1) if match else None)
     if name == "is_narrative":
         fired = (not ctx.is_list_item) and ctx.row_kind is None and ctx.word_count >= 6
         return (fired, None, None)

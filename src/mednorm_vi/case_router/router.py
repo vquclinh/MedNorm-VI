@@ -111,7 +111,33 @@ class CaseRouter:
         routings: list[NodeRouting] = []
         for idx, ctx in enumerate(contexts):
             scored = score_line(ctx, cfg)
-            active = [c for c in scored if c.score >= cfg.activate]
+            # Two independent conditions, both required (Audit 0053):
+            #   1. the weighted score reaches the activation threshold;
+            #   2. the case has at least one of its declared POSITIVE-evidence
+            #      signals, when it declares any.
+            #
+            # Condition 2 is what stops a route firing on punctuation and a numeral
+            # alone. The suppression is recorded, never silent: a case that scored
+            # high but lacked evidence appears in `route_gate_reasons`, so an
+            # operator can see the route was considered and why it was withheld.
+            gate_reasons: list[str] = []
+            active = []
+            for candidate in scored:
+                spec = cfg.case_spec(candidate.case)
+                fired_names = frozenset(s.name for s in candidate.fired_signals)
+                reaches = candidate.score >= cfg.activate
+                has_evidence = spec is None or spec.evidence_satisfied(fired_names)
+                if reaches and has_evidence:
+                    active.append(candidate)
+                    continue
+                if reaches and not has_evidence:
+                    required = ",".join(spec.required_evidence) if spec else ""
+                    gate_reasons.append(
+                        f"{candidate.case}:suppressed_no_required_evidence:"
+                        f"score={candidate.score:.2f}:requires={required}")
+                elif candidate.fired_signals:
+                    gate_reasons.append(
+                        f"{candidate.case}:below_activate:score={candidate.score:.2f}")
             active.sort(key=lambda c: c.case)
             if (cfg.narrative_fallback and c3_spec is not None
                     and not any(c.case in ("C1", "C2") for c in active)
@@ -142,6 +168,7 @@ class CaseRouter:
                 warnings=tuple(warnings),
                 router_version=cfg.router_version,
                 signals_version=cfg.signals_version,
+                gate_reasons=tuple(gate_reasons),
             ))
         return routings
 

@@ -1,0 +1,55 @@
+# MedNorm-VI pinned runtime dependencies (spec §19, Appendix A) — Audit 0053.
+#
+# Appendix A requires a one-command rebuild from source with local weights and no
+# external API. That needs exact versions, which `pyproject.toml` deliberately does
+# not carry: it declares only `PyYAML>=6.0`, because heavy frameworks are imported
+# lazily and a library should not force a torch build on a caller that never runs a
+# model. This file is the deployment counterpart — every version here is the one
+# actually installed in the environment that produced the Audit-0052 and Audit-0053
+# measurements, read from `importlib.metadata`, not chosen from a changelog.
+#
+# Interpreter: CPython 3.14.5
+#
+# Install with hashes disabled deliberately: the torch wheel below is a CUDA build
+# resolved from PyTorch's own index, and pinning its hash here would tie the lock to
+# one CUDA minor. `--require-hashes` is the right hardening step once the submission
+# CUDA target is fixed; see docs/reproducibility notes in Audit 0053 §12.
+#
+#     python -m pip install --no-deps -r requirements.lock
+#
+# `--no-deps` is intentional: the graph is already fully enumerated here, so pip must
+# not re-resolve and silently upgrade a transitive pin.
+
+# --- core runtime (always required) -----------------------------------------
+PyYAML==6.0.3
+
+# --- L3 neural expert (E3) and future pretrained adapters -------------------
+# torch is a CUDA 12.6 build. For a CPU-only image replace with the equivalent
+# CPU wheel at the SAME version; the E3 checkpoint loads on CPU and the recorded
+# validation runs were CPU forward passes.
+torch==2.13.0+cu126
+transformers==4.57.6
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface-hub==0.36.2
+numpy==2.5.1
+sentencepiece==0.2.2
+
+# --- Vietnamese word segmentation (E3 alignment contract) -------------------
+# Requires a JRE at runtime and the VnCoreNLP jar mounted locally; see the
+# Dockerfile. E3 refuses to fall back to whitespace segmentation.
+py_vncorenlp==0.1.4
+
+# --- transitive pins, enumerated so --no-deps is safe ----------------------
+filelock==3.32.0
+packaging==26.2
+regex==2026.7.19
+requests==2.34.2
+tqdm==4.69.1
+
+# --- development / verification only (not needed at inference) --------------
+# Kept here so a verification image can run the suite that gates a release.
+pytest==9.1.1
+ruff==0.16.0
+mypy==2.3.0
+types-PyYAML==6.0.12.20260724
