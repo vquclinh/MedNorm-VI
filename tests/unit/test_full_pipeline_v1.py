@@ -6,6 +6,7 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from mednorm_vi.data_engine import build_dataset
@@ -19,12 +20,13 @@ from mednorm_vi.kb.icd10.conversion.row_parser import ParsedIcdRow
 from mednorm_vi.kb.icd10.conversion.validation import validate_rows
 from mednorm_vi.kb.indexing.builders import build_icd_index, build_rxnorm_index
 from mednorm_vi.kb.indexing.retrieval import load_index, search_index
-from mednorm_vi.mention_factory.adapters import (
-    AnchoredQwenProposer,
-    CheckpointManifest,
-    MissingCheckpointError,
-    NeuralExpertAdapter,
-    anchor_substring,
+from mednorm_vi.lattice.models import EXPERT_VIHEALTHBERT, ExpertSpanProposal
+from mednorm_vi.mention_factory.offsets import ProposalRejected, resolve_occurrence
+from mednorm_vi.mention_factory.registry import (
+    ExpertNotReady,
+    ExpertRegistration,
+    ExpertRegistry,
+    run_registered_experts,
 )
 from mednorm_vi.model_registry.registry import ModelRole, validate_profile_budget
 from mednorm_vi.round2.compare import compare_task_descriptors
@@ -50,9 +52,7 @@ def test_data_engine_build_hash_and_teacher_contract() -> None:
     assert result.manifest.document_count == 1
     assert result.manifest.annotation_count == 3
     assert result.manifest.build_hash == build_dataset((doc,), folds=3).manifest.build_hash
-    validate_teacher_contract(
-        TeacherGenerationContract("t1", "prompt", "canonical_annotations")
-    )
+    validate_teacher_contract(TeacherGenerationContract("t1", "prompt", "canonical_annotations"))
     try:
         validate_teacher_contract(
             TeacherGenerationContract(
@@ -122,30 +122,86 @@ def test_icd_and_rxnorm_indexes_retrieve_from_synthetic_sources(tmp_path: Path) 
     assert search_index(rx_index, "aspirin")
 
 
-def test_missing_checkpoint_and_anchored_qwen_contract(tmp_path: Path) -> None:
-    missing = NeuralExpertAdapter(
-        "vihealthbert",
-        CheckpointManifest("vihealthbert", "span_type", str(tmp_path / "missing")),
-        ("MEDICATION",),
-    )
-    try:
-        missing.propose("1", "abc")
-    except MissingCheckpointError:
-        pass
-    else:  # pragma: no cover - defensive
-        raise AssertionError("missing checkpoint must fail")
+class _UnreadyExpert:
+    """An enabled expert whose asset is absent. Constructs nothing, loads nothing."""
 
-    ckpt = tmp_path / "qwen"
-    ckpt.mkdir()
-    qwen = AnchoredQwenProposer(
-        "qwen",
-        CheckpointManifest("qwen", "anchored", str(ckpt)),
-        ("MEDICATION",),
+    expert_id = EXPERT_VIHEALTHBERT
+    role = "test_missing_checkpoint"
+
+    def __init__(self, checkpoint: Path) -> None:
+        self.checkpoint = checkpoint
+
+    def readiness(self) -> tuple[bool, str, str]:
+        if not self.checkpoint.is_file():
+            return False, "the checkpoint file does not exist", str(self.checkpoint)
+        return True, "", str(self.checkpoint)
+
+    def prepare(self) -> None:  # pragma: no cover - never reached when unready
+        raise AssertionError("prepare() must not run for an unready expert")
+
+    def propose(self, graph: object, routings: object) -> tuple[ExpertSpanProposal, ...]:
+        raise AssertionError("propose() must not run for an unready expert")
+
+
+def test_an_enabled_expert_without_its_asset_fails_closed_by_name(tmp_path: Path) -> None:
+    """Migrated from the deleted `mention_factory.adapters` legacy path (0056a).
+
+    The old test exercised `NeuralExpertAdapter`, a second adapter layer on a
+    different proposal type that the canonical runner never consulted. The real
+    contract is the L3 registry: an ENABLED expert that is not ready raises
+    `ExpertNotReady` naming the expert, the role and the exact missing path — it
+    never degrades to "no proposals", because an expert silently contributing
+    nothing is indistinguishable from one that genuinely found nothing.
+    """
+    registry = ExpertRegistry()
+    missing = tmp_path / "missing" / "best.pt"
+    registry.register(
+        ExpertRegistration(
+            expert_id=EXPERT_VIHEALTHBERT,
+            feature_flag="enable_e3_vihealthbert",
+            role="test_missing_checkpoint",
+            factory=lambda _settings: _UnreadyExpert(missing),
+        )
     )
-    assert anchor_substring("abc abc", "abc", occurrence=1) == (4, 7)
-    proposals = qwen.from_anchored_substrings("d1", "uống aspirin", (("aspirin", "MEDICATION"),))
-    assert proposals[0].text == "aspirin"
-    assert proposals[0].proposed_types == ("THUỐC",)
+
+    try:
+        run_registered_experts(
+            graph=object(),
+            routings=(),
+            feature_flags={"enable_e3_vihealthbert": True},
+            registry=registry,
+        )
+    except ExpertNotReady as raised:
+        assert raised.expert_id == EXPERT_VIHEALTHBERT
+        assert str(missing) in str(raised)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("an enabled, unready expert must fail closed")
+
+    # Disabled: never constructed, so no asset is touched and no model is loaded.
+    proposals, records = run_registered_experts(
+        graph=object(),
+        routings=(),
+        feature_flags={"enable_e3_vihealthbert": False},
+        registry=registry,
+    )
+    assert proposals == ()
+    assert [r.reason for r in records] == ["disabled_by_profile"]
+
+
+def test_offsets_for_a_text_only_source_are_resolved_not_invented() -> None:
+    """The canonical replacement for the legacy `anchor_substring` helper.
+
+    A proposal-only source (spec §6, E7) returns text without coordinates, and the
+    repository resolves those coordinates itself rather than trusting the source.
+    An ambiguous surface form is REFUSED instead of resolved to a guess.
+    """
+    assert resolve_occurrence("uống aspirin", "aspirin") == (5, 12)
+    # Repeated surface form, no anchor: refused rather than resolved to occurrence 0.
+    repeated = "aspirin 81mg và aspirin 100mg"
+    with pytest.raises(ProposalRejected):
+        resolve_occurrence(repeated, "aspirin")
+    # An anchor that occurs once, and contains the mention once, disambiguates it.
+    assert resolve_occurrence(repeated, "aspirin", anchor="aspirin 100mg") == (16, 23)
 
 
 def test_pipeline_deterministic_packaging_and_full_readiness(tmp_path: Path) -> None:
@@ -189,9 +245,7 @@ def test_model_budget_shared_backbone_and_round2_compare(tmp_path: Path) -> None
     current = tmp_path / "current.json"
     upgraded = tmp_path / "upgraded.json"
     current.write_text(json.dumps({"labels": ["A"], "kb_versions": ["v1"]}), encoding="utf-8")
-    upgraded.write_text(
-        json.dumps({"labels": ["A", "B"], "kb_versions": ["v2"]}), encoding="utf-8"
-    )
+    upgraded.write_text(json.dumps({"labels": ["A", "B"], "kb_versions": ["v2"]}), encoding="utf-8")
     report = compare_task_descriptors(current, upgraded)
     assert "labels" in report.changed_keys
     assert "kb_versions" in report.changed_keys

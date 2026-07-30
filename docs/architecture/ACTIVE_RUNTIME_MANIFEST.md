@@ -8,12 +8,27 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
-- **Last updated by:** Audit 0055 (framework closure: the obsolete non-canonical L4 is
-  migrated and **deleted**, and the offline container is **built and smoke-tested**).
+- **Last updated by:** Audit 0056g (configured VnCoreNLP readiness honesty,
+  `.dockerignore` build-context hygiene, one final Docker build, and one
+  readiness-only offline container smoke proving default specialist READY,
+  configured unusable VnCoreNLP NOT_READY, full NOT_READY, non-root runtime and
+  disabled network).
+- **Previously updated by:** Audit 0056e (isolated container/runtime verification:
+  digest-pinned official Python base, one Docker build, offline deterministic and
+  E3 specialist fixture smokes, final L9 negative smokes, and E3 checkpoint
+  read-only/integrity verification).
+- **Previously updated by:** Audit 0056a (static independent-review corrections:
+  truthful expert readiness, a real L4 route with a fail-closed learned dispatcher,
+  the final L9 serialized gate with spec-P7 offered sets, E4 removed from executable
+  notebook code, checkpoint-load and output-directory hardening).
+- **Previously updated by:** Audit 0055 (framework closure: the obsolete non-canonical
+  L4 is migrated and **deleted**, and the offline container is **built and
+  smoke-tested**).
 - **Framework status:** `FRAMEWORK_COMPLETE` / `DETERMINISTIC_ARCHITECTURE_COMPLETE` /
-  `PRETRAINED_READY` / `ENVIRONMENT_REPRODUCIBLE` — see §0a. This describes the
-  **framework**, not organizer readiness: candidate quality remains unmeasurable and
-  three of nine layers have no trained checkpoint.
+  `PRETRAINED_READY` / `RUNTIME_BOUNDARY_VERIFIED` / `FRAMEWORK_RUNTIME_FROZEN` —
+  see §0a and §0b. This describes
+  the **framework**, not organizer readiness: candidate/assertion quality remains
+  unmeasurable and three of nine layers have no trained checkpoint.
 - **Date:** 2026-07-30
 - **Rule this file obeys:** a module is never described as implemented when it has
   no trained checkpoint, no wiring, or only a contract. "Implemented" here means
@@ -67,7 +82,7 @@ apart deliberately.
 | **L9 enforces KB membership independently of the linker** | **YES, since Audit 0053** — `validator/kb_membership.py`, imports no linker or model, and the canonical packaging path invokes it before writing anything |
 | Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), **L5 linking (structured RxNorm + ICD hierarchy)**, **L6 (9 edges + typed consistency)**, **L7 (deterministic fallback + locked-option escalation contract)**, L8 (deterministic, honestly named, consuming L6/L7), L9 (incl. KB membership) |
 | Layers that are contract-or-scaffold only | L7 **model** stages (no local weights), L8 **calibrated** expected-Jaccard/WER decoding (fails loudly), L6 global *optimization* (beam/ILP — the graph is now read, but not searched) |
-| Reproducibility infrastructure | `Dockerfile` + `requirements.lock` + **`requirements-image.lock`** (Audit 0054). The lock's `torch==2.13.0+cu126` pin **cannot install from PyPI**, which Audit 0054's first real build proved; the image file records the deviation. `output.zip` is now **byte-reproducible** (fixed ZIP entry timestamps). **The image has still never been built — see §10.** |
+| Reproducibility infrastructure | `Dockerfile` + `.dockerignore` + `requirements.lock` + **`requirements-image.lock`**. The image still uses the Audit-0056e official Docker Hub base pin: `python:3.14.5-slim-bookworm@sha256:ec58d916f9e24a6035cab2bdf07f6206c4cc092a16613c60597534711332d9d6` for `linux/amd64`; tag OCI index digest `sha256:a9bee15510a364124aa24692899d269835683b883de42f7ebec8c293cf679ccb`. Audit 0056g built exactly one final image after the VnCoreNLP readiness correction: `mednorm-vi:framework-frozen`, image `sha256:5cf3d2bf03220c3845fc564f0525f98fac30cd4dfeae070d90da67b2859a4e54`, Docker inspect/API size 428,802,683 bytes, `docker images` table size 1.94GB, build-context transfer size 66.87kB, `torch 2.13.0+cpu`, Python 3.14.5. The readiness-only container smoke passed under `--network=none` and explicit 2 GiB/3 GiB/2 CPU/128 PID limits; default specialist was READY, configured fake VnCoreNLP was NOT_READY before torch/model/checkpoint construction, full remained NOT_READY. 2D-C's deterministic, final-L9 negative and E3 specialist smokes remain the evidence for document runtime; see §0b. |
 | `output.zip` ever produced | **No** |
 | Organizer metric ever computed | **No** — only exact mention span/type |
 | Organizer inference ever run | **No** |
@@ -82,6 +97,39 @@ apart deliberately.
 | **Docker image built and smoke-tested** | **YES, Audit 0055** — `mednorm-vi:framework-closed`, 1.95 GB, built in 164 s from base digest `sha256:a9bee155…9ccb`; all 11 offline checks pass with `--network=none`, plus deterministic and specialist/E3 `run_document` smokes |
 | **Obsolete non-canonical L4 deleted** | **YES, Audit 0055** — `resolution/resolver.py` is gone, `import mednorm_vi.resolution.resolver` raises `ModuleNotFoundError`, and no tracked file references it. Its three boundary policies were migrated first and equivalence proven on **84/84** boundary-group decisions |
 | **L4 public entry points** | **1** — `resolution.canonical.resolve_lattice_to_hypotheses`. The canonical runner, the Phase-1C CLI and the doctor all use it (asserted by an AST test) |
+| **Readiness can no longer claim READY for an unrunnable expert** | **Audit 0056a.** `full` mode built `expected` from `MODE_EXPERTS["full"]` (E1/E2/E3 only), so an enabled E5/E6/E7 was never asked whether it could run; its only check was `Path.exists()` on a role directory, which is **True for an empty directory**. Expert identity now comes from one declaration (`mention_factory/expert_spec.py`), readiness cross-checks it against the live registry, and an enabled-but-unregistered expert is NOT_READY with a named implementation blocker |
+| **`specialist_requires_checkpoints` is read** | **Audit 0056a.** It was parsed and never used — only `full_requires_checkpoints` reached `evaluate_readiness`. It is now enforced, and corrected to name only real checkpoint-backed dependencies: `assertion/assertion_hydra` was removed because L5's wired assertion path is deterministic and the architecture plans no checkpoint for it |
+| **Both L4 flags have real semantics** | **Audit 0056a.** They were inert; the deterministic L4 ran unconditionally while `enable_l4_deterministic_v1` said `false`. They now select a route, exactly one must be selected, and the learned route fails closed via `resolution/learned_dispatch.py` |
+| **The final L9 gate validates the serialized payload against the source** | **Audit 0056a.** `validator/final_gate.py`. Appendix A's `original_text[start:end] == text` was enforced four times upstream and **never** on the emitted bytes, and spec P7's offered-set rule never received data. Both now run on the canonical packaging path, before anything is written |
+| **Checkpoint deserialization is a policy, not a call-site habit** | **Audit 0056a.** `mention_factory/neural/checkpoint_loading.py`. Only E3's one digest-verified legacy artifact may use `weights_only=False`; every other checkpoint must be safetensors or `weights_only=True`, and an unverified file cannot reach the pickle path at all. **Runtime verification of the E3 forward pass under this policy is deferred to Milestone 2D-C** |
+| **Output-directory writing refuses unowned destinations** | **Audit 0056a.** `write_output_directory` recursively removed its destination with no guard whatsoever. It now refuses a filesystem root, a home directory, the repository root, a symlink, a non-`output` name, and any existing directory holding files this workflow did not write |
+
+## 0b. Isolated container/runtime verification (Audit 0056e)
+
+Milestone 2D-C verified the runtime boundary without notebooks, training,
+organizer/internal-test inference, model downloads or data downloads.
+
+| Check | Result |
+| --- | --- |
+| Base image | Official Docker Hub `python:3.14.5-slim-bookworm`; tag/index digest `sha256:a9bee15510a364124aa24692899d269835683b883de42f7ebec8c293cf679ccb`; host/platform child digest `sha256:ec58d916f9e24a6035cab2bdf07f6206c4cc092a16613c60597534711332d9d6` (`linux/amd64`) |
+| Build | Exactly one authorized build: `docker build --pull --progress=plain -t mednorm-vi:2d-c-verified .`; exit 0; built image `sha256:47d630a570d8f5d5194becc3ffce45f770f7c63fc119324d33186e4151b59ba6`; Docker inspect/API size 431,104,710 bytes; `docker images` table size 1.95 GB |
+| Runtime identity | `USER mednorm`; runtime UID/GID `10001:10001`; `WORKDIR /app`; entrypoint `python -m mednorm_vi.inference.cli`; no obsolete E4 or old-L4 runtime setting |
+| Runtime environment | `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `HF_HOME=/models/hf`, `PYTHONPATH=/app/src`; thread caps set to 1 for OpenMP/MKL/OpenBLAS/tokenizers/PyTorch smokes |
+| Image contents | Project-owned layers copy only `requirements-image.lock`, `pyproject.toml`, `src/`, `configs/`, and `schemas/`. No `checkpoint/`, `models/`, `data/`, `indices/`, `notebooks/`, `output.zip`, governed corpus, restricted KB payloads, model weights or submission ZIP is baked into the image |
+| Lightweight readiness | `deterministic` READY; `specialist` READY with mounted E3 checkpoint/cache resources; `full` NOT_READY with named E5/E6/E7 and future model/checkpoint blockers. External socket connect fails with `Network is unreachable`; Hugging Face lookup fails locally with `LocalEntryNotFoundError` |
+| Deterministic smoke | One tracked synthetic fixture (`tests/fixtures/phase1b/synthetic_medication_list.txt`) ran through the canonical CLI twice under `--network=none`; L1-L9 completed; output JSON and ZIP bytes were identical across both runs (`output.zip` SHA-256 `c601e270c6823f5b2d04f2de0b4bb2198fe249bca1ec8f1ed481ea5e115e48b1`); final offsets and ordering validated |
+| Final L9 negative smokes | Synthetic final-gate payloads inside the container raised `FinalValidationError` with `final.text_offset_mismatch` and `kb.candidate_not_offered`; no successful output directory or ZIP was created |
+| E3 specialist smoke | One tracked synthetic fixture (`tests/fixtures/phase1b/synthetic_medical_document.txt`) ran in `specialist` mode under `--network=none`; E3 executed and produced 2 proposals; L9 completed; emitted offsets validated; output ZIP SHA-256 `01e01c0ac698509b7c232488134f6509472a912c7f669bb4597c34ff2ce5ffea` |
+| E3 checkpoint policy | Runtime wrapper proved `mention_factory.neural.runtime.load_expert` called `assert_load_is_permitted`; the protected E3 digest selected `TRUSTED_LEGACY_PICKLE`, `weights_only=False`, `trusted_legacy=True`. An unverified checkpoint raised `CheckpointTrustError`; an unknown digest selected `WEIGHTS_ONLY`, `weights_only=True` |
+| E3 checkpoint integrity | Before and after the smoke: SHA-256 `a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c`, size `1,615,513,303` bytes, mtime `2026-07-27 00:53:41.047814400 +0700`. The mounted checkpoint directory refused writes with `EROFS` |
+| Resource limits | Every container smoke used `--memory=4g --memory-swap=5g --cpus=2 --pids-limit=256`; commands were sequential; lowest observed available RAM was 6.3 GiB |
+| VnCoreNLP note | VnCoreNLP is optional in the shipped active profile: `expert_settings.e3_vncorenlp_dir` is unset, so E3 uses the verified default/pre-segmented-source path. If a run explicitly configures `e3_vncorenlp_dir`, VnCoreNLP is mandatory for that run: readiness probes the directory, a non-empty JAR, Java, `jnius_config` and `py_vncorenlp`, and runtime refuses to fall back to `segmenter=None` if the configured capability is unavailable. |
+| Final freeze readiness smoke (Audit 0056g) | Exactly one readiness-only container used `mednorm-vi:framework-frozen` under `--network=none --memory=2g --memory-swap=3g --cpus=2 --pids-limit=128`. It printed runtime UID/GID `10001/10001`, `default_specialist READY []`, configured fake VnCoreNLP `NOT_READY` with `e3_vncorenlp_not_ready:missing_jnius_config`, `torch_loaded_after_negative_readiness False`, `full NOT_READY 11`, `network_blocked OSError 101`, Python `3.14.5`, torch `2.13.0+cpu`, CUDA `None`. This smoke performed readiness only; no E3 forward pass, document inference, notebook, training, internal_test, organizer inference or model/data download ran. |
+| Post-build documentation note | Dockerfile comments and this manifest were updated after the Audit-0056g build/readiness smoke to record final evidence. Those post-build edits change comments/docs only; no Docker runtime instruction changed and the image was not rebuilt only for documentation wording. |
+
+This is still **not organizer readiness**. No organizer inference was run, no
+submission over organizer data was produced, and candidate/assertion quality remains
+unmeasurable without code-bearing and assertion gold.
 
 ## 0a. Framework-closure matrix (Audit 0055)
 
@@ -245,9 +293,9 @@ Per expert:
 | E2 laboratory parser | `IMPLEMENTED_AND_WIRED` | none needed | **yes** | `TEST_NAME –has_result→ VALUE` per spec §6.2; `configs/laboratory/parser_v1.yaml` |
 | E3 ViHealthBERT span+type | **`IMPLEMENTED_AND_INTEGRATED`** | **exists and RUNS** — `checkpoint/s1_mention_full_training_v1/best.pt`, SHA-256 `a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c`, 1,615,513,303 bytes, git-ignored; byte-identical Drive backup verified by MD5 in Audit 0052 | **yes, in `specialist`** | Adapter `mention_factory/experts/e3_vihealthbert.py`; lazy, `local_files_only=True`, backbone never downloaded (the checkpoint carries the full state dict). Exact span+type F1 **0.5559** on 200 governed validation rows (Audit 0052). Audit 0032's 0.7194 / 0.746182 are token-index proxies and are not the same measurement |
 | E4 PhoBERT W2NER | **`RETIRED_FROM_ACTIVE_ARCHITECTURE`** | **none retained.** Training, diagnostic and reproduction checkpoints WERE produced; none passed the acceptance gate; none remains in the tree | **removed** | See §0 |
-| E5 XLM-R MRC-NER | `REQUIRES_FUTURE_TRAINING` | none | no | Contract + training path implemented (`mention_factory/mrc.py`, `training/phase2/e5_mrc_training.py`). Its task head is **randomly initialized**; it must never run at inference untrained |
-| E6 GLiNER open-type | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Strict adapter `mention_factory/gliner.py` fails closed without a verified local checkpoint; loader `llm/backends.OpenTypeSpanBackend` |
-| E7 Qwen proposer | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Proposal-only. Loader `llm/backends.CausalLMBackend`; offsets are never taken from it — resolved by `mention_factory/offsets.resolve_occurrence` and re-verified |
+| E5 XLM-R MRC-NER | `REQUIRES_FUTURE_TRAINING` | none | no | Contract + training path implemented (`mention_factory/mrc.py`, `training/phase2/e5_mrc_training.py`). Its task head is **randomly initialized**; it must never run at inference untrained. **Audit 0056a:** deliberately NOT registered, and enabling the flag now makes the profile **NOT_READY** with a named implementation blocker instead of reporting READY and running nothing |
+| E6 GLiNER open-type | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Strict adapter `mention_factory/gliner.py` fails closed without a verified local checkpoint; loader `llm/backends.OpenTypeSpanBackend`. **Audit 0056a:** not registered; an empty *or* fabricated checkpoint directory no longer satisfies readiness |
+| E7 Qwen proposer | `REQUIRES_PRETRAINED_CHECKPOINT` | none locally | no | Proposal-only. Loader `llm/backends.CausalLMBackend`; offsets are never taken from it — resolved by `mention_factory/offsets.resolve_occurrence` and re-verified. **Audit 0056a:** not registered; enabling the flag is a named NOT_READY blocker |
 
 Known missing: E5's head is untrained; E6/E7 have no local weights; TEST_NAME and
 TEST_RESULT have **zero** governed supervision, so two of the five spec types are
@@ -269,11 +317,12 @@ DIAGNOSIS and SYMPTOM).
 | Pretrained adapter | None |
 | Trained checkpoint | **None** |
 | Future checkpoint slot | `resolution/learned_l4_v2` (`resolution/learned_v2.py`, 749 lines; trainer `training/phase2/l4_training.py`; notebook `MedNorm_L4_Learned_Resolver_v2_Training.ipynb`) |
-| Enabled | **Both off.** `enable_l4_deterministic_v1: false`, `enable_l4_learned_v2: false` |
+| Enabled | Shipped profile selects the deterministic route: `enable_l4_deterministic_v1: true`, `enable_l4_learned_v2: false` |
 | Contract version | `boundary-type-resolver-v1`, `learned-l4-v2` |
-| Configuration source | `configs/resolution/resolver_v1.yaml`, `configs/resolution/boundary_type_resolver_v1.yaml`, `configs/resolution/learned_l4_v2.yaml` |
+| Configuration source | `configs/resolution/boundary_type_resolver_v1.yaml`, `configs/resolution/learned_l4_v2.yaml`. (`configs/resolution/resolver_v1.yaml` was listed here until Audit 0056a; it was deleted with the retired resolver in Audit 0055 and does not exist.) |
 | Parameter-ledger behaviour | v1 contributes 0; v2 is a small MLP that **is** counted when loaded |
-| Known missing | No boundary-offset head (spec §7.1). No learned v2 checkpoint. `resolution/resolver.py` still exists as a second, non-canonical implementation pending test migration |
+| **L4 route selection** | **Audit 0056a.** Both L4 flags were **inert**: the canonical runner called the deterministic L4 unconditionally and read no L4 flag, so `enable_l4_learned_v2: true` changed nothing and raised nothing. The flags now select a route, exactly one must be selected (`select_l4_route` refuses "both" and "neither" at load), and `enable_l4_deterministic_v1` is `true` in the shipped profile because that is what has executed since Audit 0052. The learned route dispatches through `resolution/learned_dispatch.py` and **fails closed** — `LearnedL4Unavailable`, never a silent fall back to the deterministic resolver |
+| Known missing | No boundary-offset head (spec §7.1). No learned v2 checkpoint, so the learned route is selectable but not runnable and says so by name |
 
 Note: the former `src/mednorm_vi/boundary_type/` bootstrap stub was a second, dead
 L4 import path raising `NotImplementedError`; Audit 0051 deleted it. `resolution/`
@@ -402,8 +451,10 @@ path spec §19 names — is the one L5 linking module.
 | Contract version | Confirmed organizer layout (Audit 0002); `schemas/constants.py` is authoritative for labels, per-type fields and end-exclusive positions |
 | Parameter-ledger behaviour | 0 |
 | KB membership | **Enforced in Audit 0053** by `validator/kb_membership.py` (`l9-kb-membership-v1`). Deliberately **model- and retriever-independent**: it imports no linker, no index builder and no model — a test asserts this, because the linker is the component whose bug this gate exists to catch. Checks: candidate present in the snapshot its type requires; correct ontology per type (`icd10_vi` / `rxnorm`, wrong-snapshot detected); no candidates on a type that takes none (spec §7.3); duplicates; missing snapshot treated as **cannot validate**, never as pass; and `offered_codes`, so a code that exists but was not retrieved for that mention fails under spec P7 |
-| **The gate is on the canonical path** | **YES.** `inference/pipeline._gate_kb_membership` runs inside `run_input_dir` on the **serialized** organizer JSON, **before** anything is written, and raises `KbMembershipViolation`. A violating run therefore leaves **no `output/` and no `output.zip`**. As first written in Audit 0053 this validator had **no caller under `inference/`** — it was wired in the same audit's correction pass, with an integration test that injects an out-of-snapshot code at the linker and asserts packaging stops |
-| Known missing | It **never repairs** — the caller stops the run, and the run-manifest wiring that *records* the stop is not built (Audit 0053 item 10, not attempted). Consequently the wired gate enforces membership and ontology but **not** P7's `offered_codes`: nothing records which codes were offered per mention. Candidate *ordering* determinism is asserted by running the pipeline twice in tests, not by this validator. No packaging-stress suite per spec §18.3. `output.zip` has never been produced for a real submission |
+| **The gate is on the canonical path** | **YES.** `inference/pipeline._gate_final_output` runs inside `run_input_dir` on the **serialized** organizer JSON, **before** anything is written. A violating run leaves **no `output/` and no `output.zip`** |
+| **The gate is COMPLETE** | **Audit 0056a.** Audit 0053 wired a *candidate-membership* gate; it never received `original_text` and never received the offered sets, so two Appendix-A requirements were unenforced on the emitted payload. `validator/final_gate.py` (`l9-final-serialized-gate-v1`) now checks, in one pass: safe filename, UTF-8/JSON shape, organizer schema and per-type field policy, **exact `original_text[start:end] == text` against the source document**, end-exclusive offsets inside the document, duplicate candidates, snapshot membership and ontology, **spec-P7 offered-set membership**, and non-decreasing `(start, end)` emission order |
+| **Spec P7 receives real data** | **Audit 0056a.** `validate_document_candidates` has always accepted `offered_codes_by_index`, and the canonical caller never passed it — the rule was a unit contract that never ran on real output. The offered set is now captured at L5 linking (`LinkerResult`, not L8's survivors, so a code introduced *after* L8 is detectable) and carried on `PipelineResult.offered_codes_by_index`, index-aligned with the serialized list. An entity that emits candidates with no recorded offered set **fails**, so a wiring regression cannot silently disable P7 again |
+| Known missing | It **never repairs** — the caller stops the run. The run-manifest wiring that *records* the stop is built (`l9_stopped_the_run: true`). No packaging-stress suite per spec §18.3. `output.zip` has never been produced for a real submission |
 
 Audit 0051 deleted a second, divergent packager/validator (`zs0/submission.py`)
 that required the 100 files at the **ZIP root** and expected a `{"entities": …}`

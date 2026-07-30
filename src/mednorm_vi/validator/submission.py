@@ -21,7 +21,14 @@ exactly one top-level ``output/`` directory and rejects unsafe/unexpected nested
 paths. Unrelated metadata files are reported (WARNING) but not forbidden unless
 they are extra JSON prediction files (which fail).
 
-KB membership of candidate codes remains deferred (no frozen KB yet).
+**Layout only.** This module cannot see the source document, so it does not check
+``original_text[start:end] == text``, and it does not check ontology membership.
+Both are enforced by :mod:`mednorm_vi.validator.final_gate`, which runs on the
+canonical packaging path before anything is written.
+
+(The line "KB membership of candidate codes remains deferred (no frozen KB yet)"
+stood here until Audit 0056a. It had been false since Audit 0014 froze the snapshots
+and since Audit 0053 added ``validator/kb_membership.py``.)
 """
 
 from __future__ import annotations
@@ -46,54 +53,61 @@ def _numeric_key(name: str) -> int:
     return int(name.split(".")[0])
 
 
-def _validate_json_payload(
-    name: str, raw_bytes: bytes
-) -> list[ValidationIssue]:
+def _validate_json_payload(name: str, raw_bytes: bytes) -> list[ValidationIssue]:
     """Decode UTF-8, parse JSON, require a list root, validate each entity."""
     issues: list[ValidationIssue] = []
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError:
         return [
-            ValidationIssue(code="submission.not_utf8", message=f"{name!r} is not valid UTF-8",
-                            context={"filename": name})
+            ValidationIssue(
+                code="submission.not_utf8",
+                message=f"{name!r} is not valid UTF-8",
+                context={"filename": name},
+            )
         ]
     try:
         root = json.loads(text)
     except json.JSONDecodeError as exc:
         return [
-            ValidationIssue(code="submission.bad_json",
-                            message=f"{name!r} is not well-formed JSON: {exc}",
-                            context={"filename": name})
+            ValidationIssue(
+                code="submission.bad_json",
+                message=f"{name!r} is not well-formed JSON: {exc}",
+                context={"filename": name},
+            )
         ]
     if not isinstance(root, list):
         issues.append(
-            ValidationIssue(code="submission.root_not_list",
-                            message=f"{name!r} root value must be a JSON list, got {type(root)!r}",
-                            context={"filename": name})
+            ValidationIssue(
+                code="submission.root_not_list",
+                message=f"{name!r} root value must be a JSON list, got {type(root)!r}",
+                context={"filename": name},
+            )
         )
         return issues
     doc_result = validate_organizer_document(root, document_id=name)
     return list(doc_result.issues)
 
 
-def _compare_fileset(
-    present: set[str], n: int
-) -> list[ValidationIssue]:
+def _compare_fileset(present: set[str], n: int) -> list[ValidationIssue]:
     """Compare present prediction basenames to the expected 1..n set."""
     issues: list[ValidationIssue] = []
     expected = set(expected_filenames(n))
     for missing in sorted(expected - present, key=_numeric_key):
         issues.append(
-            ValidationIssue(code="submission.file_missing",
-                            message=f"missing expected submission file {missing!r}",
-                            context={"filename": missing})
+            ValidationIssue(
+                code="submission.file_missing",
+                message=f"missing expected submission file {missing!r}",
+                context={"filename": missing},
+            )
         )
     for extra in sorted(present - expected):
         issues.append(
-            ValidationIssue(code="submission.extra_prediction_file",
-                            message=f"unexpected extra prediction JSON {extra!r}",
-                            context={"filename": extra})
+            ValidationIssue(
+                code="submission.extra_prediction_file",
+                message=f"unexpected extra prediction JSON {extra!r}",
+                context={"filename": extra},
+            )
         )
     return issues
 
@@ -109,8 +123,12 @@ def validate_output_directory(
 
     if not root.is_dir():
         return ValidationResult.from_issues(
-            [ValidationIssue(code="submission.dir_missing",
-                             message=f"submission directory {root} does not exist")]
+            [
+                ValidationIssue(
+                    code="submission.dir_missing",
+                    message=f"submission directory {root} does not exist",
+                )
+            ]
         )
 
     json_files = {p.name for p in root.iterdir() if p.is_file() and p.suffix == ".json"}
@@ -118,15 +136,21 @@ def validate_output_directory(
     for p in sorted(root.iterdir(), key=lambda x: x.name):
         if p.is_file() and p.suffix != ".json":
             issues.append(
-                ValidationIssue(code="submission.metadata_file",
-                                message=f"non-prediction metadata file present: {p.name!r}",
-                                severity=Severity.WARNING, context={"filename": p.name})
+                ValidationIssue(
+                    code="submission.metadata_file",
+                    message=f"non-prediction metadata file present: {p.name!r}",
+                    severity=Severity.WARNING,
+                    context={"filename": p.name},
+                )
             )
         elif p.is_dir():
             issues.append(
-                ValidationIssue(code="submission.unexpected_subdir",
-                                message=f"unexpected subdirectory in output/: {p.name!r}",
-                                severity=Severity.WARNING, context={"dirname": p.name})
+                ValidationIssue(
+                    code="submission.unexpected_subdir",
+                    message=f"unexpected subdirectory in output/: {p.name!r}",
+                    severity=Severity.WARNING,
+                    context={"dirname": p.name},
+                )
             )
 
     issues.extend(_compare_fileset(json_files, n))
@@ -155,13 +179,19 @@ def validate_submission_zip(
     path = Path(zip_path)
     if not path.is_file():
         return ValidationResult.from_issues(
-            [ValidationIssue(code="submission.zip_missing",
-                             message=f"submission zip {path} does not exist")]
+            [
+                ValidationIssue(
+                    code="submission.zip_missing", message=f"submission zip {path} does not exist"
+                )
+            ]
         )
     if not zipfile.is_zipfile(path):
         return ValidationResult.from_issues(
-            [ValidationIssue(code="submission.not_a_zip",
-                             message=f"{path} is not a valid ZIP archive")]
+            [
+                ValidationIssue(
+                    code="submission.not_a_zip", message=f"{path} is not a valid ZIP archive"
+                )
+            ]
         )
 
     prediction_bytes: dict[str, bytes] = {}
@@ -173,9 +203,11 @@ def validate_submission_zip(
             name = info.filename
             if _is_unsafe_zip_path(name):
                 issues.append(
-                    ValidationIssue(code="submission.unsafe_path",
-                                    message=f"unsafe/unexpected path in zip: {name!r}",
-                                    context={"path": name})
+                    ValidationIssue(
+                        code="submission.unsafe_path",
+                        message=f"unsafe/unexpected path in zip: {name!r}",
+                        context={"path": name},
+                    )
                 )
                 continue
             # Skip pure directory entries after noting the top-level name.
@@ -198,15 +230,20 @@ def validate_submission_zip(
                 # Top-level file (not under output/).
                 if name.endswith(".json"):
                     issues.append(
-                        ValidationIssue(code="submission.extra_prediction_file",
-                                        message=f"prediction JSON outside output/: {name!r}",
-                                        context={"path": name})
+                        ValidationIssue(
+                            code="submission.extra_prediction_file",
+                            message=f"prediction JSON outside output/: {name!r}",
+                            context={"path": name},
+                        )
                     )
                 else:
                     issues.append(
-                        ValidationIssue(code="submission.metadata_file",
-                                        message=f"top-level metadata file present: {name!r}",
-                                        severity=Severity.WARNING, context={"path": name})
+                        ValidationIssue(
+                            code="submission.metadata_file",
+                            message=f"top-level metadata file present: {name!r}",
+                            severity=Severity.WARNING,
+                            context={"path": name},
+                        )
                     )
                 continue
 
@@ -227,29 +264,38 @@ def validate_submission_zip(
                 prediction_bytes[parts[1]] = zf.read(name)
             elif len(parts) > 2 and name.endswith(".json"):
                 issues.append(
-                    ValidationIssue(code="submission.unexpected_nested_path",
-                                    message=f"prediction JSON nested too deep: {name!r}",
-                                    context={"path": name})
+                    ValidationIssue(
+                        code="submission.unexpected_nested_path",
+                        message=f"prediction JSON nested too deep: {name!r}",
+                        context={"path": name},
+                    )
                 )
             else:
                 # Non-JSON metadata inside output/.
                 issues.append(
-                    ValidationIssue(code="submission.metadata_file",
-                                    message=f"non-prediction file inside output/: {name!r}",
-                                    severity=Severity.WARNING, context={"path": name})
+                    ValidationIssue(
+                        code="submission.metadata_file",
+                        message=f"non-prediction file inside output/: {name!r}",
+                        severity=Severity.WARNING,
+                        context={"path": name},
+                    )
                 )
 
     if not saw_output_entry:
         issues.append(
-            ValidationIssue(code="submission.missing_output_dir",
-                            message="zip has no top-level 'output/' directory")
+            ValidationIssue(
+                code="submission.missing_output_dir",
+                message="zip has no top-level 'output/' directory",
+            )
         )
     for wrong in sorted(top_level_dirs):
         issues.append(
-            ValidationIssue(code="submission.wrong_top_level_dir",
-                            message=f"unexpected top-level directory in zip: {wrong!r} "
-                                    f"(only {SUBMISSION_DIR_NAME!r}/ is allowed)",
-                            context={"dirname": wrong})
+            ValidationIssue(
+                code="submission.wrong_top_level_dir",
+                message=f"unexpected top-level directory in zip: {wrong!r} "
+                f"(only {SUBMISSION_DIR_NAME!r}/ is allowed)",
+                context={"dirname": wrong},
+            )
         )
 
     issues.extend(_compare_fileset(set(prediction_bytes), n))
@@ -280,8 +326,9 @@ def write_submission_zip(
             if not fpath.is_file():
                 raise FileNotFoundError(f"expected submission file missing: {fpath}")
             # Fixed date_time for byte-reproducibility of the archive.
-            info = zipfile.ZipInfo(filename=f"{SUBMISSION_DIR_NAME}/{name}",
-                                   date_time=(1980, 1, 1, 0, 0, 0))
+            info = zipfile.ZipInfo(
+                filename=f"{SUBMISSION_DIR_NAME}/{name}", date_time=(1980, 1, 1, 0, 0, 0)
+            )
             info.compress_type = zipfile.ZIP_DEFLATED
             zf.writestr(info, fpath.read_bytes())
     return out

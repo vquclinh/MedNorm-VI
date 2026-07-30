@@ -22,7 +22,6 @@ deterministic E1/E2 pair that Phase 1B owns, and there is exactly one L4 entry p
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -61,19 +60,27 @@ from ..mention_factory.route_gate import (
 from ..metric_decoder import decode_entities
 from ..resolution.canonical import resolution_counts, resolve_lattice_to_hypotheses
 from ..resolution.config_v1 import load_resolver_v1_config
+from ..resolution.learned_dispatch import (
+    LearnedL4Backend,
+    build_learned_l4_backend,
+    load_learned_l4_config,
+)
 from ..resolution.models import EntityHypothesis
 from ..schemas.constants import CANDIDATE_ONTOLOGY_BY_TYPE, ORGANIZER_LABEL_BY_TYPE
 from ..schemas.prediction import EntityPrediction
 from ..specialists.assertion import resolve_assertions
-from ..validator.kb_membership import (
-    KbMembershipViolation,
-    LockedSnapshots,
-    validate_document_candidates,
+from ..validator.final_gate import (
+    FinalDocument,
+    FinalValidationError,
+    gate_final_documents,
 )
+from ..validator.kb_membership import KbMembershipViolation, LockedSnapshots
 from .config import (
+    L4_ROUTE_LEARNED_V2,
     PipelineConfig,
     evaluate_readiness,
     flags_for_mode,
+    select_l4_route,
     validate_readiness,
 )
 from .manifest import (
@@ -111,15 +118,25 @@ class PipelineResult:
     # contradiction or an escalation is visible without re-deriving it downstream.
     consistency: GraphConsistencyReport | None = None
     escalation: CascadeReport | None = None
+    # The SOURCE document, carried so the final L9 gate can verify
+    # `original_text[start:end] == text` on the serialized payload (Audit 0056a).
+    # Without it the invariant was checked four times in memory and never once on
+    # the bytes that would be submitted.
+    original_text: str = ""
+    # Per serialized-entity index, the codes L5 linking OFFERED for that mention.
+    # Spec P7: a model may select from these, never introduce a code. Index i here
+    # is index i of the serialized list, because `to_entity_predictions` preserves
+    # the decoder's order and `to_submission_json` preserves the list.
+    offered_codes_by_index: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
     def experts_that_ran(self) -> tuple[str, ...]:
-        return tuple(
-            record.expert_id for record in self.expert_records if record.executed)
+        return tuple(record.expert_id for record in self.expert_records if record.executed)
 
     def proposal_counts_by_expert(self) -> dict[str, int]:
         counts = {
             record.expert_id: record.proposal_count
-            for record in self.expert_records if record.executed
+            for record in self.expert_records
+            if record.executed
         }
         if self.lattice is not None:
             for proposal in self.lattice.proposals:
@@ -150,6 +167,25 @@ def _link(
     return tuple(results)
 
 
+def resolve_l4_backend(
+    config: PipelineConfig,
+    *,
+    learned_backend: LearnedL4Backend | None = None,
+) -> LearnedL4Backend | None:
+    """The L4 backend this profile selected, or ``None`` for the deterministic route.
+
+    ``None`` means "run the deterministic canonical L4", and it is returned **only**
+    when the profile did not select the learned route. When the learned route is
+    selected, this either returns a usable backend or raises: there is no path on
+    which an explicitly enabled learned L4 quietly becomes the deterministic one.
+    """
+    if select_l4_route(config.feature_flags) != L4_ROUTE_LEARNED_V2:
+        return None
+    return build_learned_l4_backend(
+        load_learned_l4_config(config.learned_l4_config), backend=learned_backend
+    )
+
+
 def run_document(
     path: str | Path,
     config: PipelineConfig,
@@ -157,12 +193,15 @@ def run_document(
     mode: str,
     registry: ExpertRegistry | None = None,
     prepared_experts: dict[str, L3Expert] | None = None,
+    learned_l4_backend: LearnedL4Backend | None = None,
 ) -> PipelineResult:
     """Run one document through the canonical L1-L9 path.
 
     ``prepared_experts`` is an optional cache so a multi-document run loads each
     neural expert once. ``registry`` is injectable for tests; production uses the
     default registry, which is populated by importing ``mention_factory.experts``.
+    ``learned_l4_backend`` is the injection point for the learned L4 route; it is
+    consulted only when the profile selected that route.
     """
     readiness = validate_readiness(config, mode=mode)
     if readiness:
@@ -205,18 +244,24 @@ def run_document(
         specialist_proposals=phase1b.proposals,
         expert_spans=expert_proposals,
         relations=phase1b.relations,
-        config_hash=lattice_config_hash({
-            "mode": mode,
-            "feature_flags": dict(sorted(scoped_flags.items())),
-            "l4_config": config.l4_config,
-        }),
+        config_hash=lattice_config_hash(
+            {
+                "mode": mode,
+                "feature_flags": dict(sorted(scoped_flags.items())),
+                "l4_config": config.l4_config,
+            }
+        ),
     )
 
     # --- L4 (one canonical entry point over the lattice) -------------------
+    # The route is the profile's, not this function's: `resolve_l4_backend` returns
+    # None for the deterministic route and a verified backend for the learned one,
+    # raising rather than falling back if the learned route cannot run.
     resolved = resolve_lattice_to_hypotheses(
         lattice,
         load_resolver_v1_config(config.l4_config),
         relations=phase1b.relations,
+        learned_backend=resolve_l4_backend(config, learned_backend=learned_l4_backend),
     )
     accepted = resolved.accepted()
 
@@ -228,36 +273,59 @@ def run_document(
 
     # --- L6: graph + typed consistency ---------------------------------------
     evidence_graph = build_evidence_graph(
-        graph.document_id, accepted, assertions, links,
-        document=graph, relations=phase1b.relations)
+        graph.document_id, accepted, assertions, links, document=graph, relations=phase1b.relations
+    )
     section_categories = {
         node.node_id: str(node.category or "")
-        for node in graph.nodes if node.kind == NodeKind.SECTION}
+        for node in graph.nodes
+        if node.kind == NodeKind.SECTION
+    }
     consistency = evaluate_consistency(
-        graph.document_id, evidence_graph, accepted, assertions, links,
-        section_categories=section_categories)
+        graph.document_id,
+        evidence_graph,
+        accepted,
+        assertions,
+        links,
+        section_categories=section_categories,
+    )
 
     # --- L7: locked-option escalation (no model; deterministic fallback) ------
     escalation = run_cascade_escalation(
-        graph.document_id, accepted, cascade=cascade, assertions=assertions,
-        link_results=links, consistency=consistency,
+        graph.document_id,
+        accepted,
+        cascade=cascade,
+        assertions=assertions,
+        link_results=links,
+        consistency=consistency,
         ontology_by_type={
             # Keyed by the ORGANIZER-facing label, because that is what
             # `EntityHypothesis.entity_type` carries (see `consistency.ontology_for`).
             ORGANIZER_LABEL_BY_TYPE[internal]: ontology
             for internal, ontology in CANDIDATE_ONTOLOGY_BY_TYPE.items()
-            if ontology is not None and internal in ORGANIZER_LABEL_BY_TYPE})
+            if ontology is not None and internal in ORGANIZER_LABEL_BY_TYPE
+        },
+    )
 
     # --- L8: decode, now consuming L6 and L7 ---------------------------------
     decoded = decode_entities(
-        accepted, cascade, assertions, links,
-        consistency=consistency, escalation=escalation)
+        accepted, cascade, assertions, links, consistency=consistency, escalation=escalation
+    )
     predictions = to_entity_predictions(decoded)
+    # Spec P7's offered set, captured at the ONLY place that knows it: L5 linking.
+    # Keyed by serialized index, which is the decoder's order (see PipelineResult).
+    # Taking it from the linker rather than from L8's surviving candidates is what
+    # makes a post-L8 injection detectable — a code L8 invented would be absent here.
+    offered_by_mention = {
+        result.mention_id: tuple(c.code for c in result.candidates) for result in links
+    }
+    offered_codes_by_index = {
+        index: offered_by_mention.get(entity.hypothesis.hypothesis_id, ())
+        for index, entity in enumerate(decoded)
+    }
     proposals_by_expert: dict[str, int] = {}
     for proposal in lattice.proposals:
         for source in proposal.sources:
-            proposals_by_expert[source.expert_id] = (
-                proposals_by_expert.get(source.expert_id, 0) + 1)
+            proposals_by_expert[source.expert_id] = proposals_by_expert.get(source.expert_id, 0) + 1
 
     return PipelineResult(
         document_id=Path(path).stem,
@@ -268,42 +336,56 @@ def run_document(
         expert_records=expert_records,
         l4_counts=resolution_counts(resolved),
         route_gate=build_route_gate_diagnostics(
-            graph.document_id, phase1b.routings,
-            proposals_by_expert=proposals_by_expert),
+            graph.document_id, phase1b.routings, proposals_by_expert=proposals_by_expert
+        ),
         consistency=consistency,
         escalation=escalation,
+        original_text=graph.original_text,
+        offered_codes_by_index=offered_codes_by_index,
     )
 
 
-def _gate_kb_membership(
-    payloads: dict[str, str], config: PipelineConfig
+def _gate_final_output(
+    results: Sequence[PipelineResult],
+    payloads: dict[str, str],
+    config: PipelineConfig,
 ) -> dict[str, int]:
-    """L9's membership gate on the canonical packaging path (spec §16).
+    """The canonical final L9 gate on the packaging path (spec §16, Appendix A).
 
-    This is the step that makes ``validator/kb_membership`` matter: without a caller
-    it was a validator nothing invoked. It runs on the **serialized organizer JSON**,
-    after L8 has chosen the candidate sets, because that is the payload the organizer
-    receives — validating an in-memory model would leave the serializer unchecked.
+    Audit 0053 wired a *candidate-membership* gate here; Audit 0056a replaced it with
+    the complete one. The membership gate never saw ``original_text`` and never
+    received the offered sets, so two of Appendix A's requirements — "every entity
+    satisfies ``original_text[start:end] == text``" and spec P7's "a model may not
+    introduce a code" — were unenforced on the emitted payload.
 
-    On any violation it raises, so no output directory and no ``output.zip`` is ever
-    written. Spec §16 forbids silent repair, and writing a package while reporting a
-    violation elsewhere would be exactly that.
+    It runs on the **serialized organizer JSON**, because that is what the organizer
+    receives: validating an in-memory model would leave the serializer unchecked. On
+    any violation it raises, so no output directory and no ``output.zip`` is written.
     """
     icd_index, rxnorm_index = _indexes(config)
     snapshots = LockedSnapshots(icd10=icd_index, rxnorm=rxnorm_index)
-    violations: list[str] = []
-    counts: dict[str, int] = {}
-    for name in sorted(payloads, key=lambda n: (0, int(Path(n).stem))
-                       if Path(n).stem.isdigit() else (1, n)):
+    by_document = {result.document_id: result for result in results}
+    documents: list[FinalDocument] = []
+    for name in sorted(
+        payloads, key=lambda n: (0, int(Path(n).stem)) if Path(n).stem.isdigit() else (1, n)
+    ):
         document_id = Path(name).stem
-        result = validate_document_candidates(
-            json.loads(payloads[name]), snapshots, document_id=document_id)
-        for issue in result.issues:
-            counts[issue.code] = counts.get(issue.code, 0) + 1
-        violations.extend(f"{name}:{issue.code}" for issue in result.errors)
-    if violations:
-        raise KbMembershipViolation(violations)
-    return counts
+        result = by_document.get(document_id)
+        if result is None:
+            # A payload with no run behind it cannot be validated against a source
+            # document, and packaging something unvalidatable is exactly what this
+            # gate exists to prevent.
+            raise FinalValidationError([f"{name}:final.no_pipeline_result"])
+        documents.append(
+            FinalDocument(
+                document_id=document_id,
+                filename=name,
+                original_text=result.original_text,
+                payload=payloads[name],
+                offered_codes_by_index=dict(result.offered_codes_by_index),
+            )
+        )
+    return gate_final_documents(documents, snapshots)
 
 
 def run_input_dir(
@@ -313,6 +395,7 @@ def run_input_dir(
     config: PipelineConfig,
     mode: str,
     run_manifest_path: str | Path | None = None,
+    learned_l4_backend: LearnedL4Backend | None = None,
 ) -> tuple[PipelineResult, ...]:
     """Run all ``*.txt`` inputs and package deterministic organizer JSON.
 
@@ -329,26 +412,35 @@ def run_input_dir(
         key=lambda p: (0, int(p.stem)) if p.stem.isdigit() else (1, p.stem),
     )
     # One prepared-expert cache for the whole run: each neural expert loads once,
-    # not once per document.
+    # not once per document. The L4 backend is resolved once for the same reason —
+    # and, when the learned route is selected, its failure stops the run here rather
+    # than on the first document.
     prepared: dict[str, L3Expert] = {}
+    l4_backend = resolve_l4_backend(config, learned_backend=learned_l4_backend)
     results = tuple(
-        run_document(path, config, mode=mode, prepared_experts=prepared)
+        run_document(
+            path, config, mode=mode, prepared_experts=prepared, learned_l4_backend=l4_backend
+        )
         for path in inputs
     )
     payloads = {
-        f"{result.document_id}.json": to_submission_json(result.predictions)
-        for result in results
+        f"{result.document_id}.json": to_submission_json(result.predictions) for result in results
     }
-    # L9 membership gate BEFORE anything is written: a violating run must not leave a
-    # partial package on disk for someone to submit by mistake.
+    # The final L9 gate runs BEFORE anything is written: a violating run must not
+    # leave a partial package on disk for someone to submit by mistake.
     try:
-        l9_counts = _gate_kb_membership(payloads, config)
-    except KbMembershipViolation as violation:
+        l9_counts = _gate_final_output(results, payloads, config)
+    except (FinalValidationError, KbMembershipViolation) as violation:
         if run_manifest_path is not None:
             _write_manifest(
-                results, mode=mode, config=config, path=run_manifest_path,
+                results,
+                mode=mode,
+                config=config,
+                path=run_manifest_path,
                 started=started,
-                l9_issue_counts=_violation_counts(violation), l9_stopped=True)
+                l9_issue_counts=_violation_counts(violation),
+                l9_stopped=True,
+            )
         raise
     output_dir = Path(output_zip).with_suffix("")
     if output_dir.name != "output":
@@ -357,13 +449,21 @@ def run_input_dir(
     package_output_zip(output_dir, output_zip, expected_count=config.expected_documents)
     if run_manifest_path is not None:
         _write_manifest(
-            results, mode=mode, config=config, path=run_manifest_path,
-            started=started, l9_issue_counts=l9_counts, l9_stopped=False,
-            output_zip=output_zip)
+            results,
+            mode=mode,
+            config=config,
+            path=run_manifest_path,
+            started=started,
+            l9_issue_counts=l9_counts,
+            l9_stopped=False,
+            output_zip=output_zip,
+        )
     return results
 
 
-def _violation_counts(violation: KbMembershipViolation) -> dict[str, int]:
+def _violation_counts(
+    violation: FinalValidationError | KbMembershipViolation,
+) -> dict[str, int]:
     counts: dict[str, int] = {}
     for entry in violation.violations:
         code = entry.rsplit(":", 1)[-1]
@@ -386,38 +486,49 @@ def _write_manifest(
     icd_index, rxnorm_index = _indexes(config)
     snapshots = [
         SnapshotRecord(
-            role=role, index_type=index.index_type,
+            role=role,
+            index_type=index.index_type,
             snapshot_id=index.source_snapshot_id,
             concept_count=len(index.records),
-            safe_path=role_safe_path(source, role=role))
+            safe_path=role_safe_path(source, role=role),
+        )
         for role, index, source in (
             ("icd10_index", icd_index, config.icd_index),
-            ("rxnorm_index", rxnorm_index, config.rxnorm_index))
+            ("rxnorm_index", rxnorm_index, config.rxnorm_index),
+        )
         if index is not None and source
     ]
     # The checkpoint SHA-256 the expert itself verified is reused rather than
     # recomputed: E3's checkpoint is 1.6 GB and the adapter already hashed it.
     checkpoints = [
         CheckpointRecord(
-            role=record.expert_id, present=bool(record.path),
+            role=record.expert_id,
+            present=bool(record.path),
             sha256=record.checkpoint_sha256 or None,
             model_revision=record.model_revision,
             parameter_count_status="NOT_VERIFIED",
             safe_path=role_safe_path(record.path, role=record.expert_id)
-            if record.path else f"role:{record.expert_id}")
+            if record.path
+            else f"role:{record.expert_id}",
+        )
         for result in results[:1]
-        for record in result.expert_records if record.executed
+        for record in result.expert_records
+        if record.executed
     ]
     manifest = build_run_manifest(
-        results, mode=mode, config=config,
+        results,
+        mode=mode,
+        config=config,
         readiness=evaluate_readiness(config, mode=mode),
         architecture_pdf="docs/MedNorm-VI_Architecture.pdf",
-        checkpoints=checkpoints, snapshots=snapshots,
-        l9_issue_counts=l9_issue_counts, l9_stopped=l9_stopped,
+        checkpoints=checkpoints,
+        snapshots=snapshots,
+        l9_issue_counts=l9_issue_counts,
+        l9_stopped=l9_stopped,
         runtime_seconds=time.monotonic() - started,
         peak_memory_gib=peak_memory_gib(),
-        output_zip_sha256=(
-            _sha256_of(output_zip) if output_zip is not None else None))
+        output_zip_sha256=(_sha256_of(output_zip) if output_zip is not None else None),
+    )
     write_run_manifest(manifest, path)
 
 
@@ -433,8 +544,10 @@ def _sha256_of(path: str | Path) -> str | None:
 
 
 __all__ = [
+    "FinalValidationError",
     "KbMembershipViolation",
     "PipelineResult",
+    "resolve_l4_backend",
     "run_document",
     "run_input_dir",
 ]

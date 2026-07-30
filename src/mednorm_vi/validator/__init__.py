@@ -3,16 +3,25 @@
 This package holds the Phase-0 deterministic guards that MUST exist before any
 heavy model, so model changes can be judged against the organizer's true metric.
 
-Implemented here (bootstrap):
+Implemented here:
     1. Offset-invariant validation      (offsets.py)
     2. Entity schema validation         (entities.py)
     3. Allowed entity-type validation   (entities.py)
     4. Allowed assertion-label validation (entities.py)
     5. Duplicate detection (text/type/position) (duplicates.py)
     6. Parameter-budget validation      (budget.py)
-    7. Submission-layout validator STUB (submission.py)
+    7. Submission-layout validation     (submission.py)
+    8. Ontology membership against the frozen snapshots (kb_membership.py)
+    9. **The final gate over the serialized payload** (final_gate.py)
 
-``validate_document`` composes the per-entity checks for one document.
+``validate_document`` composes the per-entity checks for one document, over the
+INTERNAL representation. :mod:`mednorm_vi.validator.final_gate` is what the
+canonical packaging path runs, over the ORGANIZER-facing serialized JSON plus the
+source text — item 9 exists because items 1-7 were each enforced somewhere upstream
+and never together on the bytes that would actually be submitted (Audit 0056a).
+
+(Item 7 was described as a "STUB" here until Audit 0056a. It has not been a stub
+since Audit 0002 confirmed the layout.)
 """
 
 from __future__ import annotations
@@ -62,12 +71,8 @@ def validate_document(
     any ERROR as fail-fast.
     """
     result = validate_entities(entities, document_id=document_id)
-    result = result.merged_with(
-        validate_offsets(original_text, entities, document_id=document_id)
-    )
-    result = result.merged_with(
-        validate_no_duplicates(entities, document_id=document_id)
-    )
+    result = result.merged_with(validate_offsets(original_text, entities, document_id=document_id))
+    result = result.merged_with(validate_no_duplicates(entities, document_id=document_id))
     return result
 
 

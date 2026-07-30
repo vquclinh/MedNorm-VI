@@ -20,7 +20,11 @@ REPO = Path(__file__).resolve().parents[2]
 
 def test_phase2_default_feature_flags_preserve_measured_baseline() -> None:
     assert DEFAULT_FEATURE_FLAGS["enable_e3_vihealthbert"] is True
-    assert DEFAULT_FEATURE_FLAGS["enable_l4_deterministic_v1"] is False
+    # TRUE since Audit 0056a. The canonical deterministic L4 has run on every
+    # document since Audit 0052 while this flag said `false` and nothing read it;
+    # the flags now select an L4 route and the default states the route that runs.
+    # The measured baseline is unchanged — the same resolver executes.
+    assert DEFAULT_FEATURE_FLAGS["enable_l4_deterministic_v1"] is True
     # E4 is RETIRED_FROM_ACTIVE_ARCHITECTURE: the flag is absent, not false
     # (Audit 0051). test_e4_retirement.py proves the loader refuses its return.
     assert "enable_e4_phobert_w2ner" not in DEFAULT_FEATURE_FLAGS
@@ -42,8 +46,7 @@ def test_phase2_ablation_reports_unavailable_untrained_instead_of_zero_predictio
         {"e3_vihealthbert": "missing", "e5_xlmr_mrc": ""},
     )
     assert any(
-        status.arm == "E3_plus_E5_xlmr_mrc"
-        and status.status == STATUS_UNAVAILABLE_UNTRAINED
+        status.arm == "E3_plus_E5_xlmr_mrc" and status.status == STATUS_UNAVAILABLE_UNTRAINED
         for status in plan
     )
 
@@ -107,12 +110,10 @@ def test_the_only_model_loader_is_forward_only_and_strictly_local() -> None:
     must satisfy instead: no training, and every `from_pretrained` pinned to a
     local directory with `local_files_only=True` (spec Appendix A).
     """
-    source = (REPO / "src" / "mednorm_vi" / "llm" / "backends.py").read_text(
-        encoding="utf-8")
+    source = (REPO / "src" / "mednorm_vi" / "llm" / "backends.py").read_text(encoding="utf-8")
     assert ".backward(" not in source
     assert "torch.optim" not in source
-    assert source.count("from_pretrained(") == source.count(
-        "local_files_only=LOCAL_FILES_ONLY")
+    assert source.count("from_pretrained(") == source.count("local_files_only=LOCAL_FILES_ONLY")
     assert "local_files_only=False" not in source
     assert "torch.no_grad()" in source
 
@@ -125,8 +126,8 @@ def _executable_cell_source(source: str) -> str:
     the compile check strips magic and shell lines instead of losing the check.
     """
     return "\n".join(
-        "" if line.lstrip().startswith(("%", "!")) else line
-        for line in source.splitlines())
+        "" if line.lstrip().startswith(("%", "!")) else line for line in source.splitlines()
+    )
 
 
 def test_phase2_notebooks_parse_and_expose_required_training_gates() -> None:
@@ -138,14 +139,11 @@ def test_phase2_notebooks_parse_and_expose_required_training_gates() -> None:
     ):
         doc = json.loads((REPO / "notebooks" / name).read_text(encoding="utf-8"))
         code = "\n".join(
-            "".join(cell.get("source", []))
-            for cell in doc["cells"]
-            if cell["cell_type"] == "code"
+            "".join(cell.get("source", [])) for cell in doc["cells"] if cell["cell_type"] == "code"
         )
         for cell in doc["cells"]:
             if cell["cell_type"] == "code":
-                compile(_executable_cell_source("".join(cell.get("source", []))),
-                        name, "exec")
+                compile(_executable_cell_source("".join(cell.get("source", []))), name, "exec")
         assert "RUN_FULL_TRAINING = False" in code
         assert "CONFIRM_FULL" in code
         assert "validate_corpus_hashes(CORPUS_DIR)" in code

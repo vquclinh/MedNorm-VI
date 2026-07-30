@@ -164,9 +164,33 @@ def test_learned_l4_runtime_loads_read_only_json_checkpoint_and_resolves(tmp_pat
     assert result.accepted()[0].text == "suy tim"
     assert result.decisions[0].boundary_action == BOUNDARY_KEEP
     assert result.decisions[0].wrong_type_risk < 0.35
-    assert result.determinism_hash() == resolve_lattice(
-        lattice, checkpoint, ResolverV2Config(enabled=True)
-    ).determinism_hash()
+    assert (
+        result.determinism_hash()
+        == resolve_lattice(lattice, checkpoint, ResolverV2Config(enabled=True)).determinism_hash()
+    )
+
+
+def test_checkpoint_backend_satisfies_the_learned_l4_protocol(tmp_path: Path) -> None:
+    from mednorm_vi.resolution.learned_dispatch import (
+        LEARNED_L4_DISPATCH_VERSION,
+        CheckpointLearnedL4Backend,
+        LearnedL4Backend,
+    )
+
+    checkpoint_path = tmp_path / "learned_l4_v2.json"
+    digest = _write_checkpoint(checkpoint_path)
+    config = ResolverV2Config(
+        enabled=True,
+        checkpoint_path=str(checkpoint_path),
+        expected_checkpoint_sha256=digest,
+    )
+    backend = CheckpointLearnedL4Backend(
+        checkpoint=validate_runtime_checkpoint(config),
+        config=config,
+    )
+    assert isinstance(backend, LearnedL4Backend)
+    assert backend.contract_version == LEARNED_L4_DISPATCH_VERSION
+    assert backend.describe()["contract_version"] == LEARNED_L4_DISPATCH_VERSION
 
 
 def test_learned_l4_abstains_on_high_wrong_type_risk(tmp_path: Path) -> None:

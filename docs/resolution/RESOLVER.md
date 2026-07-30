@@ -23,7 +23,7 @@ Boundary alternatives are grouped by `boundary_group_id` (else the proposal id),
 so medication `name_only…full` alternatives group together, a lab result's
 value-only/value+unit alternatives group together, and each lab test name is its
 own singleton. A **configurable** boundary policy
-(`configs/resolution/resolver_v1.yaml`) then picks one:
+(`configs/resolution/boundary_type_resolver_v1.yaml`) then picks one:
 
 - **medication:** default `full` — grounded in the confirmed golden example
   (`amlodipine 10 mg po daily` → `[58, 83]`). Also `name_only`/`name_strength`/…

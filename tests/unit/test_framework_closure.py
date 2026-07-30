@@ -64,17 +64,25 @@ def test_no_compatibility_alias_or_shim_exists() -> None:
     import mednorm_vi.resolution as package
 
     for retired in ("resolve", "ResolverConfig", "resolver"):
-        assert not hasattr(package, retired), (
-            f"mednorm_vi.resolution.{retired} is still reachable")
+        assert not hasattr(package, retired), f"mednorm_vi.resolution.{retired} is still reachable"
         assert retired not in package.__all__
 
 
 def test_no_tracked_file_references_the_deleted_module() -> None:
     """Import-graph and text proof over everything Git tracks."""
     output = subprocess.run(
-        ["git", "grep", "-l", "-E",
-         r"resolution\.resolver\b|from \.resolver import|import resolver\b"],
-        cwd=REPO, capture_output=True, text=True, check=False).stdout
+        [
+            "git",
+            "grep",
+            "-l",
+            "-E",
+            r"resolution\.resolver\b|from \.resolver import|import resolver\b",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
     offenders = {line.strip() for line in output.splitlines() if line.strip()}
     # Prose that records the deletion is allowed; code that imports it is not.
     allowed_prose = {
@@ -87,8 +95,8 @@ def test_no_tracked_file_references_the_deleted_module() -> None:
         "tests/unit/test_resolution.py",
     }
     unexpected = {
-        path for path in offenders
-        if not (path.startswith("docs/audits/") or path in allowed_prose)}
+        path for path in offenders if not (path.startswith("docs/audits/") or path in allowed_prose)
+    }
     assert not unexpected, f"live references to the deleted L4: {sorted(unexpected)}"
 
 
@@ -101,10 +109,21 @@ def test_no_tracked_file_declares_the_retired_config_keys() -> None:
     actually live in asks the question that was meant.
     """
     output = subprocess.run(
-        ["git", "grep", "-l", "-E",
-         r"^\s*(medication_boundary|test_result_boundary|resolver_config)\s*:",
-         "--", "*.yaml", "*.yml"],
-        cwd=REPO, capture_output=True, text=True, check=False).stdout
+        [
+            "git",
+            "grep",
+            "-l",
+            "-E",
+            r"^\s*(medication_boundary|test_result_boundary|resolver_config)\s*:",
+            "--",
+            "*.yaml",
+            "*.yml",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
     offenders = {line.strip() for line in output.splitlines() if line.strip()}
     assert not offenders, f"retired config keys still declared in: {sorted(offenders)}"
 
@@ -126,7 +145,8 @@ def test_the_import_graph_has_one_l4_entry_point() -> None:
     for module in (pipeline, cli):
         names = imported_names(module)
         assert "resolve_lattice_to_hypotheses" in names, (
-            f"{module.__name__} does not use the canonical L4")
+            f"{module.__name__} does not use the canonical L4"
+        )
         assert "resolve" not in names, f"{module.__name__} imports a second resolver"
 
 
@@ -141,7 +161,8 @@ def test_a_profile_declaring_the_retired_key_is_refused(tmp_path: Path) -> None:
     from mednorm_vi.inference.config import PipelineConfig
 
     payload = yaml.safe_load(
-        (REPO / "configs" / "pipeline" / "full_v1.yaml").read_text(encoding="utf-8"))
+        (REPO / "configs" / "pipeline" / "full_v1.yaml").read_text(encoding="utf-8")
+    )
     payload["resolver_config"] = "configs/resolution/resolver_v1.yaml"
     target = tmp_path / "stale.yaml"
     target.write_text(yaml.safe_dump(payload), encoding="utf-8")
@@ -179,9 +200,7 @@ def test_the_phase1c_cli_rejects_the_retired_flag() -> None:
     ("policy", "expected_best"),
     [("full", "full"), ("name_only", "name_only"), ("name_strength", "name_strength")],
 )
-def test_the_medication_ladder_ranks_its_own_policy_first(
-    policy: str, expected_best: str
-) -> None:
+def test_the_medication_ladder_ranks_its_own_policy_first(policy: str, expected_best: str) -> None:
     kinds = ("name_only", "name_strength", "name_strength_route", "full")
     ranks = {kind: preference_rank("MEDICATION", kind, policy) for kind in kinds}
     assert min(ranks, key=lambda k: ranks[k]) == expected_best
@@ -215,16 +234,20 @@ def test_an_unconfigured_policy_ranks_every_kind_equally() -> None:
 def test_the_ladder_note_records_which_rung_won() -> None:
     assert preference_note("MEDICATION", "full", "full") == "policy=full:exact"
     assert "fallback_widest_at_or_below_target" in preference_note(
-        "MEDICATION", "name_only", "name_strength")
+        "MEDICATION", "name_only", "name_strength"
+    )
     assert "fallback_narrowest_above_target" in preference_note(
-        "MEDICATION", "full", "name_strength")
+        "MEDICATION", "full", "name_strength"
+    )
     assert preference_note("MEDICATION", "full", "") == "no_boundary_policy"
 
 
 def test_medication_kind_order_is_narrow_to_wide() -> None:
-    assert (medication_kind_order("name_only")
-            < medication_kind_order("name_strength")
-            < medication_kind_order("full"))
+    assert (
+        medication_kind_order("name_only")
+        < medication_kind_order("name_strength")
+        < medication_kind_order("full")
+    )
     assert medication_kind_order("not_a_kind") == 99
 
 
@@ -232,8 +255,10 @@ def test_the_ladder_is_the_only_boundary_policy_implementation() -> None:
     """Guards against a second ladder reappearing anywhere in the resolution package."""
     resolution = REPO / "src" / "mednorm_vi" / "resolution"
     definers = [
-        path.name for path in resolution.glob("*.py")
-        if "def preference_rank" in path.read_text(encoding="utf-8")]
+        path.name
+        for path in resolution.glob("*.py")
+        if "def preference_rank" in path.read_text(encoding="utf-8")
+    ]
     assert definers == ["boundary.py"], definers
 
 
@@ -253,18 +278,46 @@ def test_the_canonical_config_declares_both_boundary_policies() -> None:
 
 
 def test_the_learned_l4_v2_stays_disabled_and_fail_closed() -> None:
-    """No checkpoint exists, so the learned slot must refuse to run, not degrade."""
-    from mednorm_vi.inference.config import PipelineConfig
+    """No checkpoint exists, so the learned slot must refuse to run, not degrade.
+
+    Updated by Audit 0056a. This test previously asserted that BOTH L4 flags were
+    `False`, which encoded the defect it was meant to guard: the canonical
+    deterministic L4 ran on every document while its flag said `false`, and both
+    flags were inert. The flags now select a route, exactly one must be selected,
+    and the shipped profile truthfully declares the deterministic one.
+    """
+    from mednorm_vi.inference.config import (
+        L4_ROUTE_DETERMINISTIC_V1,
+        PipelineConfig,
+        select_l4_route,
+    )
 
     config = PipelineConfig.load(REPO / "configs" / "pipeline" / "full_v1.yaml")
     assert config.feature_flags["enable_l4_learned_v2"] is False
-    assert config.feature_flags["enable_l4_deterministic_v1"] is False
+    assert config.feature_flags["enable_l4_deterministic_v1"] is True
+    assert select_l4_route(config.feature_flags) == L4_ROUTE_DETERMINISTIC_V1
+
+    # Enabling the learned route without a checkpoint fails closed, and says so
+    # rather than quietly running the deterministic resolver instead.
+    from mednorm_vi.resolution.learned_dispatch import (
+        LearnedL4Unavailable,
+        learned_l4_blockers,
+        load_learned_l4_config,
+    )
+
+    blockers = learned_l4_blockers(
+        load_learned_l4_config(REPO / "configs" / "resolution" / "learned_l4_v2.yaml")
+    )
+    assert blockers, "an untrained learned slot must report a blocker"
+    assert LearnedL4Unavailable is not None
+
     # It consumes the SAME SpanLattice contract, so enabling it later needs no new
     # plumbing — only a checkpoint.
     from mednorm_vi.resolution import learned_v2
 
     source = (REPO / "src" / "mednorm_vi" / "resolution" / "learned_v2.py").read_text(
-        encoding="utf-8")
+        encoding="utf-8"
+    )
     assert "SpanLattice" in source, "learned v2 must use the canonical lattice contract"
     assert learned_v2 is not None
 
@@ -313,8 +366,14 @@ def test_the_image_copies_no_weights_or_restricted_data() -> None:
 
 def test_the_image_documents_read_only_asset_mounts() -> None:
     text = _dockerfile()
-    for mount in ("/models/e3", "/models/hf", "/models/vncorenlp", "/kb/indices",
-                  "/input", "/output"):
+    for mount in (
+        "/models/e3",
+        "/models/hf",
+        "/models/vncorenlp",
+        "/kb/indices",
+        "/input",
+        "/output",
+    ):
         assert mount in text, f"undocumented mount {mount}"
     # The asset mounts are documented read-only; only /output is writable.
     assert ":ro" in text

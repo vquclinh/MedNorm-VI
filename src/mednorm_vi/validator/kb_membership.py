@@ -1,7 +1,8 @@
 """L9 ontology-membership validation against the locked snapshots (spec §16).
 
-Spec §16's fail-fast rule has two halves. The first — ``original_text[start:end] ==
-text`` — L9 has always enforced. The second is this module:
+Spec §16's fail-fast rule has two halves. The serialized offset/text half is owned
+by :mod:`mednorm_vi.validator.final_gate`, which validates the final payload against
+``original_text``. The snapshot-membership half is this module:
 
     "if ... a code is absent from the frozen KB snapshot, stop that file and write
      an audit log. Never silently repair output."
@@ -50,19 +51,21 @@ INDEX_TYPE_BY_ONTOLOGY: Mapping[str, str] = {
 
 
 class KbMembershipViolation(RuntimeError):
-    """Raised by L9's **caller** when membership validation fails.
+    """Raised by direct callers when membership-only validation fails.
 
-    The validator itself only reports (see the module docstring) — spec §16's "never
-    silently repair output" means the *caller* stops. Packaging raises this so a
-    violating run produces no output directory and no ``output.zip`` at all, rather
-    than a package that merely carries a warning nobody reads.
+    The validator itself only reports (see the module docstring). A caller that runs
+    only the KB-membership validator may raise this exception. The canonical final
+    packaging boundary raises :class:`mednorm_vi.validator.final_gate.FinalValidationError`
+    because it aggregates organizer, offset, duplicate, ordering, snapshot and
+    offered-set violations.
     """
 
     def __init__(self, violations: Sequence[str]) -> None:
         self.violations = tuple(violations)
         super().__init__(
             "ontology membership validation failed; no output package was written: "
-            + ", ".join(self.violations))
+            + ", ".join(self.violations)
+        )
 
 
 class MembershipSource(Protocol):
@@ -102,17 +105,25 @@ class LockedSnapshots:
     def as_dict(self) -> dict[str, Any]:
         return {
             "icd10_snapshot_id": (
-                self.icd10.source_snapshot_id if self.icd10 is not None else None),
+                self.icd10.source_snapshot_id if self.icd10 is not None else None
+            ),
             "rxnorm_snapshot_id": (
-                self.rxnorm.source_snapshot_id if self.rxnorm is not None else None),
+                self.rxnorm.source_snapshot_id if self.rxnorm is not None else None
+            ),
         }
 
 
-def _issue(code: str, message: str, document_id: str | None,
-           entity_index: int | None, **ctx: object) -> ValidationIssue:
+def _issue(
+    code: str, message: str, document_id: str | None, entity_index: int | None, **ctx: object
+) -> ValidationIssue:
     return ValidationIssue(
-        code=code, message=message, severity=Severity.ERROR,
-        document_id=document_id, entity_index=entity_index, context=ctx)
+        code=code,
+        message=message,
+        severity=Severity.ERROR,
+        document_id=document_id,
+        entity_index=entity_index,
+        context=ctx,
+    )
 
 
 def validate_entity_candidates(
@@ -135,10 +146,17 @@ def validate_entity_candidates(
     if organizer_type not in ORGANIZER_LABELS:
         # `validator.organizer` owns the type vocabulary; membership cannot be
         # judged without a known type, so report and stop here.
-        return ValidationResult.from_issues([
-            _issue("kb.unknown_type",
-                   f"cannot validate candidates for unknown type {organizer_type!r}",
-                   document_id, entity_index, value=organizer_type)])
+        return ValidationResult.from_issues(
+            [
+                _issue(
+                    "kb.unknown_type",
+                    f"cannot validate candidates for unknown type {organizer_type!r}",
+                    document_id,
+                    entity_index,
+                    value=organizer_type,
+                )
+            ]
+        )
 
     internal_type = TYPE_BY_ORGANIZER_LABEL[organizer_type]
     expected_ontology = CANDIDATE_ONTOLOGY_BY_TYPE.get(internal_type)
@@ -147,20 +165,31 @@ def validate_entity_candidates(
     if expected_ontology is None:
         # SYMPTOM / TEST_NAME / TEST_RESULT carry no candidates at all (spec §7.3).
         if raw:
-            issues.append(_issue(
-                "kb.candidates_on_type_without_ontology",
-                f"{organizer_type!r} takes no candidates but {len(list(raw))} were "
-                "emitted; cross-ontology linking is forbidden",
-                document_id, entity_index, entity_type=organizer_type))
+            issues.append(
+                _issue(
+                    "kb.candidates_on_type_without_ontology",
+                    f"{organizer_type!r} takes no candidates but {len(list(raw))} were "
+                    "emitted; cross-ontology linking is forbidden",
+                    document_id,
+                    entity_index,
+                    entity_type=organizer_type,
+                )
+            )
         return ValidationResult.from_issues(issues)
 
     if raw is None:
         return ValidationResult.from_issues(issues)
     if not isinstance(raw, (list, tuple)):
-        return ValidationResult.from_issues([
-            _issue("kb.candidates_not_list",
-                   f"candidates must be a list, got {type(raw)!r}",
-                   document_id, entity_index)])
+        return ValidationResult.from_issues(
+            [
+                _issue(
+                    "kb.candidates_not_list",
+                    f"candidates must be a list, got {type(raw)!r}",
+                    document_id,
+                    entity_index,
+                )
+            ]
+        )
 
     codes = [str(code) for code in raw]
     if not codes:
@@ -175,10 +204,15 @@ def validate_entity_candidates(
     seen: set[str] = set()
     for code in codes:
         if code in seen:
-            issues.append(_issue(
-                "kb.duplicate_candidate",
-                f"candidate {code!r} appears more than once",
-                document_id, entity_index, value=code))
+            issues.append(
+                _issue(
+                    "kb.duplicate_candidate",
+                    f"candidate {code!r} appears more than once",
+                    document_id,
+                    entity_index,
+                    value=code,
+                )
+            )
         seen.add(code)
 
     # Deterministic ordering is a property of the *decoder*, not of a single
@@ -188,41 +222,61 @@ def validate_entity_candidates(
 
     source = snapshots.source_for(expected_ontology)
     if source is None:
-        issues.append(_issue(
-            "kb.snapshot_unavailable",
-            f"{organizer_type!r} requires the {expected_ontology} snapshot to "
-            "validate its candidates, and none was supplied; membership cannot be "
-            "confirmed, so the file is not accepted",
-            document_id, entity_index, ontology=expected_ontology))
+        issues.append(
+            _issue(
+                "kb.snapshot_unavailable",
+                f"{organizer_type!r} requires the {expected_ontology} snapshot to "
+                "validate its candidates, and none was supplied; membership cannot be "
+                "confirmed, so the file is not accepted",
+                document_id,
+                entity_index,
+                ontology=expected_ontology,
+            )
+        )
         return ValidationResult.from_issues(issues)
 
     expected_index_type = INDEX_TYPE_BY_ONTOLOGY.get(expected_ontology)
     if expected_index_type and source.index_type != expected_index_type:
-        issues.append(_issue(
-            "kb.wrong_snapshot",
-            f"candidates for {organizer_type!r} were validated against index type "
-            f"{source.index_type!r}, expected {expected_index_type!r}; a stale or "
-            "wrong snapshot cannot certify membership",
-            document_id, entity_index,
-            ontology=expected_ontology, index_type=source.index_type))
+        issues.append(
+            _issue(
+                "kb.wrong_snapshot",
+                f"candidates for {organizer_type!r} were validated against index type "
+                f"{source.index_type!r}, expected {expected_index_type!r}; a stale or "
+                "wrong snapshot cannot certify membership",
+                document_id,
+                entity_index,
+                ontology=expected_ontology,
+                index_type=source.index_type,
+            )
+        )
         return ValidationResult.from_issues(issues)
 
     allowed = set(str(code) for code in offered_codes) if offered_codes is not None else None
     for code in codes:
         if not source.exists(code):
-            issues.append(_issue(
-                "kb.candidate_not_in_snapshot",
-                f"candidate {code!r} is not in {expected_ontology} snapshot "
-                f"{source.source_snapshot_id!r}",
-                document_id, entity_index, value=code,
-                snapshot_id=source.source_snapshot_id))
+            issues.append(
+                _issue(
+                    "kb.candidate_not_in_snapshot",
+                    f"candidate {code!r} is not in {expected_ontology} snapshot "
+                    f"{source.source_snapshot_id!r}",
+                    document_id,
+                    entity_index,
+                    value=code,
+                    snapshot_id=source.source_snapshot_id,
+                )
+            )
             continue
         if allowed is not None and code not in allowed:
-            issues.append(_issue(
-                "kb.candidate_not_offered",
-                f"candidate {code!r} exists in the snapshot but was not offered for "
-                "this mention; a code may be selected, never introduced (spec P7)",
-                document_id, entity_index, value=code))
+            issues.append(
+                _issue(
+                    "kb.candidate_not_offered",
+                    f"candidate {code!r} exists in the snapshot but was not offered for "
+                    "this mention; a code may be selected, never introduced (spec P7)",
+                    document_id,
+                    entity_index,
+                    value=code,
+                )
+            )
     return ValidationResult.from_issues(issues)
 
 
@@ -235,19 +289,29 @@ def validate_document_candidates(
 ) -> ValidationResult:
     """Validate every entity's candidates in one organizer document."""
     if not isinstance(root, list):
-        return ValidationResult.from_issues([
-            ValidationIssue(
-                code="kb.root_not_list",
-                message=f"document root must be a JSON list, got {type(root)!r}",
-                document_id=document_id)])
+        return ValidationResult.from_issues(
+            [
+                ValidationIssue(
+                    code="kb.root_not_list",
+                    message=f"document root must be a JSON list, got {type(root)!r}",
+                    document_id=document_id,
+                )
+            ]
+        )
     result = ValidationResult()
     for index, entity in enumerate(root):
         if not isinstance(entity, Mapping):
             continue  # `validator.organizer` reports the shape error
         offered = (offered_codes_by_index or {}).get(index)
-        result = result.merged_with(validate_entity_candidates(
-            entity, snapshots, document_id=document_id, entity_index=index,
-            offered_codes=offered))
+        result = result.merged_with(
+            validate_entity_candidates(
+                entity,
+                snapshots,
+                document_id=document_id,
+                entity_index=index,
+                offered_codes=offered,
+            )
+        )
     return result
 
 

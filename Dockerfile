@@ -5,11 +5,46 @@
 #     external API."
 #   * "One command runs from the input directory to output.zip."
 #
-# BUILT AND OFFLINE-SMOKE-TESTED by Audit 0054. Audit 0053 authored this file without
-# building it; the first real build failed at the pip step, because
-# `requirements.lock` pins `torch==2.13.0+cu126` — a local version identifier that
-# does not exist on PyPI. The image now installs `requirements-image.lock`, the same
-# upstream torch version from the CPU index, and that file records why.
+# BUILT AND OFFLINE-SMOKE-TESTED by Audit 0055. (This header credited Audit 0054
+# until Audit 0056a; 0054 ATTEMPTED the build and found the two defects below, and
+# 0055 is the audit that actually built and smoke-tested the image.) Audit 0053
+# authored this file without building it; the first real build failed at the pip
+# step, because `requirements.lock` pins `torch==2.13.0+cu126` — a local version
+# identifier that does not exist on PyPI. The image now installs
+# `requirements-image.lock`, the same upstream torch version from the CPU index, and
+# that file records why.
+#
+# DIGEST-PINNED by Milestone 2D-C. The tag is kept only for readability; the digest
+# pins the official Docker Hub linux/amd64 manifest resolved for this host:
+#
+#   docker.io/library/python:3.14.5-slim-bookworm@sha256:ec58d916f9e24a6035cab2bdf07f6206c4cc092a16613c60597534711332d9d6
+#
+# The tag's OCI index digest at resolution time was:
+#
+#   sha256:a9bee15510a364124aa24692899d269835683b883de42f7ebec8c293cf679ccb
+#
+# Audit 0056e built exactly one verification image from the digest-pinned
+# runtime source before the append-only audit was written:
+#
+#   mednorm-vi:2d-c-verified
+#   image id sha256:47d630a570d8f5d5194becc3ffce45f770f7c63fc119324d33186e4151b59ba6
+#   Docker inspect/API size 431,104,710 bytes
+#   docker images table size 1.95 GB
+#   Python 3.14.5, torch 2.13.0+cpu
+#
+# Audit 0056g then corrected configured VnCoreNLP readiness, added
+# .dockerignore, and built exactly one final framework-freeze image:
+#
+#   mednorm-vi:framework-frozen
+#   image id sha256:5cf3d2bf03220c3845fc564f0525f98fac30cd4dfeae070d90da67b2859a4e54
+#   Docker inspect/API size 428,802,683 bytes
+#   docker images table size 1.94GB
+#   build context transfer size 66.87kB
+#   Python 3.14.5, torch 2.13.0+cpu
+#
+# This comment block was updated after the Audit-0056g build/readiness smoke.
+# The post-build edit changes only comments; no Docker runtime instruction changed
+# and the image was not rebuilt just for documentation wording.
 #
 # Nothing here downloads a model. No organizer inference runs. No output.zip is made.
 #
@@ -49,23 +84,31 @@
 #   /models/hf          HF cache holding the ViHealthBERT config + tokenizer at
 #                       revision f89e80b4…24b6c5 (read-only). The WEIGHTS are not
 #                       needed: the checkpoint carries the complete state dict.
-#   /models/vncorenlp   VnCoreNLP-1.2.jar + models (read-only)
+#   /models/vncorenlp   Optional VnCoreNLP-1.2.jar + models (read-only). The
+#                       shipped active profile leaves e3_vncorenlp_dir unset and
+#                       uses the verified pre-segmented-source path. If a run
+#                       explicitly configures e3_vncorenlp_dir, readiness requires
+#                       the directory, a non-empty JAR, Java, jnius_config and
+#                       py_vncorenlp; an unusable configured path is NOT_READY and
+#                       runtime refuses to fall back to segmenter=None.
 #   /input              organizer .txt documents (read-only)
 #   /output             destination for output/ and output.zip — the ONLY writable
 #                       mount
 #
-# The command Audit 0055 actually ran, offline, for the specialist/E3 smoke. Drop
-# the checkpoint/hf/vncorenlp mounts for a `deterministic` run — E3 is not used.
+# Verified offline example matching Audit 0056e's specialist/E3 smoke contract.
+# Add the VnCoreNLP mount only for a profile that explicitly sets
+# e3_vncorenlp_dir. Drop the checkpoint and HF mounts for a `deterministic` run:
+# E3 is not used there.
 #
-#   docker build --pull -t mednorm-vi:framework-closed .
+#   docker build --pull --progress=plain -t mednorm-vi:framework-frozen .
 #   docker run --rm --network=none \
+#     --memory=4g --memory-swap=5g --cpus=2 --pids-limit=256 \
 #     -v "$PWD/checkpoint:/app/checkpoint:ro,Z" \
 #     -v "$PWD/indices:/app/indices:ro,Z" \
 #     -v "$HOME/.cache/huggingface:/models/hf:ro,Z" \
-#     -v "$HOME/.cache/mednorm-vi/vncorenlp:/models/vncorenlp:ro,Z" \
-#     -v "$PWD/data/organizer_test/input:/input:ro,Z" \
+#     -v "/tmp/mednorm-vi-fixture/input:/input:ro,Z" \
 #     -v "$PWD/outputs:/output:Z" \
-#     mednorm-vi:framework-closed run --input-dir /input \
+#     mednorm-vi:framework-frozen run --input-dir /input \
 #       --output-zip /output/output.zip \
 #       --config configs/pipeline/full_v1.yaml --mode specialist \
 #       --run-manifest /output/run-manifest.json
@@ -77,10 +120,14 @@
 # `--network=none` is the point: if any path tried to reach the network, the run
 # would fail rather than quietly download.
 
-FROM python:3.14.5-slim-bookworm
+FROM python:3.14.5-slim-bookworm@sha256:ec58d916f9e24a6035cab2bdf07f6206c4cc092a16613c60597534711332d9d6
 
-# A JRE is required by py_vncorenlp (E3's segmentation contract). No other system
-# package is installed, so the attack surface stays close to the base image.
+# A JRE is required only when E3 is explicitly configured with e3_vncorenlp_dir.
+# The default profile does not require VnCoreNLP. The optional path still needs
+# jnius_config and py_vncorenlp; readiness reports NOT_READY when either runtime
+# dependency is unavailable, and model construction never starts for that run.
+# No other system package is installed, so the attack surface stays close to the
+# base image.
 RUN apt-get update \
  && apt-get install --no-install-recommends -y openjdk-17-jre-headless \
  && rm -rf /var/lib/apt/lists/*

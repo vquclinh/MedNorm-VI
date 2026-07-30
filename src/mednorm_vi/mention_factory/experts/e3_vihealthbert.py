@@ -18,6 +18,11 @@ What it deliberately does **not** do:
 
 Loading is lazy: constructing this object touches no model, so a profile with
 ``enable_e3_vihealthbert: false`` costs nothing.
+
+VnCoreNLP is optional in the shipped runtime profile. When
+``e3_vncorenlp_dir`` is absent, E3 uses the existing pre-segmented-source path.
+When the setting is explicit, the configured VnCoreNLP capability is mandatory
+for that run and readiness fails closed if it cannot be imported or constructed.
 """
 
 from __future__ import annotations
@@ -39,8 +44,7 @@ E3_CHECKPOINT_KEY = "mention/vihealthbert"
 # The validated artifact (Audits 0031, 0032, 0051 §7). Both are asserted before the
 # checkpoint is read, so a substituted or truncated file fails closed rather than
 # producing plausible-looking proposals from the wrong weights.
-E3_CHECKPOINT_SHA256 = (
-    "a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c")
+E3_CHECKPOINT_SHA256 = "a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c"
 E3_PINNED_MODEL_REVISION = "f89e80b461e86f9cfc1c84019bd819830c24b6c5"
 E3_HF_MODEL_ID = "demdecuong/vihealthbert-base-word"
 
@@ -102,15 +106,13 @@ class E3VietHealthBertExpert:
             if not found:
                 return (False, f"the {dependency!r} package is not installed", str(path))
         if self.vncorenlp_dir:
-            segmenter_dir = Path(self.vncorenlp_dir)
-            if not segmenter_dir.is_dir() or not any(segmenter_dir.glob("*.jar")):
-                return (
-                    False,
-                    "the configured VnCoreNLP directory has no .jar; E3 was trained "
-                    "on RDRSegmenter output and must not silently fall back to "
-                    "whitespace segmentation",
-                    str(segmenter_dir),
-                )
+            from ..neural.runtime import probe_vncorenlp_capability
+
+            capability = probe_vncorenlp_capability(self.vncorenlp_dir)
+            if not capability.ready:
+                reason = f"e3_vncorenlp_not_ready:{capability.reason_code or 'unknown'}"
+                detail = capability.detail or str(Path(self.vncorenlp_dir))
+                return (False, reason, detail)
         return (True, "", str(path))
 
     @property
@@ -138,8 +140,7 @@ class E3VietHealthBertExpert:
         segmenter = build_segmenter(self.vncorenlp_dir) if self.vncorenlp_dir else None
         self._expert = load_expert(config, segmenter=segmenter)
         fingerprint = self._expert.initial_fingerprint
-        self.checkpoint_sha256 = getattr(
-            fingerprint, "sha256", self.expected_checkpoint_sha256)
+        self.checkpoint_sha256 = getattr(fingerprint, "sha256", self.expected_checkpoint_sha256)
 
     def verify_checkpoint_unchanged(self) -> None:
         """Re-hash the checkpoint and refuse if anything about it moved."""
@@ -148,43 +149,48 @@ class E3VietHealthBertExpert:
 
     # -- inference -------------------------------------------------------------
     def propose(
-        self, graph: DocumentGraph, routings: Sequence[NodeRouting],
+        self,
+        graph: DocumentGraph,
+        routings: Sequence[NodeRouting],
     ) -> tuple[ExpertSpanProposal, ...]:
         """Decode this document and return verified proposals. Forward-only."""
         del routings  # route evidence is attached by the lattice, not here
         if self._expert is None:
-            raise RuntimeError(
-                "E3 was not prepared; the registry calls prepare() before propose()")
+            raise RuntimeError("E3 was not prepared; the registry calls prepare() before propose()")
         decoded = self._expert.predict_spans(
-            [{"example_id": graph.document_id, "text": graph.original_text}])
+            [{"example_id": graph.document_id, "text": graph.original_text}]
+        )
         spans = decoded.get(graph.document_id, ())
         proposals: list[ExpertSpanProposal] = []
         for ordinal, span in enumerate(spans, start=1):
             # Spec §4, re-verified here: the decoder already checked, and a second
             # check costs nothing against the cost of one wrong offset reaching L9.
-            if graph.original_text[span.start:span.end] != span.text:
+            if graph.original_text[span.start : span.end] != span.text:
                 raise RuntimeError(
                     f"E3 decoded [{span.start}, {span.end}) whose text does not "
-                    "slice out of original_text (spec §4)")
-            proposals.append(ExpertSpanProposal(
-                document_id=graph.document_id,
-                start=span.start,
-                end=span.end,
-                text=span.text,
-                type_scores={span.entity_type: float(span.score)},
-                local_score=float(span.score),
-                expert_id=EXPERT_VIHEALTHBERT,
-                proposal_id=f"e3-{graph.document_id}-{ordinal:04d}",
-                original_start=span.start,
-                original_end=span.end,
-                features={
-                    "neural_token_count": float(span.token_count),
-                    "neural_mean_probability": float(span.score),
-                },
-                config_version=E3_EXPERT_CONTRACT_VERSION,
-                model_revision=self.model_revision,
-                checkpoint_sha256=self.checkpoint_sha256,
-            ))
+                    "slice out of original_text (spec §4)"
+                )
+            proposals.append(
+                ExpertSpanProposal(
+                    document_id=graph.document_id,
+                    start=span.start,
+                    end=span.end,
+                    text=span.text,
+                    type_scores={span.entity_type: float(span.score)},
+                    local_score=float(span.score),
+                    expert_id=EXPERT_VIHEALTHBERT,
+                    proposal_id=f"e3-{graph.document_id}-{ordinal:04d}",
+                    original_start=span.start,
+                    original_end=span.end,
+                    features={
+                        "neural_token_count": float(span.token_count),
+                        "neural_mean_probability": float(span.score),
+                    },
+                    config_version=E3_EXPERT_CONTRACT_VERSION,
+                    model_revision=self.model_revision,
+                    checkpoint_sha256=self.checkpoint_sha256,
+                )
+            )
         return tuple(proposals)
 
 
@@ -193,9 +199,11 @@ def build_e3_expert(settings: Mapping[str, Any]) -> L3Expert:
     return E3VietHealthBertExpert(
         checkpoint_path=str(settings.get("e3_checkpoint_path", DEFAULT_CHECKPOINT_PATH)),
         expected_checkpoint_sha256=str(
-            settings.get("e3_expected_checkpoint_sha256", E3_CHECKPOINT_SHA256)),
+            settings.get("e3_expected_checkpoint_sha256", E3_CHECKPOINT_SHA256)
+        ),
         pinned_model_revision=str(
-            settings.get("e3_pinned_model_revision", E3_PINNED_MODEL_REVISION)),
+            settings.get("e3_pinned_model_revision", E3_PINNED_MODEL_REVISION)
+        ),
         hf_model_id=str(settings.get("e3_hf_model_id", E3_HF_MODEL_ID)),
         model_cache_dir=str(settings.get("e3_model_cache_dir", "")),
         vncorenlp_dir=str(settings.get("e3_vncorenlp_dir", "")),

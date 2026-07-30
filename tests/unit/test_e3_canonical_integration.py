@@ -81,13 +81,14 @@ def test_a_vncorenlp_directory_without_a_jar_is_refused(tmp_path: Path) -> None:
     expert = E3VietHealthBertExpert(vncorenlp_dir=str(tmp_path))
     ready, reason, _path = expert.readiness()
     assert ready is False
-    assert "VnCoreNLP" in reason
+    assert reason == "e3_vncorenlp_not_ready:missing_jar"
 
 
 def test_the_pinned_identity_matches_the_validated_artifact() -> None:
     """These two values tie the runtime to Audits 0031/0032's validated artifact."""
     assert E3_CHECKPOINT_SHA256 == (
-        "a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c")
+        "a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c"
+    )
     assert E3_PINNED_MODEL_REVISION == "f89e80b461e86f9cfc1c84019bd819830c24b6c5"
 
 
@@ -125,8 +126,7 @@ def test_e3_runs_through_the_canonical_runner() -> None:
     assert result.lattice is not None
     assert EXPERT_VIHEALTHBERT in result.lattice.expert_ids
 
-    record = next(
-        r for r in result.expert_records if r.expert_id == EXPERT_VIHEALTHBERT)
+    record = next(r for r in result.expert_records if r.expert_id == EXPERT_VIHEALTHBERT)
     assert record.executed is True
     assert record.proposal_count > 0
     # Provenance the ledger and any future audit needs.
@@ -142,7 +142,7 @@ def test_e3_proposals_satisfy_the_offset_invariant() -> None:
         for source in proposal.sources:
             if source.expert_id != EXPERT_VIHEALTHBERT:
                 continue
-            assert text[proposal.start:proposal.end] == proposal.text
+            assert text[proposal.start : proposal.end] == proposal.text
 
 
 @requires_e3
@@ -153,7 +153,8 @@ def test_specialist_differs_from_deterministic_with_real_weights() -> None:
     assert deterministic.experts_that_ran() == ()
     assert EXPERT_VIHEALTHBERT in specialist.experts_that_ran()
     assert len(specialist.lattice.proposals) > len(deterministic.lattice.proposals), (
-        "E3 contributed no lattice node, so the two modes are indistinguishable")
+        "E3 contributed no lattice node, so the two modes are indistinguishable"
+    )
 
 
 @requires_e3
@@ -174,8 +175,7 @@ def test_e3_emits_no_final_entity_and_cannot_bypass_l4() -> None:
     graph = analyze_document(FIXTURE, config=l1_config, lexicon=lexicon)
     proposals = expert.propose(graph, ())
     assert proposals
-    assert all(isinstance(p, ExpertSpanProposal) for p in proposals), (
-        "E3 must emit proposals only")
+    assert all(isinstance(p, ExpertSpanProposal) for p in proposals), "E3 must emit proposals only"
     # The checkpoint must be untouched by inference.
     expert.verify_checkpoint_unchanged()
 

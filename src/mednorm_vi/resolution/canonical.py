@@ -26,6 +26,18 @@ a configurable per-type boundary policy — and that policy now lives in
 ``boundary.preference_rank``, which **both** paths used before the old module was
 deleted. ``resolution/resolver.py`` no longer exists, and this is the only public L4
 entry point in the repository.
+
+Audit 0056a made it a **dispatcher** without adding a second entry point. The
+learned slot (``learned_v2``) was reachable only from the trainer and the ablation
+harness, so ``enable_l4_learned_v2`` was inert — it changed nothing and raised
+nothing. ``resolve_lattice_to_hypotheses`` now takes an optional
+``learned_backend``: absent, it runs the deterministic path below exactly as before;
+present, it delegates to the learned backend and returns the **same**
+``ResolutionResult`` contract. There is no third possibility, and in particular no
+path on which an explicitly enabled learned route silently degrades to the
+deterministic one — the runner obtains its backend from
+``learned_dispatch.build_learned_l4_backend``, which raises rather than returning
+``None``.
 """
 
 from __future__ import annotations
@@ -37,6 +49,7 @@ from ..lattice.models import SpanLattice
 from ..mention_factory.models import RelationProposal
 from ..schemas.constants import ORGANIZER_LABEL_BY_TYPE
 from .config_v1 import ResolverV1Config
+from .learned_dispatch import LearnedL4Backend
 from .models import (
     STATUS_ACCEPTED,
     STATUS_REJECTED,
@@ -75,7 +88,8 @@ def _organizer_label(entity_type: str) -> str:
 
 
 def _boundary_alternatives(
-    lattice: SpanLattice, decision: ResolutionDecision,
+    lattice: SpanLattice,
+    decision: ResolutionDecision,
 ) -> tuple[BoundaryAlternative, ...]:
     """Competing coordinates for the same mention, retained for replay (§7.1)."""
     alternatives: list[BoundaryAlternative] = []
@@ -84,10 +98,15 @@ def _boundary_alternatives(
             continue
         if not (proposal.start < decision.end and decision.start < proposal.end):
             continue
-        alternatives.append(BoundaryAlternative(
-            proposal_id=proposal.sources[0].proposal_id if proposal.sources else "",
-            start=proposal.start, end=proposal.end, text=proposal.text,
-            kind="lattice_overlap"))
+        alternatives.append(
+            BoundaryAlternative(
+                proposal_id=proposal.sources[0].proposal_id if proposal.sources else "",
+                start=proposal.start,
+                end=proposal.end,
+                text=proposal.text,
+                kind="lattice_overlap",
+            )
+        )
     return tuple(sorted(alternatives, key=lambda a: (a.start, a.end, a.proposal_id)))
 
 
@@ -96,14 +115,24 @@ def resolve_lattice_to_hypotheses(
     config: ResolverV1Config,
     *,
     relations: Sequence[RelationProposal] = (),
+    learned_backend: LearnedL4Backend | None = None,
 ) -> ResolutionResult:
     """**The canonical L4.** Resolve one lattice into typed entity hypotheses.
 
-    Every deterministic behaviour of ``resolver_v1`` applies: boundary shaping, type
-    utilities and abstention, boundary-group selection, overlap competition and
-    ``has_result`` protection. Nothing is re-decided here; this function adapts the
-    result and preserves provenance.
+    With ``learned_backend`` absent — the shipped configuration — every deterministic
+    behaviour of ``resolver_v1`` applies: boundary shaping, type utilities and
+    abstention, boundary-group selection, overlap competition and ``has_result``
+    protection. Nothing is re-decided here; this function adapts the result and
+    preserves provenance.
+
+    With ``learned_backend`` present, the profile explicitly selected the learned
+    route and this function delegates to it. It does **not** fall back: a backend
+    that fails raises out of here, because an operator who asked for the learned
+    resolver and silently received the deterministic one would have no way to tell.
     """
+    if learned_backend is not None:
+        return learned_backend.resolve(lattice, relations=relations)
+
     inner = resolve_lattice(lattice, config, relations=relations)
 
     # Index the lattice by the coordinates each decision started from, so a
@@ -131,12 +160,12 @@ def resolve_lattice_to_hypotheses(
         overlap: OverlapDecision | None = None
         if decision.status == "suppressed":
             overlap = OverlapDecision(
-                outcome="suppressed", counterpart_id=decision.suppressed_by,
-                reason=decision.reason)
+                outcome="suppressed", counterpart_id=decision.suppressed_by, reason=decision.reason
+            )
         elif decision.suppressed_by:
             overlap = OverlapDecision(
-                outcome="winner", counterpart_id=decision.suppressed_by,
-                reason=decision.reason)
+                outcome="winner", counterpart_id=decision.suppressed_by, reason=decision.reason
+            )
 
         features = {
             "utility": float(decision.utility),
@@ -150,42 +179,48 @@ def resolve_lattice_to_hypotheses(
         for name, value in decision.contributions.items():
             features[f"contribution_{name}"] = float(value)
 
-        hypotheses.append(EntityHypothesis(
-            hypothesis_id=decision.hypothesis_id,
-            document_id=lattice.document_id,
-            start=decision.start,
-            end=decision.end,
-            text=lattice.original_text[decision.start:decision.end],
-            entity_type=_organizer_label(decision.entity_type),
-            status=_STATUS_MAP.get(decision.status, STATUS_UNRESOLVED),
-            chosen_proposal_id=chosen,
-            source_proposal_ids=tuple(source.proposal_id for source in sources),
-            boundary_evidence=BoundaryEvidence(
-                # The migrated boundary policy (Audit 0055) is the policy field when
-                # one applied, so a hypothesis records WHICH ladder rung selected it
-                # rather than only that the canonical L4 ran.
-                policy=decision.boundary_policy or CANONICAL_L4_VERSION,
-                chosen_kind="|".join(decision.boundary_actions) or "unshaped",
-                chosen_proposal_id=chosen,
-                considered_kinds=tuple(decision.boundary_actions),
-                note=(f"original=[{decision.original_start},{decision.original_end})"
-                      f" l4={CANONICAL_L4_VERSION}")),
-            type_evidence=TypeEvidence(
+        hypotheses.append(
+            EntityHypothesis(
+                hypothesis_id=decision.hypothesis_id,
+                document_id=lattice.document_id,
+                start=decision.start,
+                end=decision.end,
+                text=lattice.original_text[decision.start : decision.end],
                 entity_type=_organizer_label(decision.entity_type),
-                source_specialist=source_specialist,
-                proposed_types=tuple(
-                    _organizer_label(name) for name in sorted(decision.utilities)),
-                note=decision.reason),
-            retained_alternatives=_boundary_alternatives(lattice, decision),
-            overlap_decision=overlap,
-            rejection_reason=(
-                decision.reason if decision.status != "accepted" else None),
-            has_result_pair_group_ids=relation_refs,
-            score=float(decision.utility),
-            features=features,
-            expert_ids=tuple(decision.expert_ids),
-            components=components,
-        ))
+                status=_STATUS_MAP.get(decision.status, STATUS_UNRESOLVED),
+                chosen_proposal_id=chosen,
+                source_proposal_ids=tuple(source.proposal_id for source in sources),
+                boundary_evidence=BoundaryEvidence(
+                    # The migrated boundary policy (Audit 0055) is the policy field when
+                    # one applied, so a hypothesis records WHICH ladder rung selected it
+                    # rather than only that the canonical L4 ran.
+                    policy=decision.boundary_policy or CANONICAL_L4_VERSION,
+                    chosen_kind="|".join(decision.boundary_actions) or "unshaped",
+                    chosen_proposal_id=chosen,
+                    considered_kinds=tuple(decision.boundary_actions),
+                    note=(
+                        f"original=[{decision.original_start},{decision.original_end})"
+                        f" l4={CANONICAL_L4_VERSION}"
+                    ),
+                ),
+                type_evidence=TypeEvidence(
+                    entity_type=_organizer_label(decision.entity_type),
+                    source_specialist=source_specialist,
+                    proposed_types=tuple(
+                        _organizer_label(name) for name in sorted(decision.utilities)
+                    ),
+                    note=decision.reason,
+                ),
+                retained_alternatives=_boundary_alternatives(lattice, decision),
+                overlap_decision=overlap,
+                rejection_reason=(decision.reason if decision.status != "accepted" else None),
+                has_result_pair_group_ids=relation_refs,
+                score=float(decision.utility),
+                features=features,
+                expert_ids=tuple(decision.expert_ids),
+                components=components,
+            )
+        )
 
     return ResolutionResult(
         document_id=lattice.document_id,

@@ -26,6 +26,11 @@ rxnorm_selection:
   modes: [prescribable_only, full_only, full_prefer_prescribable, ablation_full_vs_prescribable]
   current_prescribable_preference: true
 checkpoint_root: models/checkpoints/full_v1
+# No expert_settings.e3_vncorenlp_dir is configured in the shipped active
+# profile. E3 therefore uses the verified default/pre-segmented-source path.
+# If a profile explicitly sets e3_vncorenlp_dir, VnCoreNLP becomes mandatory for
+# that run: readiness checks the configured directory/JAR/runtime dependencies
+# and runtime fails closed instead of silently falling back to segmenter=None.
 expected_documents: 100
 allow_specialist_fallback: true
 feature_flags:
@@ -42,13 +47,34 @@ feature_flags:
   enable_e6_gliner: false
   # Interface-only in this milestone. Do not execute or fabricate Qwen proposals.
   enable_e7_qwen_proposer: false
-  # Audit 0034 measured deterministic L4 v1 below the E3-only baseline.
-  enable_l4_deterministic_v1: false
-  # Implemented in Phase 2, but no trained checkpoint exists yet.
+  # L4 ROUTE SELECTION (Audit 0056a). Exactly one route must be selected; L4 is not
+  # optional, because L5-L9 consume EntityHypothesis and no other stage produces it.
+  #
+  # This key was `false` until Audit 0056a while the canonical deterministic
+  # resolver ran on every document regardless — the profile was a false statement
+  # about its own behaviour, and both L4 flags were inert. `true` is what has
+  # actually executed since Audit 0052.
+  #
+  # Audit 0034's "before/after L4 v1" arms are reproduced by the ablation harness
+  # (evaluation/l3_l4_ablation_v2.py), not by a runtime flag.
+  enable_l4_deterministic_v1: true
+  # Implemented in Phase 2, but no trained checkpoint exists yet. Enabling this
+  # selects the learned route and FAILS CLOSED (readiness blocker
+  # `l4_learned_not_ready:*`); it never falls back to the deterministic resolver.
   enable_l4_learned_v2: false
 specialist_requires_checkpoints:
+  # Audit 0056a: this list was parsed and never read. It is now enforced, so it must
+  # name only real checkpoint-backed dependencies.
+  #
+  # `assertion/assertion_hydra` was REMOVED: L5's wired assertion path is
+  # deterministic A1-A3 cue/scope logic (specialists/assertion/), it has no
+  # checkpoint and the architecture plans none for it — the future learned slot is
+  # the S2 head. Requiring a checkpoint that is not part of the design would make
+  # `specialist` permanently NOT_READY for an asset nobody intends to produce.
+  #
+  # The E3 role is resolved through the E3 adapter, which is the authority on where
+  # its digest-verified artifact actually lives (`e3_checkpoint_path`).
   - mention/vihealthbert
-  - assertion/assertion_hydra
 full_requires_checkpoints:
   - mention/vihealthbert
   # mention/phobert_w2ner is absent and refused by the loader: a retired expert
@@ -74,7 +100,7 @@ profiles:
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false
-      enable_l4_deterministic_v1: false
+      enable_l4_deterministic_v1: true
       enable_l4_learned_v2: false
   specialist:
     neural: optional
@@ -86,28 +112,37 @@ profiles:
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false
-      enable_l4_deterministic_v1: false
+      enable_l4_deterministic_v1: true
       enable_l4_learned_v2: false
-    # L4 Boundary & Type Resolver v1 — DISABLED, on measured evidence (Audit 0034).
+    # RECORDED MEASUREMENT, NOT A RUNTIME SWITCH (corrected in Audit 0056a).
     #
-    # The exact four-way ablation on the governed internal_test split scored:
+    # This block previously read `boundary_type_resolver_v1: {enabled: false}` and
+    # was described as DISABLING L4 v1. Two things were wrong with that. First,
+    # nothing reads it: `PipelineConfig.load` consumes only the TOP-LEVEL
+    # `feature_flags`, so every key under `profiles.*` other than `feature_flags`
+    # (which is scanned for retired E4 flags) is inert. Second, the canonical
+    # deterministic L4 ran on every document regardless — it cannot be disabled,
+    # because L5-L9 consume EntityHypothesis and nothing else produces it.
+    #
+    # The Audit-0034 numbers below are retained because they are real, and they are
+    # what the L4 route selection above must eventually be re-decided against. They
+    # describe the cost of MERGING E1/E2 into the lattice, not a switch.
+    #
     #   Arm 1  E3 neural only                       exact F1 0.7103
     #   Arm 3  unified L3 lattice, before L4        exact F1 0.6963  (-0.0139)
     #   Arm 4  unified lattice, after L4 v1         exact F1 0.7039  (-0.0063)
     #
-    # The resolver recovers roughly half of what merging E1/E2 into the lattice
-    # costs, but Arm 4 still sits BELOW the neural-only baseline: on this
-    # narrative corpus the deterministic experts contribute only false positives
-    # (Arm 2 exact F1 0.0000, 79 proposals, 0 exact matches). Enabling the
-    # resolver here would therefore lower the only measured score we have.
+    # Arm 4 still sits BELOW the neural-only baseline: on this narrative corpus the
+    # deterministic experts contribute only false positives (Arm 2 exact F1 0.0000,
+    # 79 proposals, 0 exact matches). That is why `deterministic` and `specialist`
+    # remain separate modes rather than one merged profile.
     #
-    # Turn this on only when an ablation shows Arm 4 >= Arm 1. Thresholds must be
-    # searched on the VALIDATION split, never on internal_test, which is the
-    # held-out split every reported number depends on.
-    boundary_type_resolver_v1:
-      enabled: false
-      config: configs/resolution/boundary_type_resolver_v1.yaml
+    # Reproduce these arms with evaluation/l3_l4_ablation_v2.py. Thresholds must be
+    # searched on the VALIDATION split, never on internal_test.
+    l4_measurement_note:
       decided_in: docs/audits/0034-l3-span-lattice-l4-resolver-and-ablation.md
+      reproduced_by: src/mednorm_vi/evaluation/l3_l4_ablation_v2.py
+      runtime_effect: none
   full:
     neural: true
     requires_checkpoints: true
@@ -118,5 +153,5 @@ profiles:
       enable_e5_xlmr_mrc: false
       enable_e6_gliner: false
       enable_e7_qwen_proposer: false
-      enable_l4_deterministic_v1: false
+      enable_l4_deterministic_v1: true
       enable_l4_learned_v2: false

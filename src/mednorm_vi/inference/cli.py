@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 
 from .config import PipelineConfig
-from .pipeline import KbMembershipViolation, run_input_dir
+from .pipeline import FinalValidationError, KbMembershipViolation, run_input_dir
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -17,13 +17,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--input-dir", required=True)
     run.add_argument("--output-zip", required=True)
     run.add_argument("--config", required=True)
+    run.add_argument("--mode", choices=("deterministic", "specialist", "full"), required=True)
     run.add_argument(
-        "--mode", choices=("deterministic", "specialist", "full"), required=True)
-    run.add_argument(
-        "--run-manifest", default=None, metavar="PATH",
+        "--run-manifest",
+        default=None,
+        metavar="PATH",
         help=(
             "write a deterministic, clinical-text-free run manifest to PATH. "
-            "Opt-in: nothing is written unless this flag is given."))
+            "Opt-in: nothing is written unless this flag is given."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.command == "run":
         config = PipelineConfig.load(args.config)
@@ -35,9 +38,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 mode=args.mode,
                 run_manifest_path=args.run_manifest,
             )
-        except KbMembershipViolation as exc:
+        except (FinalValidationError, KbMembershipViolation) as exc:
             # L9 stopped the run. When a manifest was requested it has already been
             # written with `l9_stopped_the_run: true`, so the refusal is recorded.
+            # Nothing was written: no output/ directory and no output.zip exist.
             print(f"error: {exc}", file=sys.stderr)
             return 3
         except RuntimeError as exc:

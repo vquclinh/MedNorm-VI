@@ -1,0 +1,45 @@
+.git
+.agents
+.codex
+.venv
+venv
+__pycache__
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Local/private/heavy runtime assets. These are mounted at runtime, never baked
+# into the inference image or sent as Docker build context.
+checkpoint
+checkpoints
+models
+data
+indices
+notebooks
+internal_test
+organizer_test
+governed
+private
+
+# Generated outputs and smoke artifacts.
+output
+outputs
+output.zip
+tmp
+temp
+smoke
+
+# Model/archive payloads.
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.zip
+
+# Editor and OS cache files.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

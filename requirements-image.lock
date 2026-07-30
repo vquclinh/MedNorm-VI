@@ -50,9 +50,12 @@ huggingface-hub==0.36.2
 numpy==2.5.1
 sentencepiece==0.2.2
 
-# --- Vietnamese word segmentation (E3 alignment contract) -------------------
-# Needs a JRE and the VnCoreNLP jar mounted at runtime; E3 refuses to fall back to
-# whitespace segmentation.
+# --- Optional Vietnamese word segmentation (E3 configured path) --------------
+# The shipped active E3 profile leaves e3_vncorenlp_dir unset and uses the
+# pre-segmented-source path verified in Audit 0056e. If a run explicitly configures
+# e3_vncorenlp_dir, VnCoreNLP becomes mandatory for that run: readiness checks the
+# directory, a non-empty JAR, Java, jnius_config and py_vncorenlp, and runtime
+# refuses to fall back to segmenter=None.
 py_vncorenlp==0.1.4
 
 # --- transitive pins, enumerated so --no-deps is safe -----------------------
