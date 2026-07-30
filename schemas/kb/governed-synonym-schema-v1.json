@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "governed-synonym-schema-v1",
+  "title": "MedNorm-VI Governed Synonym Row v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ontology",
+    "snapshot_id",
+    "concept_id",
+    "surface",
+    "normalized_surface",
+    "synonym_kind",
+    "provenance_id",
+    "review_status",
+    "runtime_authoritative"
+  ],
+  "properties": {
+    "schema_version": { "const": "governed-synonym-schema-v1" },
+    "ontology": { "enum": ["icd10_vi", "rxnorm"] },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "concept_id": { "type": "string" },
+    "source_record_id": { "type": "string" },
+    "surface": { "type": "string" },
+    "normalized_surface": { "type": "string" },
+    "language": { "type": "string" },
+    "term_type": { "type": "string" },
+    "synonym_kind": {
+      "enum": [
+        "source_native_rxnorm_string",
+        "source_native_icd_label",
+        "vietnamese_alias",
+        "abbreviation",
+        "spelling_variant",
+        "product_brand_alias",
+        "human_reviewed_synonym"
+      ]
+    },
+    "source_vocabulary": { "type": "string" },
+    "provenance_id": { "type": "string", "minLength": 1 },
+    "review_status": {
+      "enum": [
+        "SOURCE_VERBATIM",
+        "NORMALIZED_FROM_SOURCE",
+        "REQUIRES_REVIEW",
+        "REVIEWED_APPROVED",
+        "REVIEWED_REJECTED",
+        "AMBIGUOUS",
+        "UNMAPPED"
+      ]
+    },
+    "quality_flags": { "type": "string" },
+    "runtime_authoritative": { "enum": ["true", "false"] }
+  },
+  "additionalProperties": false
+}

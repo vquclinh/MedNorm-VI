@@ -362,7 +362,7 @@ is the one L4 module.
 | Hierarchy | `linking/icd10_hierarchy.py`. The graph is **untyped and symmetric** (`dict[str, list[str]]`, 0 asymmetric edges), so **direction is reconstructed from code length**; `metadata.specificity` equals `len(code) - 3` for every record and is therefore reported but **excluded from ranking**. The hierarchy is incomplete by design of the source: 410 codes have no parent record, 454 three-char codes have no children, 774 records are absent from the graph — each is reported, never raised |
 | Specificity rule | A descendant outranks its ancestor **only when the mention's text expresses the detail the descendant adds** (token difference between the two canonical names). Otherwise it is suppressed as `DROP_UNSUPPORTED_SPECIFICITY` with the missing tokens recorded, and the ancestor is the conservative fallback |
 | Measured, Audit 0054 (200 rows) | 3,328 unsupported-specificity suppressions, 11,609 no-lexical-support suppressions, 478 supported-specific retentions, 193 broader fallbacks, 290 sibling-competition retentions, 10 exact-name hits. Candidate-set size spans **21 distinct values (0-20)** |
-| Known missing | No BM25, no dense embedder, no cross-encoder. **Candidate accuracy is still unmeasured and unmeasurable** — zero ICD codes in the governed corpus. The extracted `canonical_name` of some records is visibly truncated (`'- Bao gồm: viêm'`), which is a KB-intake data-quality gap, not a linker gap |
+| Known missing | No BM25, no dense embedder, no cross-encoder. **Candidate accuracy is still unmeasured and unmeasurable** — zero ICD codes in the governed corpus. Milestone 3A produced candidate snapshot `icd10-vi-tt06-2026-kb-v1-candidate-52c4de3abfd25dc4`, but it is **not active**: 3,470 suspect names and 12,968 source-unsupported hierarchy edges remain in review queues |
 
 ### 5.3 RxNorm Super Linker (spec §10)
 
@@ -377,9 +377,9 @@ is the one L4 module.
 | Structured representation | `linking/structured_medication.py` — spec §10.1's `D = {ingredient, salt, strength, concentration, dose_form, release, brand, route, frequency, prn, duration}`, built **only** from E1 ComponentSpans that Audit 0052 preserved through L4. Missing evidence is distinguished from negative evidence: an unstated field lands in `unresolved_fields` and cannot conflict |
 | Graph traversal | `linking/rxnorm_graph.py` — IN → SCDC → SCD → SBD. **The generated index stores an unlabeled symmetric adjacency**: the builder saw 2,563,978 relations and kept none of their names, so direction is inferred from endpoint **TTY**, and every emitted candidate records the TTY path it was reached by. Rebuilding the index with labeled edges would let this tighten from "a neighbour with the right TTY" to "a neighbour across the right relation" |
 | Hard negatives | Conflicting strength (incl. cross-unit mass conversion), unit **family** (mass vs volume is a category error, not a near miss), concentration (mg/mL), dose form, release form and route each suppress the candidate with a distinct reason code. Suppressed and obsoleted concepts are never offered; grouper TTYs are evidence, never codes |
-| INN bridge | **A governed-data gap found by measurement:** `paracetamol` occurs in **zero** records of the locked snapshot — RxNorm is a US vocabulary and names it `Acetaminophen`. A 12-entry INN→USAN bridge widens *retrieval* only, is marked `REQUIRES_CLINICAL_REVIEW`, is recorded on every affected decision, and is listed in full in Audit 0054 §3 for clinical review. The real fix is a governed crosswalk at KB-intake time |
+| INN bridge | **Milestone 3A governance update:** the legacy 12-surface INN→USAN bridge is retained as review inventory only. It no longer widens runtime retrieval because every generated crosswalk row is `REQUIRES_REVIEW` and `runtime_authoritative=false`; only future `APPROVED` governed crosswalk rows may produce authoritative candidates |
 | Measured, Audit 0054 (medication fixture) | 59 structured matches, 74 strength conflicts, 9 dose-form conflicts, 9 concentration conflicts, 146 grouper suppressions, 5 suppressed-concept drops. Candidate-set size per mention `[14, 1, 1, 1, 2, 2]` where the old lexical linker returned 20/1/20/20/1/20 |
-| Known missing | No dense retrieval, no reranker. **Candidate accuracy is unmeasured and unmeasurable** — zero RxCUIs in the governed corpus |
+| Known missing | No dense retrieval, no reranker. **Candidate accuracy is unmeasured and unmeasurable** — zero RxCUIs in the governed corpus. Milestone 3A produced candidate snapshot `rxnorm-prescribable-2026-07-06-kb-v1-candidate-d7181e39bd4053e7`, preserving 2,563,978 directed labeled relation rows and TTY distinctions, but it is **not active**: 2,010,514 prescribable-subset relation endpoint issues and 46 unapproved crosswalk rows remain review-required |
 
 Note: `specialists/icd/` and `specialists/rxnorm/` were duplicate bootstrap
 packages whose `link()` returned `[]`; Audit 0051 deleted them. `linking/` — the
@@ -583,14 +583,17 @@ remaining duplicate implementation, no unbuilt container and no unmigrated behav
    validated and no assertion metric is computable.
 3. **Calibration (S6).** The only thing that turns L8's honest deterministic decoder
    into spec §13. Needs out-of-fold predictions no stage produces yet.
-4. **A governed INN ↔ RxNorm crosswalk at KB-intake time**, retiring the 12-entry
-   `REQUIRES_CLINICAL_REVIEW` bridge. `paracetamol` is absent from the locked snapshot.
-5. **Rebuild the KB indexes keeping relation labels.** Both graphs store unlabeled
-   symmetric adjacency, so ICD direction is inferred from code length and RxNorm
-   direction from endpoint TTY. Both work and both are recorded as inferences; labeled
-   edges would make them assertions.
-6. **Fix the truncated ICD `canonical_name` extraction** — lexical retrieval cannot beat
-   the names it is given, and some are PDF fragments.
+4. **Human review and activation policy for the Milestone-3A candidate KB freeze.**
+   The candidate artifacts preserve provenance, TTY values, relation labels and
+   directed relation rows, but they remain inactive because ICD hierarchy/name quality
+   and RxNorm crosswalk/endpoint queues require owner-approved disposition.
+5. **Approve or reject the governed INN ↔ RxNorm crosswalk rows.** The legacy bridge
+   is no longer runtime-authoritative; `paracetamol` remains absent from the locked
+   RxNorm snapshot until a reviewed bridge or organizer-equivalent source is approved.
+6. **Activate a labeled KB runtime view only after review.** The current runtime graph
+   still uses the verified compact index. The 3A candidate freeze contains labeled
+   RxNorm relations and review-only ICD parent evidence, but activation is a separate
+   migration decision.
 7. **Train the remaining L3 experts** (E5 head is randomly initialized; E6/E7 have no
    local weights) and measure whether a wider lattice beats E3 alone.
 8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4 still

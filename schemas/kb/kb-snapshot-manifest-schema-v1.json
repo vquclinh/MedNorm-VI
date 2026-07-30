@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kb-snapshot-manifest-schema-v1",
+  "title": "MedNorm-VI KB Snapshot Manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "ontology",
+    "schema_versions",
+    "builder_version",
+    "source_manifest",
+    "source_files",
+    "counts",
+    "artifacts",
+    "validation_report_sha256",
+    "known_limitations",
+    "creation_timestamp_utc",
+    "no_external_data_statement",
+    "build_command"
+  ],
+  "properties": {
+    "schema_version": { "const": "kb-snapshot-manifest-schema-v1" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "ontology": { "enum": ["icd10_vi", "rxnorm"] },
+    "schema_versions": { "type": "object" },
+    "builder_version": { "const": "kb-freeze-builder-v1" },
+    "source_manifest": { "type": "string", "minLength": 1 },
+    "source_files": { "type": "object", "additionalProperties": { "type": "string" } },
+    "counts": { "type": "object" },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "rows",
+          "artifact_sha256",
+          "canonical_content_sha256"
+        ],
+        "properties": {
+          "path": { "type": "string" },
+          "rows": { "type": "integer" },
+          "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "canonical_content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "validation_report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "known_limitations": { "type": "array", "items": { "type": "string" } },
+    "creation_timestamp_utc": { "type": "string" },
+    "no_external_data_statement": { "type": "string" },
+    "build_command": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -55,8 +55,17 @@ ROLE_PRN = "prn"
 ROLE_DURATION = "duration"
 
 STRUCTURED_ROLES: tuple[str, ...] = (
-    ROLE_NAME, ROLE_SALT, ROLE_STRENGTH_VALUE, ROLE_STRENGTH_UNIT, ROLE_CONCENTRATION,
-    ROLE_DOSE_FORM, ROLE_RELEASE, ROLE_BRAND, ROLE_ROUTE, ROLE_FREQUENCY, ROLE_PRN,
+    ROLE_NAME,
+    ROLE_SALT,
+    ROLE_STRENGTH_VALUE,
+    ROLE_STRENGTH_UNIT,
+    ROLE_CONCENTRATION,
+    ROLE_DOSE_FORM,
+    ROLE_RELEASE,
+    ROLE_BRAND,
+    ROLE_ROUTE,
+    ROLE_FREQUENCY,
+    ROLE_PRN,
     ROLE_DURATION,
 )
 
@@ -64,22 +73,48 @@ STRUCTURED_ROLES: tuple[str, ...] = (
 # text and in the locked RxNorm snapshot are mapped; an unknown unit is kept verbatim
 # and marked unnormalized rather than guessed into a neighbour.
 _UNIT_CANONICAL: Mapping[str, str] = {
-    "mg": "mg", "milligram": "mg", "miligram": "mg", "mgs": "mg",
-    "g": "g", "gam": "g", "gram": "g", "gr": "g",
-    "mcg": "mcg", "ug": "mcg", "µg": "mcg", "μg": "mcg", "microgram": "mcg",
-    "ml": "ml", "millilitre": "ml", "milliliter": "ml",
-    "l": "l", "lit": "l", "litre": "l",
-    "ui": "unit", "iu": "unit", "u": "unit", "unit": "unit", "units": "unit",
-    "meq": "meq", "mmol": "mmol", "mol": "mol",
+    "mg": "mg",
+    "milligram": "mg",
+    "miligram": "mg",
+    "mgs": "mg",
+    "g": "g",
+    "gam": "g",
+    "gram": "g",
+    "gr": "g",
+    "mcg": "mcg",
+    "ug": "mcg",
+    "µg": "mcg",
+    "μg": "mcg",
+    "microgram": "mcg",
+    "ml": "ml",
+    "millilitre": "ml",
+    "milliliter": "ml",
+    "l": "l",
+    "lit": "l",
+    "litre": "l",
+    "ui": "unit",
+    "iu": "unit",
+    "u": "unit",
+    "unit": "unit",
+    "units": "unit",
+    "meq": "meq",
+    "mmol": "mmol",
+    "mol": "mol",
     "%": "%",
 }
 
 # Unit families that may never be compared against each other. Comparing a mass to a
 # volume is not a near miss, it is a category error, and the linker must say so.
 _UNIT_FAMILY: Mapping[str, str] = {
-    "mg": "mass", "g": "mass", "mcg": "mass",
-    "ml": "volume", "l": "volume",
-    "unit": "activity", "meq": "amount", "mmol": "amount", "mol": "amount",
+    "mg": "mass",
+    "g": "mass",
+    "mcg": "mass",
+    "ml": "volume",
+    "l": "volume",
+    "unit": "activity",
+    "meq": "amount",
+    "mmol": "amount",
+    "mol": "amount",
     "%": "ratio",
 }
 
@@ -88,7 +123,7 @@ _UNIT_FAMILY: Mapping[str, str] = {
 _TO_MG: Mapping[str, float] = {"mg": 1.0, "g": 1000.0, "mcg": 0.001}
 
 
-# --- INN -> RxNorm-name bridge ---------------------------------------------------
+# --- Legacy INN -> RxNorm-name bridge inventory ---------------------------------
 #
 # A governed-data gap found by measurement, not by reading the spec: RxNorm is a US
 # vocabulary and names ingredients by USAN, while Vietnamese clinical text uses the
@@ -99,20 +134,11 @@ _TO_MG: Mapping[str, float] = {"mg": 1.0, "g": 1000.0, "mcg": 0.001}
 # TOPICAL GEL` scored highest for "paracetamol"), which is worse than answering
 # nothing.
 #
-# Each pair below is an internationally standard INN/USAN equivalence for the *same*
-# active moiety, and each target was verified to resolve in the locked snapshot before
-# being added. This is a small curated clinical lexicon, so it is:
-#
-#   * listed in full in Audit 0054 for human clinical review;
-#   * marked REQUIRES_CLINICAL_REVIEW rather than presented as validated;
-#   * used only to widen *retrieval*, never to assert a code — a bridged mention still
-#     has to pass every structured compatibility check and snapshot membership;
-#   * recorded on the candidate decision, so an audit shows which name was bridged.
-#
-# It is deliberately short. A long hand-written drug-name table is a patient-safety
-# hazard dressed as a convenience, and the real fix is a governed INN<->RxNorm
-# crosswalk at KB-intake time (Audit 0054 §21).
+# Milestone 3A freezes the safer contract: unreviewed lexical bridges are retained as
+# an inventory/review queue input, but they are not runtime-authoritative and must not
+# widen candidate retrieval. Only APPROVED rows from a governed crosswalk may do that.
 INN_BRIDGE_STATUS = "REQUIRES_CLINICAL_REVIEW"
+LEGACY_INN_BRIDGE_RUNTIME_ENABLED = False
 
 INN_TO_RXNORM_NAME: Mapping[str, str] = {
     "paracetamol": "acetaminophen",
@@ -131,11 +157,14 @@ INN_TO_RXNORM_NAME: Mapping[str, str] = {
 
 
 def bridged_ingredient_names(surface: str) -> tuple[str, ...]:
-    """RxNorm-side names to also retrieve on, for an INN surface form.
+    """Approved RxNorm-side names to also retrieve on, for an INN surface form.
 
-    Returns ``()`` when the surface is already an RxNorm-side name or is unknown to
-    the bridge. Never replaces the original term — both are retrieved.
+    The legacy bridge above is currently ``REQUIRES_CLINICAL_REVIEW`` inventory.
+    Until an approved governed crosswalk is wired in, it must not widen runtime
+    retrieval or silently turn an unreviewed mapping into an authoritative candidate.
     """
+    if not LEGACY_INN_BRIDGE_RUNTIME_ENABLED:
+        return ()
     key = normalize_surface(surface)
     target = INN_TO_RXNORM_NAME.get(key)
     return (target,) if target else ()
@@ -202,8 +231,13 @@ class StructuredField:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "role": self.role, "text": self.text, "start": self.start, "end": self.end,
-            "normalized": self.normalized, "value": self.value, "unit": self.unit,
+            "role": self.role,
+            "text": self.text,
+            "start": self.start,
+            "end": self.end,
+            "normalized": self.normalized,
+            "value": self.value,
+            "unit": self.unit,
             "unit_recognised": self.unit_recognised,
         }
 
@@ -311,9 +345,13 @@ def _field_from_component(role: str, component: Mapping[str, Any]) -> Structured
         unit = canonical_unit(text)
         recognised = unit is not None
     return StructuredField(
-        role=role, text=text,
-        start=int(component.get("start", 0)), end=int(component.get("end", 0)),
-        normalized=normalize_surface(normalized), value=value, unit=unit,
+        role=role,
+        text=text,
+        start=int(component.get("start", 0)),
+        end=int(component.get("end", 0)),
+        normalized=normalize_surface(normalized),
+        value=value,
+        unit=unit,
         unit_recognised=recognised,
     )
 
@@ -356,7 +394,9 @@ def build_structured_mention(
     return StructuredMedicationMention(
         hypothesis_id=hypothesis.hypothesis_id,
         document_id=hypothesis.document_id,
-        start=hypothesis.start, end=hypothesis.end, text=hypothesis.text,
+        start=hypothesis.start,
+        end=hypothesis.end,
+        text=hypothesis.text,
         ingredient=fields.get(ROLE_NAME),
         salt=fields.get(ROLE_SALT),
         strength_value=fields.get(ROLE_STRENGTH_VALUE),
@@ -379,9 +419,7 @@ def build_structured_mentions(
     hypotheses: Sequence[EntityHypothesis],
 ) -> tuple[StructuredMedicationMention, ...]:
     """Structured representations for every medication hypothesis, in input order."""
-    return tuple(
-        build_structured_mention(h) for h in hypotheses if h.entity_type == "THUỐC"
-    )
+    return tuple(build_structured_mention(h) for h in hypotheses if h.entity_type == "THUỐC")
 
 
 __all__ = [

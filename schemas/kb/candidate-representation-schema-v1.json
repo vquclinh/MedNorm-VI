@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "candidate-representation-schema-v1",
+  "title": "MedNorm-VI Candidate Representation v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ontology",
+    "code",
+    "canonical_display_name",
+    "snapshot_id",
+    "provenance_ids",
+    "candidate_source",
+    "deterministic_ordering_key",
+    "review_status",
+    "runtime_eligible",
+    "offered",
+    "selected"
+  ],
+  "properties": {
+    "schema_version": { "const": "candidate-representation-schema-v1" },
+    "ontology": { "enum": ["icd10_vi", "rxnorm"] },
+    "code": { "type": "string", "minLength": 1 },
+    "canonical_display_name": { "type": "string" },
+    "source_concept_type": { "type": "string" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "provenance_ids": { "type": "array", "items": { "type": "string" } },
+    "matching_evidence": { "type": "array", "items": { "type": "string" } },
+    "relation_path": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "target", "rel", "rela", "direction"],
+        "properties": {
+          "source": { "type": "string" },
+          "target": { "type": "string" },
+          "rel": { "type": "string" },
+          "rela": { "type": "string" },
+          "direction": { "enum": ["source_to_target", "target_to_source"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "synonym_evidence": { "type": "array", "items": { "type": "string" } },
+    "crosswalk_evidence": { "type": "array", "items": { "type": "string" } },
+    "candidate_source": { "type": "string" },
+    "score_components": { "type": "object", "additionalProperties": { "type": "number" } },
+    "deterministic_ordering_key": { "type": "string", "minLength": 1 },
+    "review_status": { "type": "string" },
+    "runtime_eligible": { "type": "boolean" },
+    "reason_for_exclusion": { "type": "string" },
+    "offered": { "type": "boolean" },
+    "selected": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

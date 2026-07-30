@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inn-rxnorm-crosswalk-schema-v1",
+  "title": "MedNorm-VI Governed INN to RxNorm Crosswalk Row v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "local_inn_surface",
+    "normalized_local_surface",
+    "rxnorm_name",
+    "rxcui",
+    "rxnorm_canonical_name",
+    "rxnorm_tty",
+    "mapping_type",
+    "evidence_source",
+    "provenance_ids",
+    "reviewer",
+    "review_timestamp",
+    "review_decision",
+    "ambiguity_notes",
+    "runtime_authoritative"
+  ],
+  "properties": {
+    "schema_version": { "const": "inn-rxnorm-crosswalk-schema-v1" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "local_inn_surface": { "type": "string" },
+    "normalized_local_surface": { "type": "string" },
+    "rxnorm_name": { "type": "string" },
+    "rxcui": { "type": "string" },
+    "rxnorm_canonical_name": { "type": "string" },
+    "rxnorm_tty": { "type": "string" },
+    "mapping_type": { "type": "string" },
+    "evidence_source": { "type": "string" },
+    "provenance_ids": { "type": "string" },
+    "reviewer": { "type": "string" },
+    "review_timestamp": { "type": "string" },
+    "review_decision": {
+      "enum": [
+        "PROPOSED",
+        "REQUIRES_REVIEW",
+        "APPROVED",
+        "REJECTED",
+        "AMBIGUOUS",
+        "UNMAPPED"
+      ]
+    },
+    "ambiguity_notes": { "type": "string" },
+    "runtime_authoritative": { "enum": ["true", "false"] }
+  },
+  "additionalProperties": false
+}

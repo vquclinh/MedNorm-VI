@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rxnorm-kb-schema-v1",
+  "title": "MedNorm-VI RxNorm KB Concept or Relation Row v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ontology",
+    "snapshot_id",
+    "provenance_id",
+    "review_status",
+    "quality_flags",
+    "runtime_authoritative"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "rxcui",
+        "canonical_display_name",
+        "original_source_name",
+        "normalized_name",
+        "tty_values",
+        "source_vocabularies",
+        "suppress_values",
+        "source_version",
+        "source_file",
+        "source_record_id",
+        "extraction_method"
+      ]
+    },
+    {
+      "required": [
+        "source_rxcui",
+        "target_rxcui",
+        "rel",
+        "rela",
+        "source_vocabulary",
+        "direction",
+        "rui",
+        "suppress",
+        "source_row",
+        "endpoint_status"
+      ]
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "rxnorm-kb-schema-v1" },
+    "ontology": { "const": "rxnorm" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "rxcui": { "type": "string" },
+    "canonical_display_name": { "type": "string" },
+    "original_source_name": { "type": "string" },
+    "normalized_name": { "type": "string" },
+    "tty_values": { "type": "string" },
+    "source_vocabularies": { "type": "string" },
+    "suppress_values": { "type": "string" },
+    "preferred_rxaui": { "type": "string" },
+    "atom_count": { "type": "string" },
+    "active_atom_count": { "type": "string" },
+    "source_rxcui": { "type": "string" },
+    "target_rxcui": { "type": "string" },
+    "rel": { "type": "string" },
+    "rela": { "type": "string" },
+    "source_vocabulary": { "type": "string" },
+    "direction": { "enum": ["source_to_target", ""] },
+    "rui": { "type": "string" },
+    "suppress": { "type": "string" },
+    "source_row": { "type": "string" },
+    "endpoint_status": {
+      "enum": ["ok", "missing_source", "missing_target", "missing_both", ""]
+    },
+    "source_version": { "type": "string" },
+    "source_file": { "type": "string" },
+    "source_record_id": { "type": "string" },
+    "extraction_method": { "type": "string" },
+    "provenance_id": { "type": "string", "minLength": 1 },
+    "review_status": {
+      "enum": [
+        "SOURCE_VERBATIM",
+        "NORMALIZED_FROM_SOURCE",
+        "SUSPECT_TRUNCATION",
+        "MISSING_SOURCE_NAME",
+        "REQUIRES_REVIEW",
+        "REVIEWED_APPROVED",
+        "REVIEWED_REJECTED",
+        "AMBIGUOUS",
+        "UNMAPPED"
+      ]
+    },
+    "quality_flags": { "type": "string" },
+    "runtime_authoritative": { "enum": ["true", "false"] }
+  },
+  "additionalProperties": false
+}

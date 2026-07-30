@@ -109,7 +109,11 @@ TIER_STRUCTURED_PARTIAL = "structured_partial"
 TIER_INGREDIENT_ONLY = "ingredient_only"
 TIER_LEXICAL = "lexical"
 TIER_ORDER: tuple[str, ...] = (
-    TIER_STRUCTURED_EXACT, TIER_STRUCTURED_PARTIAL, TIER_INGREDIENT_ONLY, TIER_LEXICAL)
+    TIER_STRUCTURED_EXACT,
+    TIER_STRUCTURED_PARTIAL,
+    TIER_INGREDIENT_ONLY,
+    TIER_LEXICAL,
+)
 
 # Safety bound on emitted candidates. A bound, not the selection rule (Audit 0053 §9).
 CANDIDATE_BOUND = 20
@@ -118,12 +122,13 @@ RETRIEVAL_LIMIT = 24
 
 # Strength inside an SCDC/SCD name, e.g. "aspirin 162.5 MG", "... 500 mg / ...".
 _NAME_STRENGTH = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|ug|µg|ml|l|unit|units|iu|ui|meq|mmol|%)\b",
-    re.IGNORECASE)
+    r"(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|ug|µg|ml|l|unit|units|iu|ui|meq|mmol|%)\b", re.IGNORECASE
+)
 # Concentration inside a name, e.g. "500 MG in 5 mL", "250 mg/5 mL".
 _NAME_CONCENTRATION = re.compile(
     r"(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|unit|units)\s*(?:/|in)\s*(\d+(?:[.,]\d+)?)?\s*(ml|l)\b",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # Dose-form vocabulary as the snapshot writes it, mapped to the surface forms E1 emits
 # in Vietnamese clinical text. Only conservative, unambiguous pairs.
@@ -146,7 +151,15 @@ _DOSE_FORM_SYNONYMS: dict[str, tuple[str, ...]] = {
 # Release-form vocabulary. RxNorm writes these into the SCD name.
 _RELEASE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "extended_release": (
-        "extended release", "phong thich keo dai", "24 hr", "12 hr", "er", "xr", "xl", "sr"),
+        "extended release",
+        "phong thich keo dai",
+        "24 hr",
+        "12 hr",
+        "er",
+        "xr",
+        "xl",
+        "sr",
+    ),
     "delayed_release": ("delayed release", "enteric coated", "dr", "ec"),
     "immediate_release": ("immediate release", "ir"),
 }
@@ -165,9 +178,7 @@ _ROUTE_SYNONYMS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _canonical_from_synonyms(
-    surface: str, table: dict[str, tuple[str, ...]]
-) -> str | None:
+def _canonical_from_synonyms(surface: str, table: dict[str, tuple[str, ...]]) -> str | None:
     """Canonical concept for a surface form, or ``None`` when unrecognised.
 
     Longest synonym wins, so `extended release` is not reduced to `er` and `vien nang`
@@ -197,8 +208,10 @@ class FieldComparison:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "field": self.field_name, "verdict": self.verdict,
-            "mention": self.mention_value, "candidate": self.candidate_value,
+            "field": self.field_name,
+            "verdict": self.verdict,
+            "mention": self.mention_value,
+            "candidate": self.candidate_value,
             "note": self.note,
         }
 
@@ -226,10 +239,15 @@ class RxNormCandidateDecision:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "concept_id": self.concept_id, "tty": self.tty, "retained": self.retained,
-            "reason": self.reason, "tier": self.tier, "score": round(self.score, 4),
+            "concept_id": self.concept_id,
+            "tty": self.tty,
+            "retained": self.retained,
+            "reason": self.reason,
+            "tier": self.tier,
+            "score": round(self.score, 4),
             "retrieval_sources": list(self.retrieval_sources),
-            "graph_path": self.graph_path, "graph_depth": self.graph_depth,
+            "graph_path": self.graph_path,
+            "graph_depth": self.graph_depth,
             "matched_fields": list(self.matched_fields),
             "conflicting_fields": list(self.conflicting_fields),
             "not_stated_fields": list(self.not_stated_fields),
@@ -304,17 +322,21 @@ def _compare_strength(
     mention_unit = mention.strength_unit.unit if mention.strength_unit else None
     if mention.strength_unit is not None and mention_unit is None:
         return FieldComparison(
-            "strength", NOT_COMPARABLE, mention.strength_value.text,
-            note="mention unit not recognised by the conservative normalizer")
+            "strength",
+            NOT_COMPARABLE,
+            mention.strength_value.text,
+            note="mention unit not recognised by the conservative normalizer",
+        )
     candidate_strengths = _candidate_strengths(candidate_name)
     if not candidate_strengths:
         # An ingredient or brand-name concept states no strength. That is not a
         # conflict — it is a less specific concept, which the tier system handles.
-        note = ("candidate states no strength"
-                if tty in (TTY_INGREDIENT | TTY_BRAND_NAME)
-                else "no parsable strength in candidate name")
-        return FieldComparison(
-            "strength", NOT_COMPARABLE, mention.strength_value.text, note=note)
+        note = (
+            "candidate states no strength"
+            if tty in (TTY_INGREDIENT | TTY_BRAND_NAME)
+            else "no parsable strength in candidate name"
+        )
+        return FieldComparison("strength", NOT_COMPARABLE, mention.strength_value.text, note=note)
 
     mention_value = mention.strength_value.value
     mention_mg = strength_in_mg(mention_value, mention_unit)
@@ -323,42 +345,57 @@ def _compare_strength(
             continue
         if mention_unit is not None and unit == mention_unit and value == mention_value:
             return FieldComparison(
-                "strength", MATCH, f"{mention_value:g} {mention_unit}",
-                f"{value:g} {unit}")
+                "strength", MATCH, f"{mention_value:g} {mention_unit}", f"{value:g} {unit}"
+            )
         candidate_mg = strength_in_mg(value, unit)
-        if mention_mg is not None and candidate_mg is not None and (
-                abs(candidate_mg - mention_mg) < 1e-9):
+        if (
+            mention_mg is not None
+            and candidate_mg is not None
+            and (abs(candidate_mg - mention_mg) < 1e-9)
+        ):
             return FieldComparison(
-                "strength", MATCH, f"{mention_value:g} {mention_unit}",
-                f"{value:g} {unit}", note="matched after mass conversion")
+                "strength",
+                MATCH,
+                f"{mention_value:g} {mention_unit}",
+                f"{value:g} {unit}",
+                note="matched after mass conversion",
+            )
     stated = ", ".join(f"{v:g} {u}" for v, u in candidate_strengths[:4])
     return FieldComparison(
-        "strength", CONFLICT, f"{mention_value:g} {mention_unit or '?'}", stated,
-        note="candidate states a different strength for a comparable unit")
+        "strength",
+        CONFLICT,
+        f"{mention_value:g} {mention_unit or '?'}",
+        stated,
+        note="candidate states a different strength for a comparable unit",
+    )
 
 
-def _compare_unit(
-    mention: StructuredMedicationMention, candidate_name: str
-) -> FieldComparison:
+def _compare_unit(mention: StructuredMedicationMention, candidate_name: str) -> FieldComparison:
     """Unit-family compatibility, checked independently of the numeric value."""
     if mention.strength_unit is None:
         return FieldComparison("unit", NOT_STATED)
     mention_unit = mention.strength_unit.unit
     if mention_unit is None:
         return FieldComparison(
-            "unit", NOT_COMPARABLE, mention.strength_unit.text,
-            note="unit not in the conservative normalization table")
+            "unit",
+            NOT_COMPARABLE,
+            mention.strength_unit.text,
+            note="unit not in the conservative normalization table",
+        )
     mention_family = unit_family(mention_unit)
     candidate_units = {unit for _value, unit in _candidate_strengths(candidate_name)}
     if not candidate_units:
         return FieldComparison("unit", NOT_COMPARABLE, mention_unit)
     families = {unit_family(u) for u in candidate_units}
     if mention_family in families:
-        return FieldComparison(
-            "unit", MATCH, mention_unit, ",".join(sorted(candidate_units)))
+        return FieldComparison("unit", MATCH, mention_unit, ",".join(sorted(candidate_units)))
     return FieldComparison(
-        "unit", CONFLICT, mention_unit, ",".join(sorted(candidate_units)),
-        note=f"unit family {mention_family} absent from candidate")
+        "unit",
+        CONFLICT,
+        mention_unit,
+        ",".join(sorted(candidate_units)),
+        note=f"unit family {mention_family} absent from candidate",
+    )
 
 
 def _ratio_mg_per_ml(match: re.Match[str]) -> float | None:
@@ -387,25 +424,38 @@ def _compare_concentration(
     candidate_match = _NAME_CONCENTRATION.search(candidate_name)
     if mention_match is None:
         return FieldComparison(
-            "concentration", NOT_COMPARABLE, mention.concentration.text,
-            note="mention concentration not parsable")
+            "concentration",
+            NOT_COMPARABLE,
+            mention.concentration.text,
+            note="mention concentration not parsable",
+        )
     if candidate_match is None:
         return FieldComparison(
-            "concentration", NOT_COMPARABLE, mention.concentration.text,
-            note="candidate states no concentration")
+            "concentration",
+            NOT_COMPARABLE,
+            mention.concentration.text,
+            note="candidate states no concentration",
+        )
     mention_ratio = _ratio_mg_per_ml(mention_match)
     candidate_ratio = _ratio_mg_per_ml(candidate_match)
     if mention_ratio is None or candidate_ratio is None:
         return FieldComparison(
-            "concentration", NOT_COMPARABLE, mention.concentration.text,
-            note="units outside the conservative conversion table")
+            "concentration",
+            NOT_COMPARABLE,
+            mention.concentration.text,
+            note="units outside the conservative conversion table",
+        )
     if abs(mention_ratio - candidate_ratio) < 1e-9:
         return FieldComparison(
-            "concentration", MATCH, mention.concentration.text,
-            candidate_match.group(0))
+            "concentration", MATCH, mention.concentration.text, candidate_match.group(0)
+        )
     return FieldComparison(
-        "concentration", CONFLICT, mention.concentration.text, candidate_match.group(0),
-        note="different mg-per-mL concentration")
+        "concentration",
+        CONFLICT,
+        mention.concentration.text,
+        candidate_match.group(0),
+        note="different mg-per-mL concentration",
+    )
 
 
 def _compare_vocabulary(
@@ -420,18 +470,28 @@ def _compare_vocabulary(
     mention_concept = _canonical_from_synonyms(mention_surface, table)
     if mention_concept is None:
         return FieldComparison(
-            field_name, NOT_COMPARABLE, mention_surface,
-            note="surface form not in the conservative vocabulary")
+            field_name,
+            NOT_COMPARABLE,
+            mention_surface,
+            note="surface form not in the conservative vocabulary",
+        )
     candidate_concept = _canonical_from_synonyms(candidate_name, table)
     if candidate_concept is None:
         return FieldComparison(
-            field_name, NOT_COMPARABLE, mention_concept,
-            note="candidate name states no comparable value")
+            field_name,
+            NOT_COMPARABLE,
+            mention_concept,
+            note="candidate name states no comparable value",
+        )
     if candidate_concept == mention_concept:
         return FieldComparison(field_name, MATCH, mention_concept, candidate_concept)
     return FieldComparison(
-        field_name, CONFLICT, mention_concept, candidate_concept,
-        note="candidate states a different value")
+        field_name,
+        CONFLICT,
+        mention_concept,
+        candidate_concept,
+        note="candidate states a different value",
+    )
 
 
 _CONFLICT_TO_REASON = {
@@ -458,22 +518,28 @@ def compare_candidate(
         _compare_unit(mention, name),
         _compare_concentration(mention, name),
         _compare_vocabulary(
-            "dose_form", mention.dose_form.text if mention.dose_form else None,
-            searchable, _DOSE_FORM_SYNONYMS),
+            "dose_form",
+            mention.dose_form.text if mention.dose_form else None,
+            searchable,
+            _DOSE_FORM_SYNONYMS,
+        ),
         _compare_vocabulary(
-            "release", mention.release.text if mention.release else None,
-            searchable, _RELEASE_SYNONYMS),
+            "release",
+            mention.release.text if mention.release else None,
+            searchable,
+            _RELEASE_SYNONYMS,
+        ),
         _compare_vocabulary(
-            "route", mention.route.text if mention.route else None,
-            searchable, _ROUTE_SYNONYMS),
+            "route", mention.route.text if mention.route else None, searchable, _ROUTE_SYNONYMS
+        ),
     )
 
 
 def _ingredient_needles(mention: StructuredMedicationMention) -> tuple[str, ...]:
     """Surfaces that count as naming this mention's ingredient.
 
-    Includes the INN bridge, because `paracetamol` occurs in zero records of the
-    locked snapshot while its USAN name `acetaminophen` is an ingredient concept.
+    Governed crosswalk names can extend this set only after approval. The legacy
+    INN bridge is review inventory and does not widen runtime retrieval in 3A.
     """
     if mention.ingredient is None:
         return ()
@@ -483,9 +549,7 @@ def _ingredient_needles(mention: StructuredMedicationMention) -> tuple[str, ...]
     return tuple(n for n in needles if n)
 
 
-def _ingredient_supported(
-    needles: Sequence[str], index: LocalIndex, concept_id: str
-) -> bool:
+def _ingredient_supported(needles: Sequence[str], index: LocalIndex, concept_id: str) -> bool:
     """Whether one of the ingredient surfaces appears in the candidate's names.
 
     Checked against canonical name, aliases and adjacent ingredient names, because
@@ -495,18 +559,21 @@ def _ingredient_supported(
     if not needles:
         return True
     haystacks = (
-        name_of(index, concept_id), *aliases_of(index, concept_id),
-        *attached_ingredients(index, concept_id))
+        name_of(index, concept_id),
+        *aliases_of(index, concept_id),
+        *attached_ingredients(index, concept_id),
+    )
     normalized = [normalize_surface(h) for h in haystacks if h]
     return any(needle in hay for needle in needles for hay in normalized)
 
 
-def _tier_for(
-    tty: str, matched: Sequence[str], comparisons: Sequence[FieldComparison]
-) -> str:
+def _tier_for(tty: str, matched: Sequence[str], comparisons: Sequence[FieldComparison]) -> str:
     stated = [c for c in comparisons if c.verdict in {MATCH, CONFLICT}]
-    if stated and all(c.verdict == MATCH for c in stated) and tty in (
-            TTY_CLINICAL_DRUG | TTY_BRANDED_DRUG | TTY_COMPONENT):
+    if (
+        stated
+        and all(c.verdict == MATCH for c in stated)
+        and tty in (TTY_CLINICAL_DRUG | TTY_BRANDED_DRUG | TTY_COMPONENT)
+    ):
         return TIER_STRUCTURED_EXACT
     if matched:
         return TIER_STRUCTURED_PARTIAL
@@ -527,9 +594,7 @@ def _concept_key(concept_id: str) -> tuple[int, int, str]:
     return (0, int(concept_id), "") if concept_id.isdigit() else (1, 0, concept_id)
 
 
-def _query_label(
-    structured: StructuredMedicationMention, term: str, is_last: bool
-) -> str:
+def _query_label(structured: StructuredMedicationMention, term: str, is_last: bool) -> str:
     key = normalize_surface(term)
     if structured.ingredient is not None and key == structured.ingredient.normalized:
         return "query:ingredient"
@@ -548,9 +613,11 @@ def link_rxnorm_structured(
     structured = build_structured_mention(hypothesis)
     if index.index_type != "rxnorm":
         return RxNormLinkReport(
-            hypothesis.hypothesis_id, structured,
+            hypothesis.hypothesis_id,
+            structured,
             traversal_notes=("wrong_index_type",),
-            snapshot_id=index.source_snapshot_id)
+            snapshot_id=index.source_snapshot_id,
+        )
 
     # --- retrieval, on structured terms rather than only the whole surface ------
     hits: dict[str, CandidateHit] = {}
@@ -567,9 +634,12 @@ def link_rxnorm_structured(
             bucket.add(label)
 
     # --- traversal, from ingredient-level seeds --------------------------------
-    seeds = tuple(sorted(
-        (cid for cid in hits if tty_of(index, cid) in TTY_INGREDIENT),
-        key=lambda cid: (-hits[cid].score, _concept_key(cid))))
+    seeds = tuple(
+        sorted(
+            (cid for cid in hits if tty_of(index, cid) in TTY_INGREDIENT),
+            key=lambda cid: (-hits[cid].score, _concept_key(cid)),
+        )
+    )
     paths, notes = traverse_ingredient_chain(index, seeds or tuple(sorted(hits)))
     path_by_id: dict[str, GraphPath] = {p.concept_id: p for p in paths}
 
@@ -581,7 +651,9 @@ def link_rxnorm_structured(
             # curated INN equivalence rather than the name the clinician wrote.
             notes = notes + tuple(
                 f"inn_bridge:{normalize_surface(structured.ingredient.text)}->"
-                f"{normalize_surface(name)}:{INN_BRIDGE_STATUS}" for name in bridged)
+                f"{normalize_surface(name)}:{INN_BRIDGE_STATUS}"
+                for name in bridged
+            )
         if not any(tty_of(index, cid) in TTY_INGREDIENT for cid in hits):
             notes = notes + ("ingredient_absent_from_snapshot",)
 
@@ -591,36 +663,64 @@ def link_rxnorm_structured(
         path = path_by_id.get(concept_id)
         retrieval_score = hits[concept_id].score if concept_id in hits else 0.0
         base: dict[str, Any] = dict(
-            concept_id=concept_id, tty=tty,
+            concept_id=concept_id,
+            tty=tty,
             retrieval_sources=tuple(sorted(sources.get(concept_id, set()))),
             graph_path=path.as_text() if path else "",
             graph_depth=path.depth if path else 0,
-            snapshot_id=index.source_snapshot_id)
+            snapshot_id=index.source_snapshot_id,
+        )
 
         if not index.exists(concept_id):
-            decisions.append(RxNormCandidateDecision(
-                retained=False, reason=DROP_NOT_IN_SNAPSHOT, tier=TIER_LEXICAL,
-                score=0.0, **base))
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False,
+                    reason=DROP_NOT_IN_SNAPSHOT,
+                    tier=TIER_LEXICAL,
+                    score=0.0,
+                    **base,
+                )
+            )
             continue
         if is_suppressed(index, concept_id):
-            decisions.append(RxNormCandidateDecision(
-                retained=False, reason=DROP_SUPPRESSED_CONCEPT, tier=TIER_LEXICAL,
-                score=0.0, **base))
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False,
+                    reason=DROP_SUPPRESSED_CONCEPT,
+                    tier=TIER_LEXICAL,
+                    score=0.0,
+                    **base,
+                )
+            )
             continue
         if tty not in TTY_TERMINAL:
             # Groupers and synonyms are evidence, never emitted codes.
-            note = ("grouper/synonym TTY is evidence, not a prescribable concept"
-                    if tty in TTY_GROUPER else "non-terminal TTY")
-            decisions.append(RxNormCandidateDecision(
-                retained=False, reason=DROP_NON_TERMINAL_TTY, tier=TIER_LEXICAL,
-                score=0.0,
-                comparisons=(FieldComparison("tty", NOT_COMPARABLE, "", tty, note),),
-                **base))
+            note = (
+                "grouper/synonym TTY is evidence, not a prescribable concept"
+                if tty in TTY_GROUPER
+                else "non-terminal TTY"
+            )
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False,
+                    reason=DROP_NON_TERMINAL_TTY,
+                    tier=TIER_LEXICAL,
+                    score=0.0,
+                    comparisons=(FieldComparison("tty", NOT_COMPARABLE, "", tty, note),),
+                    **base,
+                )
+            )
             continue
         if not _ingredient_supported(needles, index, concept_id):
-            decisions.append(RxNormCandidateDecision(
-                retained=False, reason=DROP_INGREDIENT_MISMATCH, tier=TIER_LEXICAL,
-                score=0.0, **base))
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False,
+                    reason=DROP_INGREDIENT_MISMATCH,
+                    tier=TIER_LEXICAL,
+                    score=0.0,
+                    **base,
+                )
+            )
             continue
 
         comparisons = compare_candidate(structured, index, concept_id)
@@ -629,64 +729,88 @@ def link_rxnorm_structured(
         not_stated = tuple(c.field_name for c in comparisons if c.verdict == NOT_STATED)
         ingredients = attached_ingredients(index, concept_id)
         detail: dict[str, Any] = dict(
-            comparisons=comparisons, matched_fields=matched,
-            conflicting_fields=conflicting, not_stated_fields=not_stated,
+            comparisons=comparisons,
+            matched_fields=matched,
+            conflicting_fields=conflicting,
+            not_stated_fields=not_stated,
             is_combination=len(ingredients) > 1,
-            brand_names=attached_brand_names(index, concept_id)[:4], **base)
+            brand_names=attached_brand_names(index, concept_id)[:4],
+            **base,
+        )
 
         if conflicting:
             # Hard-negative suppression (spec §10.2). The first conflicting field in
             # declaration order names the reason, so the code is stable across runs.
             reason = next(
-                _CONFLICT_TO_REASON[c.field_name] for c in comparisons
-                if c.verdict == CONFLICT and c.field_name in _CONFLICT_TO_REASON)
-            decisions.append(RxNormCandidateDecision(
-                retained=False, reason=reason, tier=TIER_LEXICAL, score=0.0, **detail))
+                _CONFLICT_TO_REASON[c.field_name]
+                for c in comparisons
+                if c.verdict == CONFLICT and c.field_name in _CONFLICT_TO_REASON
+            )
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False, reason=reason, tier=TIER_LEXICAL, score=0.0, **detail
+                )
+            )
             continue
 
         tier = _tier_for(tty, matched, comparisons)
         if tier == TIER_STRUCTURED_EXACT:
             reason = KEEP_STRUCTURED_MATCH
         elif tier == TIER_INGREDIENT_ONLY:
-            reason = (KEEP_EXACT_INGREDIENT
-                      if "exact" in sources.get(concept_id, set())
-                      else KEEP_INGREDIENT_FALLBACK)
+            reason = (
+                KEEP_EXACT_INGREDIENT
+                if "exact" in sources.get(concept_id, set())
+                else KEEP_INGREDIENT_FALLBACK
+            )
         elif matched:
             reason = KEEP_STRUCTURED_MATCH
         else:
             reason = KEEP_LEXICAL_ONLY
-        decisions.append(RxNormCandidateDecision(
-            retained=True, reason=reason, tier=tier,
-            score=_score(tier, base["graph_depth"], retrieval_score, tty), **detail))
+        decisions.append(
+            RxNormCandidateDecision(
+                retained=True,
+                reason=reason,
+                tier=tier,
+                score=_score(tier, base["graph_depth"], retrieval_score, tty),
+                **detail,
+            )
+        )
 
     # Deterministic ordering, then the safety bound. Anything cut by the bound is
     # recorded as DROP_BUDGET, so "20 candidates" never silently means "only 20 exist".
     retained = sorted(
         (d for d in decisions if d.retained),
-        key=lambda d: (TIER_ORDER.index(d.tier), -d.score, _concept_key(d.concept_id)))
+        key=lambda d: (TIER_ORDER.index(d.tier), -d.score, _concept_key(d.concept_id)),
+    )
     final: list[RxNormCandidateDecision] = list(retained[:limit])
     final.extend(
-        RxNormCandidateDecision(**{
-            **_decision_fields(d), "retained": False, "reason": DROP_BUDGET})
-        for d in retained[limit:])
+        RxNormCandidateDecision(**{**_decision_fields(d), "retained": False, "reason": DROP_BUDGET})
+        for d in retained[limit:]
+    )
     final.extend(d for d in decisions if not d.retained)
     return RxNormLinkReport(
-        hypothesis.hypothesis_id, structured, tuple(final), notes,
-        index.source_snapshot_id)
+        hypothesis.hypothesis_id, structured, tuple(final), notes, index.source_snapshot_id
+    )
 
 
 def _decision_fields(decision: RxNormCandidateDecision) -> dict[str, Any]:
     return {
-        "concept_id": decision.concept_id, "tty": decision.tty,
-        "retained": decision.retained, "reason": decision.reason,
-        "tier": decision.tier, "score": decision.score,
+        "concept_id": decision.concept_id,
+        "tty": decision.tty,
+        "retained": decision.retained,
+        "reason": decision.reason,
+        "tier": decision.tier,
+        "score": decision.score,
         "retrieval_sources": decision.retrieval_sources,
-        "graph_path": decision.graph_path, "graph_depth": decision.graph_depth,
+        "graph_path": decision.graph_path,
+        "graph_depth": decision.graph_depth,
         "matched_fields": decision.matched_fields,
         "conflicting_fields": decision.conflicting_fields,
         "not_stated_fields": decision.not_stated_fields,
-        "comparisons": decision.comparisons, "snapshot_id": decision.snapshot_id,
-        "is_combination": decision.is_combination, "brand_names": decision.brand_names,
+        "comparisons": decision.comparisons,
+        "snapshot_id": decision.snapshot_id,
+        "is_combination": decision.is_combination,
+        "brand_names": decision.brand_names,
     }
 
 
@@ -707,8 +831,7 @@ def link_rxnorm(
         LinkedCandidate(
             code=decision.concept_id,
             score=decision.score,
-            channels=tuple(
-                c for c in decision.retrieval_sources if not c.startswith("query:")),
+            channels=tuple(c for c in decision.retrieval_sources if not c.startswith("query:")),
             snapshot_id=decision.snapshot_id,
             evidence=(
                 f"tty:{decision.tty}",
@@ -721,11 +844,13 @@ def link_rxnorm(
         for decision in report.retained
     )
     suppressions = tuple(
-        f"suppressed:{d.reason}:{d.concept_id}" for d in report.suppressed
-        if d.reason in set(_CONFLICT_TO_REASON.values()))[:8]
+        f"suppressed:{d.reason}:{d.concept_id}"
+        for d in report.suppressed
+        if d.reason in set(_CONFLICT_TO_REASON.values())
+    )[:8]
     return LinkerResult(
-        hypothesis.hypothesis_id, candidates,
-        tuple(report.traversal_notes) + suppressions)
+        hypothesis.hypothesis_id, candidates, tuple(report.traversal_notes) + suppressions
+    )
 
 
 __all__ = [

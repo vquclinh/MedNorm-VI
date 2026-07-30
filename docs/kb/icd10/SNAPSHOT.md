@@ -1,40 +1,67 @@
-# Local Vietnamese ICD-10 Snapshot Interface (Phase 1C-A)
+# ICD-10 Vietnamese KB Snapshot Status (Milestone 3A)
 
-A **local-only**, offline interface for a manually acquired Vietnamese ICD-10
-table. No network, no real ICD content in the repo (synthetic fixtures only), and
-**no final diagnosis code**.
+Milestone 3A produced a versioned candidate ICD-10 KB freeze from the existing
+local TT06-2026 derived CSV. No external ICD data was downloaded or used.
 
-## Not organizer-exact; configurable loader
+The candidate snapshot is **not active**. The currently verified runtime index
+remains:
 
-The organizer uses a "Vietnamese version" of ICD-10, but the exact source,
-version, and format are **undisclosed** (`UNRES-ICD-SOURCE`). We do **not** assume
-WHO vs ICD-10-CM vs a Ministry-of-Health edition unless a manifest declares it.
-Because the columns vary by source, the loader is driven by a `ColumnMap` (code /
-label_vi / label_en / parent / aliases / chapter) rather than a hard-coded file.
+```text
+indices/icd10_vi/tt06-2026/index.json
+```
 
-## Model + normalization
+## Candidate Snapshot
 
-`IcdConcept` stores the code exactly as supplied plus reversible `dotted`
-(`A09.9`) and `undotted` (`A099`) forms, Vietnamese/English labels, aliases,
-parent/children, and chapter. `normalization` converts dotted↔undotted and
-computes specificity. Whether the organizer expects dotted or undotted output,
-and what specificity is required, are unresolved (`UNRES-ICD-DOTTED`,
-`UNRES-ICD-SPECIFICITY`); the interface picks no output policy.
+| Field | Value |
+| --- | --- |
+| Snapshot ID | `icd10-vi-tt06-2026-kb-v1-candidate-52c4de3abfd25dc4` |
+| Generated path | `data/derived/kb_freeze/0057_candidate_v2/icd10_vi_tt06_2026/` |
+| Source manifest | `data/manifests/icd10-vi-tt06-2026-official.yaml` |
+| Source table | `data/derived/icd10_vi/tt06-2026/icd10_vi_normalized.csv` |
+| Validation status | `CANDIDATE_FOR_FREEZE_REVIEW_REQUIRED` |
+| Runtime activation | Deferred |
 
-## Comparison
+Generated CSV/manifest artifacts under `data/derived/` are ignored by Git. The
+tracked contract is in `schemas/kb/icd10-kb-schema-v1.json`; the build entry point
+is `python -m mednorm_vi.kb.freeze build-icd10`.
 
-`compare-icd-snapshots` reports missing codes, format differences (dotted vs
-undotted supplied), label differences, hierarchy (parent) changes, alias
-differences, and specificity differences between two local snapshots.
+## 3A Counts
 
-## Commands
+| Metric | Count |
+| --- | ---: |
+| Concepts | 15,308 |
+| Hierarchy edges retained for review | 12,968 |
+| Source-supported hierarchy edges | 0 |
+| Inferred parent edges requiring review | 12,968 |
+| Suspect canonical names | 3,470 |
+| Missing names | 0 |
+| Duplicate code rows in freeze output | 0 |
+| Review queue rows | 17,123 |
 
-    python -m mednorm_vi.phase1c_foundation.cli inspect-icd-snapshot \
-        --table TABLE.csv --columns COLUMNS.yaml --source SRC --version VER
-    python -m mednorm_vi.phase1c_foundation.cli compare-icd-snapshots \
-        --left A.csv --right B.csv --columns COLUMNS.yaml
+## Disposition
 
-## Limitations
+The prior normalized ICD table preserved useful local codes and labels, but its
+hierarchy evidence is not source-supported in the frozen contract. Parent edges
+are retained as `legacy_code_prefix_inference`, marked `REQUIRES_REVIEW`, and
+`runtime_authoritative=false`.
 
-- Hierarchy is inferred from code structure when a parent column is absent.
-- Lookups iterate the snapshot; indexing is a documented follow-up.
+Canonical names that look like PDF fragments or truncated extraction output are
+flagged as `SUSPECT_TRUNCATION`. They are not repaired from medical knowledge.
+Only another existing authorized source record can repair a name.
+
+## Hashes
+
+| Artifact | Rows | artifact_sha256 | canonical_content_sha256 |
+| --- | ---: | --- | --- |
+| `icd10_concepts_v1.csv` | 15,308 | `92f8319690eee9cb2dfd4e715bcb9d996a4886506af7400b558f29694ee13c2f` | `2dfbab71a58c7f937fad69dfc08fba09f09f979945106a656ecdfe9819537555` |
+| `icd10_hierarchy_edges_v1.csv` | 12,968 | `4c2e34e131e1dc2e3019259095b12966f3f07e18691f70b3996c31e6949e8c0f` | `d173e9e17a56b9251cf06d2e77d76fbde965c368137186397f7d4df0794c51a5` |
+| `icd10_aliases_v1.csv` | 0 | `6685a21f7bbc19602ef3a24f7bd2433f456b4038fadf34027010cb90380098a6` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `icd10_provenance_v1.csv` | 15,308 | `b7d8bb7fc0c1497f6e5482c16cceb501fa2ea45b89fed17a5eaf1130d95bd484` | `aa18908f6d580e25a1fe26b600a62aa014bcd5a008e2c4d815903e7bef94ecac` |
+| `icd10_review_queue_v1.csv` | 17,123 | `095e8a576a2e40547ce91d75dce43e7525bd6fef8cd8fcb2bccbd9009407c230` | `1b7732f5ddedef0d6af68c51d00006c4d16022958c0b5cd50f9aa5bbea23bfdd` |
+
+## Migration Rule
+
+Do not switch `configs/pipeline/full_v1.yaml` or the runtime index paths to the
+3A candidate snapshot until human review resolves the truncated-name and
+source-supported hierarchy queues, or an owner-approved policy explicitly accepts
+the candidate limitations.

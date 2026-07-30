@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "icd10-kb-schema-v1",
+  "title": "MedNorm-VI ICD-10 KB Concept or Hierarchy Row v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ontology",
+    "snapshot_id",
+    "provenance_id",
+    "review_status",
+    "quality_flags",
+    "runtime_authoritative"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "code",
+        "canonical_display_name",
+        "original_source_name",
+        "source_version",
+        "source_file",
+        "source_record_id",
+        "extraction_method"
+      ]
+    },
+    {
+      "required": [
+        "parent_code",
+        "child_code",
+        "relation_label",
+        "direction",
+        "source_evidence"
+      ]
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "icd10-kb-schema-v1" },
+    "ontology": { "const": "icd10_vi" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "code": { "type": "string", "minLength": 3 },
+    "display_code": { "type": "string" },
+    "lookup_code": { "type": "string" },
+    "canonical_display_name": { "type": "string" },
+    "original_source_name": { "type": "string" },
+    "parent_code": { "type": "string" },
+    "child_code": { "type": "string" },
+    "relation_label": { "type": "string" },
+    "direction": { "enum": ["parent_to_child", "child_to_parent", ""] },
+    "source_evidence": { "type": "string" },
+    "source_version": { "type": "string", "minLength": 1 },
+    "source_file": { "type": "string", "minLength": 1 },
+    "source_record_id": { "type": "string" },
+    "extraction_method": { "type": "string", "minLength": 1 },
+    "provenance_id": { "type": "string", "minLength": 1 },
+    "review_status": {
+      "enum": [
+        "SOURCE_VERBATIM",
+        "NORMALIZED_FROM_SOURCE",
+        "SUSPECT_TRUNCATION",
+        "MISSING_SOURCE_NAME",
+        "REQUIRES_REVIEW",
+        "REVIEWED_APPROVED",
+        "REVIEWED_REJECTED",
+        "AMBIGUOUS",
+        "UNMAPPED"
+      ]
+    },
+    "quality_flags": { "type": "string" },
+    "runtime_authoritative": { "enum": ["true", "false"] }
+  },
+  "additionalProperties": false
+}
