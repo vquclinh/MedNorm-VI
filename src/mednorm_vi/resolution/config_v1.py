@@ -70,6 +70,10 @@ class BoundaryPolicy:
 
 @dataclass(frozen=True, slots=True)
 class OverlapPolicy:
+    # Migrated from the retired Phase-1C-A `resolver_v1.yaml:abstain_on_conflict`
+    # (Audit 0055). When a same-type near-complete competition is TIED, mark both
+    # sides UNRESOLVED instead of picking one. Abstention is not rejection.
+    abstain_on_conflict: bool = False
     near_complete_iou: float = 0.6
     competition_penalty: float = 0.2
     suppress_cross_type: bool = False
@@ -140,6 +144,7 @@ class ResolverV1Config:
                 "max_expand_chars": self.boundary.max_expand_chars,
             },
             "overlap": {
+                "abstain_on_conflict": self.overlap.abstain_on_conflict,
                 "near_complete_iou": self.overlap.near_complete_iou,
                 "competition_penalty": self.overlap.competition_penalty,
                 "suppress_cross_type": self.overlap.suppress_cross_type,
@@ -228,6 +233,7 @@ def load_resolver_v1_config(path: str | Path = DEFAULT_CONFIG_PATH) -> ResolverV
             },
         ),
         overlap=OverlapPolicy(
+            abstain_on_conflict=bool(overlap_raw.get("abstain_on_conflict", False)),
             near_complete_iou=float(overlap_raw.get("near_complete_iou", 0.6)),
             competition_penalty=float(overlap_raw.get("competition_penalty", 0.2)),
             suppress_cross_type=bool(overlap_raw.get("suppress_cross_type", False)),

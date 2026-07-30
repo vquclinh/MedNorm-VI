@@ -17,7 +17,7 @@ from typing import Any
 from ..kb.rxnorm import discover_rrf
 from ..organizer_policy import load_organizer_registry
 from ..position import load_position_registry
-from ..resolution import ResolverConfig
+from ..resolution import load_resolver_v1_config
 from ..resources import load_manifest, validate_manifest
 from ..resources.ner import load_ner_manifest, validate_ner_manifest
 
@@ -26,7 +26,10 @@ from ..resources.ner import load_ner_manifest, validate_ner_manifest
 class DoctorPaths:
     organizer_dir: Path = Path("configs/organizer")
     position_config: Path = Path("configs/organizer/position_policies_v1.yaml")
-    resolver_config: Path = Path("configs/resolution/resolver_v1.yaml")
+    # The canonical L4 config (spec section 7). Audit 0055 replaced
+    # configs/resolution/resolver_v1.yaml, which belonged to the retired
+    # Phase-1C-A resolver and was deleted with it.
+    l4_config: Path = Path("configs/resolution/boundary_type_resolver_v1.yaml")
     manifests_dir: Path = Path("data/manifests")
     resource_templates_dir: Path = Path("configs/resources")
     ner_manifests_dir: Path = Path("configs/resources/ner")
@@ -157,9 +160,27 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
     if not icd_source_available:
         missing.append(f"ICD-10 VI official source PDFs under {p.icd_dir}/")
 
-    resolver_ready = p.resolver_config.is_file()
-    if resolver_ready:
-        ResolverConfig.load(p.resolver_config)  # validates loadability
+    # Validate the CANONICAL L4 config: that it loads, and that the boundary
+    # policies migrated in Audit 0055 are actually present. A config that loads but
+    # declares no policy would silently disable the boundary ladder.
+    l4_ready = p.l4_config.is_file()
+    l4_version = ""
+    l4_sha256 = ""
+    l4_group_preference: dict[str, str] = {}
+    l4_abstain_on_conflict: bool | None = None
+    if l4_ready:
+        l4 = load_resolver_v1_config(p.l4_config)  # raises if unloadable
+        l4_version = l4.config_version
+        l4_sha256 = l4.config_sha256
+        l4_group_preference = dict(sorted(l4.boundary.group_preference.items()))
+        l4_abstain_on_conflict = l4.overlap.abstain_on_conflict
+        for role in ("medication", "test_result"):
+            if not l4_group_preference.get(role):
+                missing.append(
+                    f"canonical L4 config {p.l4_config} declares no "
+                    f"boundary.group_preference.{role}")
+    else:
+        missing.append(f"canonical L4 config {p.l4_config}")
 
     data: dict[str, Any] = {
         "phase": "1C-A",
@@ -196,8 +217,15 @@ def build_report(paths: DoctorPaths | None = None) -> DoctorReport:
             "root": str(icd_derived_dir) if icd_derived_dir.is_dir() else None,
             "files": icd_files,
         },
-        "resolver": {"ready": resolver_ready,
-                     "config": str(p.resolver_config) if resolver_ready else None},
+        "l4_resolver": {
+            "ready": l4_ready,
+            "entry_point": "resolution.canonical.resolve_lattice_to_hypotheses",
+            "config": str(p.l4_config) if l4_ready else None,
+            "config_version": l4_version,
+            "config_sha256": l4_sha256,
+            "group_preference": l4_group_preference,
+            "abstain_on_conflict": l4_abstain_on_conflict,
+        },
         "no_network": True,
     }
     return DoctorReport(data=data, missing_local_resources=tuple(missing))
@@ -233,7 +261,15 @@ def render_report(report: DoctorReport) -> str:
                  f"{'available' if d['icd_snapshot']['available'] else 'NOT PREPARED / MISSING'}")
     lines.append(f"RxNorm snapshot        : "
                  f"{'available' if d['rxnorm_snapshot']['available'] else 'MISSING (local)'}")
-    lines.append(f"resolver               : {'ready' if d['resolver']['ready'] else 'NOT READY'}")
+    l4 = d["l4_resolver"]
+    lines.append(
+        f"canonical L4          : {'ready' if l4['ready'] else 'NOT READY'} "
+        f"({l4['entry_point']})")
+    if l4["ready"]:
+        lines.append(f"  config              : {l4['config']}")
+        lines.append(f"  config sha256       : {l4['config_sha256']}")
+        lines.append(f"  boundary policy     : {l4['group_preference']}")
+        lines.append(f"  abstain on tie      : {l4['abstain_on_conflict']}")
     lines.append("network access         : none")
     if report.missing_local_resources:
         lines.append("missing local resources:")

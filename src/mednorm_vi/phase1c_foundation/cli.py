@@ -29,7 +29,7 @@ from .doctor import DoctorPaths, build_report, render_report
 def _cmd_doctor(args: argparse.Namespace) -> int:
     paths = DoctorPaths(
         organizer_dir=Path(args.organizer_dir), position_config=Path(args.position_config),
-        resolver_config=Path(args.resolver_config), manifests_dir=Path(args.manifests_dir),
+        l4_config=Path(args.l4_config), manifests_dir=Path(args.manifests_dir),
         rxnorm_dir=Path(args.rxnorm_dir), icd_dir=Path(args.icd_dir))
     report = build_report(paths)
     if args.json:
@@ -158,21 +158,50 @@ def _cmd_compare_icd(args: argparse.Namespace) -> int:
 
 
 def _cmd_resolve(args: argparse.Namespace) -> int:
+    """L1 -> L2/L3 -> unified lattice -> **canonical L4**, as a debug view.
+
+    Audit 0055 migrated this command off the retired Phase-1C-A resolver. It now
+    calls exactly the functions the canonical runner calls —
+    ``lattice.builder.build_span_lattice`` then
+    ``resolution.canonical.resolve_lattice_to_hypotheses`` — and stops at L4. It is
+    deliberately **not** a second inference runner: there is no L5-L9 here, no
+    linking, no packaging and no output.zip. For a full run use
+    ``python -m mednorm_vi.inference.cli run``.
+    """
     from ..deterministic_baseline import Phase1BConfig, run_phase1b
     from ..document_intelligence import analyze_document
     from ..document_intelligence.builder import load_config as load_l1_config
-    from ..resolution import ResolverConfig, determinism_hash, resolve, to_json, validate_result
+    from ..lattice.builder import build_span_lattice
+    from ..resolution import (
+        CANONICAL_L4_VERSION,
+        determinism_hash,
+        load_resolver_v1_config,
+        resolve_lattice_to_hypotheses,
+        to_json,
+        validate_result,
+    )
 
     l1_config, l1_lexicon = load_l1_config(args.l1_config)
     graph = analyze_document(args.input, config=l1_config, lexicon=l1_lexicon)
     cfg = Phase1BConfig.load(args.router_config, args.medication_config, args.laboratory_config)
     phase1b = run_phase1b(graph, cfg)
-    rcfg = ResolverConfig.load(args.resolver_config)
-    result = resolve(graph.document_id, graph.original_text,
-                     list(phase1b.proposals), list(phase1b.relations), rcfg)
+    l4_config = load_resolver_v1_config(args.l4_config)
+    lattice = build_span_lattice(
+        graph.document_id, graph.original_text, routings=phase1b.routings,
+        specialist_proposals=phase1b.proposals, expert_spans=(),
+        relations=phase1b.relations)
+    result = resolve_lattice_to_hypotheses(
+        lattice, l4_config, relations=phase1b.relations)
     valid = validate_result(result, graph.original_text)
-    print("MedNorm-VI Phase 1C-A — resolve (deterministic; proposals, not finals)")
+    print("MedNorm-VI Phase 1C — canonical L4 debug view (deterministic; not finals)")
     print(f"input path      : {args.input}")
+    print("l4 entry point  : resolution.canonical.resolve_lattice_to_hypotheses")
+    print(f"l4 version      : {CANONICAL_L4_VERSION}")
+    print(f"l4 config       : {args.l4_config}")
+    print(f"l4 config sha256: {l4_config.config_sha256}")
+    print(f"boundary policy : {dict(sorted(l4_config.boundary.group_preference.items()))}")
+    print(f"abstain on tie  : {l4_config.overlap.abstain_on_conflict}")
+    print(f"lattice nodes   : {len(lattice.proposals)}")
     print(f"hypotheses      : {len(result.hypotheses)}")
     print(f"  accepted      : {len(result.accepted())}")
     print(f"  rejected      : {len(result.rejected())}")
@@ -185,6 +214,10 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     return 0 if valid.ok else 1
 
 
+# The one canonical L4 configuration. Named once so no subcommand can drift.
+CANONICAL_L4_CONFIG = "configs/resolution/boundary_type_resolver_v1.yaml"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MedNorm-VI Phase 1C-A foundation")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -192,7 +225,10 @@ def _build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="deterministic readiness report")
     d.add_argument("--organizer-dir", default="configs/organizer")
     d.add_argument("--position-config", default="configs/organizer/position_policies_v1.yaml")
-    d.add_argument("--resolver-config", default="configs/resolution/resolver_v1.yaml")
+    d.add_argument(
+        "--l4-config", default=CANONICAL_L4_CONFIG,
+        help="canonical L4 Boundary & Type Resolver config (spec section 7)")
+    d.add_argument("--resolver-config", default=None, help=argparse.SUPPRESS)
     d.add_argument("--manifests-dir", default="data/manifests")
     d.add_argument("--rxnorm-dir", default="data/external/rxnorm")
     d.add_argument("--icd-dir", default="data/external/icd10_vi")
@@ -234,14 +270,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ci.add_argument("--columns", required=True)
     ci.set_defaults(func=_cmd_compare_icd)
 
-    rs = sub.add_parser("resolve-phase1b-debug-output",
-                        help="run L1->1B->resolver on a local document (deterministic)")
+    rs = sub.add_parser(
+        "resolve-phase1b-debug-output",
+        help=("run L1->L2/L3->lattice->CANONICAL L4 on a local document "
+              "(deterministic debug view; not a second inference runner)"))
     rs.add_argument("--input", required=True)
     rs.add_argument("--l1-config", default="configs/document_intelligence/base.yaml")
     rs.add_argument("--router-config", default="configs/case_router/base.yaml")
     rs.add_argument("--medication-config", default="configs/medication/grammar_v1.yaml")
     rs.add_argument("--laboratory-config", default="configs/laboratory/parser_v1.yaml")
-    rs.add_argument("--resolver-config", default="configs/resolution/resolver_v1.yaml")
+    rs.add_argument(
+        "--l4-config", default=CANONICAL_L4_CONFIG,
+        help="canonical L4 Boundary & Type Resolver config (spec section 7)")
+    rs.add_argument("--resolver-config", default=None, help=argparse.SUPPRESS)
     rs.add_argument("--output", default=None)
     rs.set_defaults(func=_cmd_resolve)
     return parser
@@ -250,6 +291,16 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    # The retired Phase-1C-A resolver had its own config file. Audit 0055 deleted
+    # both. A caller still passing the old flag gets an error naming the
+    # replacement, never a silent fall-through to a different resolver.
+    if getattr(args, "resolver_config", None):
+        parser.error(
+            "--resolver-config was removed with the Phase-1C-A resolver "
+            f"(Audit 0055). Use --l4-config (default {CANONICAL_L4_CONFIG}); its "
+            "boundary.group_preference and overlap.abstain_on_conflict keys carry "
+            "the migrated medication_boundary / test_result_boundary / "
+            "abstain_on_conflict policies.")
     return int(args.func(args))
 
 

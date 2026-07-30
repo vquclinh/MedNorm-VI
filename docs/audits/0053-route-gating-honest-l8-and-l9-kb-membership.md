@@ -992,14 +992,23 @@ built and no organizer inference ran.
 Evidence: Audit 0053. 1625 passed / 1 skipped; ruff, mypy strict, compileall
 clean. No model downloaded, no training, no internal_test, no output.zip.
 The pre-existing ignored .claude/AGENTS.md was deleted by owner decision.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 MSG
 
 # 5. Verify, do not push automatically
 git log -1 --stat
 git status
 ```
+
+**Attribution note, added 2026-07-30 at the repository owner's instruction.** The commit
+body above originally ended with an assistant co-author trailer. It was removed here, and
+from the single commit that ever carried it, because the owner does not want an AI
+assistant listed among the repository's contributors — GitHub derives that list from
+commit authors **and** co-author trailers. Every commit reachable from `main` is free of
+it, and Audits 0054 and 0055 never included one.
+
+This is the only edit ever made to an already-committed audit. It corrects an
+*instruction* that would have re-introduced the trailer had the template been re-run, and
+it changes no finding, measurement, count or verdict in this audit.
 
 ## 22. Recommended next milestone
 

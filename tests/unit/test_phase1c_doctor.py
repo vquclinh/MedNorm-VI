@@ -20,7 +20,7 @@ def _paths(tmp_path: Path) -> DoctorPaths:
     return DoctorPaths(
         organizer_dir=REPO / "configs" / "organizer",
         position_config=REPO / "configs" / "organizer" / "position_policies_v1.yaml",
-        resolver_config=REPO / "configs" / "resolution" / "resolver_v1.yaml",
+        l4_config=REPO / "configs" / "resolution" / "boundary_type_resolver_v1.yaml",
         manifests_dir=manifests,
         resource_templates_dir=REPO / "configs" / "resources",
         ner_manifests_dir=REPO / "configs" / "resources" / "ner",
@@ -33,7 +33,14 @@ def test_doctor_reports_registries(tmp_path: Path) -> None:
     assert r.data["organizer_registry"]["confirmed_facts"] >= 10
     assert r.data["position_policies"]["default"] == "raw-codepoint-half-open"
     assert r.data["no_network"] is True
-    assert r.data["resolver"]["ready"] is True
+    # Audit 0055: the doctor validates the CANONICAL L4 config, and checks that the
+    # migrated boundary policies are actually declared rather than merely loadable.
+    l4 = r.data["l4_resolver"]
+    assert l4["ready"] is True
+    assert l4["entry_point"] == "resolution.canonical.resolve_lattice_to_hypotheses"
+    assert l4["group_preference"] == {"medication": "full", "test_result": "value_only"}
+    assert l4["abstain_on_conflict"] is False
+    assert len(l4["config_sha256"]) == 64
 
 
 def test_doctor_flags_missing_kb(tmp_path: Path) -> None:

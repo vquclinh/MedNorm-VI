@@ -10,12 +10,13 @@ Flow, after Audit 0052::
       -> L5 assertions + ICD/RxNorm linking
       -> L6 evidence graph -> L7 cascade -> L8 decoder -> L9 validate + package
 
-Before Audit 0052 this runner passed Phase-1B proposals straight to
-``resolution.resolver``. It never built a lattice, so E3 — the project's only
-trained model — could not run in production, and each new expert would have meant
-editing this file. Experts now arrive through
-``mention_factory.registry``: this module names no expert except the deterministic
-E1/E2 pair that Phase 1B owns.
+Before Audit 0052 this runner passed Phase-1B proposals straight to a second,
+non-canonical L4 (``resolution/resolver.py``, since **deleted** in Audit 0055). It
+never built a lattice, so E3 — the project's only trained model — could not run in
+production, and each new expert would have meant editing this file. Experts now
+arrive through ``mention_factory.registry``: this module names no expert except the
+deterministic E1/E2 pair that Phase 1B owns, and there is exactly one L4 entry point
+(``resolution.canonical.resolve_lattice_to_hypotheses``).
 """
 
 from __future__ import annotations
@@ -207,7 +208,7 @@ def run_document(
         config_hash=lattice_config_hash({
             "mode": mode,
             "feature_flags": dict(sorted(scoped_flags.items())),
-            "resolver_config": config.resolver_config,
+            "l4_config": config.l4_config,
         }),
     )
 

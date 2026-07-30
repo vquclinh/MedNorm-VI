@@ -4,7 +4,6 @@ l1_config: configs/document_intelligence/base.yaml
 router_config: configs/case_router/base.yaml
 medication_config: configs/medication/grammar_v1.yaml
 laboratory_config: configs/laboratory/parser_v1.yaml
-resolver_config: configs/resolution/resolver_v1.yaml
 icd_index: indices/icd10_vi/tt06-2026/index.json
 # Active RxNorm index consumed by the linker. Audit 0014 kept the CONSERVATIVE
 # default (Prescribable) until BTC publishes the upgraded task and clarifies the

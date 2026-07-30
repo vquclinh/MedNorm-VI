@@ -100,12 +100,22 @@ boundary:
   # Boundary ALTERNATIVES of one logical mention (E1's name_only→full ladder,
   # E2's value_only/value+unit pair) share a boundary group id. Exactly one
   # alternative per group may survive — emitting both would put two overlapping
-  # spans for a single mention into the output. The preferred kind per group is
-  # below; it mirrors configs/resolution/resolver_v1.yaml so the deterministic
-  # foundation and v1 cannot silently disagree.
+  # spans for a single mention into the output.
   #
-  # medication: the one confirmed golden example favours the FULL span.
-  # test_result: UNRESOLVED organizer convention — conservative value_only.
+  # MIGRATED HERE BY AUDIT 0055. These two keys were `medication_boundary` and
+  # `test_result_boundary` in configs/resolution/resolver_v1.yaml, the retired
+  # Phase-1C-A resolver's config, which is now deleted. Until then this file only
+  # claimed to "mirror" that one — and a mirror is what eventually drifts. There is
+  # now one file, one ladder (`resolution.boundary.preference_rank`) and one L4.
+  #
+  # medication:  name_only | name_strength | name_strength_route | full
+  #              the one confirmed golden example favours the FULL span.
+  # test_result: value_only | value_unit
+  #              UNRESOLVED organizer convention — conservative value_only.
+  #
+  # When the group does not offer the configured kind, the ladder steps to the
+  # widest kind at or below it, then to the narrowest above it. Every rung is
+  # recorded on the hypothesis's BoundaryEvidence.policy.
   group_preference:
     medication: full
     test_result: value_only
@@ -116,6 +126,11 @@ boundary:
 # between two spans of the same type.
 # ------------------------------------------------------------------------------
 overlap:
+  # MIGRATED HERE BY AUDIT 0055 from resolver_v1.yaml:abstain_on_conflict. On a TIED
+  # same-type competition, mark both sides UNRESOLVED rather than breaking the tie on
+  # span geometry. Abstention is not rejection (spec §7.2 vs §7.3): neither span was
+  # judged wrong. Default false, matching the retired config's default.
+  abstain_on_conflict: false
   # Jaccard over character intervals at or above which two same-type spans are
   # "near-complete" competitors and only the higher-utility one survives.
   near_complete_iou: 0.60

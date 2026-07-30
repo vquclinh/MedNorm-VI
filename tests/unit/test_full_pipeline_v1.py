@@ -159,7 +159,6 @@ def test_pipeline_deterministic_packaging_and_full_readiness(tmp_path: Path) -> 
         "router_config": "configs/case_router/base.yaml",
         "medication_config": "configs/medication/grammar_v1.yaml",
         "laboratory_config": "configs/laboratory/parser_v1.yaml",
-        "resolver_config": "configs/resolution/resolver_v1.yaml",
         "expected_documents": 2,
         "checkpoint_root": str(tmp_path / "checkpoints"),
         "full_requires_checkpoints": ["missing-full"],

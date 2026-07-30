@@ -33,7 +33,12 @@ from ..lattice.models import SpanProposal as LatticeProposal
 from ..mention_factory.models import HAS_RESULT, RelationProposal
 from ..schemas.hypotheses import TypedHypothesis
 from ..schemas.spans import Span, SpanCoordinates
-from .boundary import expand_to_competitor, trim_span
+from .boundary import (
+    expand_to_competitor,
+    preference_note,
+    preference_rank,
+    trim_span,
+)
 from .config_v1 import ResolverV1Config
 from .features import boundary_kind_of_rule
 from .overlap import OverlapCandidate, resolve_near_complete_overlaps
@@ -67,6 +72,9 @@ class ResolutionDecision:
     section: str = ""
     suppressed_by: str = ""
     overlap_iou: float = 0.0
+    # Which boundary-policy ladder rung selected (or rejected) this alternative.
+    # Empty when the node belongs to no boundary group, i.e. no policy applied.
+    boundary_policy: str = ""
     utilities: Mapping[str, float] = field(default_factory=dict)
     contributions: Mapping[str, float] = field(default_factory=dict)
 
@@ -128,10 +136,23 @@ def _competitors(
 
     Only boundaries that some expert already proposed, and only when the expert
     that proposed them had enough grammar completeness to justify a wider span.
+
+    **A sibling in the same boundary group is never a competitor** (Audit 0055).
+    Expansion exists to adopt a boundary a *different* expert proposed; a node's own
+    boundary group is the alternative ladder that the configured policy has already
+    chosen from. Without this exclusion, expansion silently undid the policy: with
+    ``medication_boundary: name_only`` the ladder correctly selected `amlodipine`
+    (0,10) and expansion then adopted the group's `full` sibling (0,25), so the
+    policy had no observable effect at all. That is exactly the drift this migration
+    exists to remove, and it was caught by the migrated policy tests.
     """
+    own_groups = {group_id for group_id, _kind in _boundary_groups(proposal)}
     out: list[tuple[int, int, float]] = []
     for other in lattice.proposals:
         if other.coordinates == proposal.coordinates:
+            continue
+        if own_groups and own_groups & {
+                group_id for group_id, _kind in _boundary_groups(other)}:
             continue
         if other.start <= proposal.start and other.end >= proposal.end:
             out.append((other.start, other.end, grammar_completeness(other)))
@@ -162,14 +183,27 @@ def _preferred_kind(entity_type: str, config: ResolverV1Config) -> str:
 def _select_within_boundary_groups(
     staged: Sequence[tuple[str, LatticeProposal, TypeDecision, int, int, tuple[str, ...]]],
     config: ResolverV1Config,
-) -> dict[str, str]:
-    """Pick one alternative per boundary group. Returns ``{loser id: winner id}``.
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Pick one alternative per boundary group.
 
-    Preference order: the configured boundary kind for that type, then the higher
-    type utility, then the narrower span, then the id — fully deterministic.
+    Returns ``({loser id: winner id}, {hypothesis id: policy note})``.
+
+    Preference order: the shared boundary-policy **ladder**
+    (:func:`boundary.preference_rank`), then higher type utility, then the narrower
+    span, then the id — fully deterministic.
+
+    Audit 0055 replaced a binary "is this the preferred kind?" test with the ladder.
+    The binary form could only express "exact match or not", so
+    ``medication_boundary: name_strength`` on a group offering only ``name_only``
+    and ``full`` fell through to utility and could pick the *wider* span — the
+    opposite of the retired Phase-1C-A resolver, which stepped down to the widest
+    kind at or below the target. The ladder is now the single implementation both
+    L4 paths use.
     """
     members: dict[str, list[tuple[str, str, float, int]]] = {}
+    entity_type_by_id: dict[str, str] = {}
     for hypothesis_id, proposal, decision, start, end, _actions in staged:
+        entity_type_by_id[hypothesis_id] = decision.entity_type
         if decision.abstained:
             continue
         for group_id, kind in _boundary_groups(proposal):
@@ -177,22 +211,22 @@ def _select_within_boundary_groups(
                 (hypothesis_id, kind, decision.utility, end - start))
 
     losers: dict[str, str] = {}
+    notes: dict[str, str] = {}
     for group in members.values():
         if len(group) < 2:
             continue
         entity_types = {
-            decision.entity_type
-            for hypothesis_id, _p, decision, _s, _e, _a in staged
-            if hypothesis_id in {m[0] for m in group}
-        }
-        preferred = _preferred_kind(next(iter(entity_types)) if entity_types else "", config)
-        ranked = sorted(
-            group,
-            key=lambda m: (0 if m[1] == preferred else 1, -m[2], m[3], m[0]))
+            entity_type_by_id.get(member[0], "") for member in group} - {""}
+        entity_type = sorted(entity_types)[0] if entity_types else ""
+        preferred = _preferred_kind(entity_type, config)
+        ranked = sorted(group, key=lambda m: (
+            preference_rank(entity_type, m[1], preferred), -m[2], m[3], m[0]))
         winner = ranked[0][0]
+        notes[winner] = preference_note(entity_type, ranked[0][1], preferred)
         for member in ranked[1:]:
             losers[member[0]] = winner
-    return losers
+            notes[member[0]] = preference_note(entity_type, member[1], preferred)
+    return losers, notes
 
 
 def _protected_partners(
@@ -265,7 +299,7 @@ def resolve_lattice(
 
     # One logical mention contributes one hypothesis: competing boundaries of the
     # same mention are resolved before the global overlap competition runs.
-    group_losers = _select_within_boundary_groups(staged, config)
+    group_losers, policy_notes = _select_within_boundary_groups(staged, config)
 
     candidates = [
         OverlapCandidate(
@@ -280,8 +314,16 @@ def resolve_lattice(
         near_complete_iou=config.overlap.near_complete_iou,
         competition_penalty=config.overlap.competition_penalty,
         suppress_cross_type=config.overlap.suppress_cross_type,
-        protect_pairs=config.overlap.protect_has_result_pairs)
+        protect_pairs=config.overlap.protect_has_result_pairs,
+        abstain_on_tie=config.overlap.abstain_on_conflict)
     suppressed = {loser: (winner, iou) for loser, winner, iou in outcome.suppressed}
+    # Abstention is NOT rejection (spec §7.2 vs §7.3): a tied same-type competition
+    # means the resolver could not tell which span is right, not that either is
+    # wrong. Migrated from the retired resolver's `abstain_on_conflict`.
+    tied_abstentions = {
+        left: right for left, right, _iou in outcome.abstained_ties}
+    tied_abstentions.update({
+        right: left for left, right, _iou in outcome.abstained_ties})
 
     hypotheses: list[TypedHypothesis] = []
     for hypothesis_id, proposal, decision, start, end, shaping in staged:
@@ -290,9 +332,15 @@ def resolve_lattice(
         suppressed_by, overlap_iou = "", 0.0
         if decision.abstained:
             status = "abstained"
+        elif hypothesis_id in tied_abstentions:
+            status = "abstained"
+            suppressed_by = tied_abstentions[hypothesis_id]
+            reason = "tied_same_type_overlap_abstained"
         elif hypothesis_id in group_losers:
             status = "suppressed"
             suppressed_by = group_losers[hypothesis_id]
+            # The reason code stays stable and machine-readable; WHICH ladder rung
+            # rejected this alternative goes in `boundary_policy`, not in the code.
             reason = "boundary_alternative_not_selected"
         elif hypothesis_id in suppressed:
             status = "suppressed"
@@ -307,6 +355,7 @@ def resolve_lattice(
             boundary_actions=shaping, expert_ids=proposal.expert_ids,
             routes=proposal.routes, section=proposal.section,
             suppressed_by=suppressed_by, overlap_iou=overlap_iou,
+            boundary_policy=policy_notes.get(hypothesis_id, ""),
             utilities=dict(decision.utilities),
             contributions=dict(decision.contributions)))
         if status != "accepted":

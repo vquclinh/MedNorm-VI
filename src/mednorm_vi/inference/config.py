@@ -43,9 +43,10 @@ class PipelineConfig:
     router_config: str
     medication_config: str
     laboratory_config: str
-    resolver_config: str
-    # The canonical L4 configuration (spec §7). `resolver_config` remains for the
-    # legacy Phase-1C-A resolver, which is no longer on the canonical path.
+    # The one canonical L4 configuration (spec §7). Audit 0055 removed the separate
+    # `resolver_config` field: it pointed at the retired Phase-1C-A resolver's config,
+    # which was deleted with that resolver. A profile still declaring the key is
+    # REFUSED rather than ignored — a dead key is a key somebody can set.
     l4_config: str = "configs/resolution/boundary_type_resolver_v1.yaml"
     icd_index: str = ""
     rxnorm_index: str = ""
@@ -65,6 +66,15 @@ class PipelineConfig:
         import yaml
 
         doc: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        if "resolver_config" in doc:
+            raise ValueError(
+                f"{path}: `resolver_config` was removed with the Phase-1C-A resolver "
+                "(Audit 0055). Delete the key and use `l4_config` "
+                "(configs/resolution/boundary_type_resolver_v1.yaml); its "
+                "boundary.group_preference and overlap.abstain_on_conflict keys carry "
+                "the migrated medication_boundary / test_result_boundary / "
+                "abstain_on_conflict policies. Silently ignoring it would let a "
+                "profile believe it had configured a resolver that no longer exists.")
         profile_name = str(doc.get("name", Path(path).stem))
         feature_flags = dict(DEFAULT_FEATURE_FLAGS)
         raw_flags = doc.get("feature_flags", {})
@@ -97,7 +107,6 @@ class PipelineConfig:
             laboratory_config=str(
                 doc.get("laboratory_config", "configs/laboratory/parser_v1.yaml")
             ),
-            resolver_config=str(doc.get("resolver_config", "configs/resolution/resolver_v1.yaml")),
             l4_config=str(doc.get(
                 "l4_config", "configs/resolution/boundary_type_resolver_v1.yaml")),
             icd_index=str(doc.get("icd_index", "")),

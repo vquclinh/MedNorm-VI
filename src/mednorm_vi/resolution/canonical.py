@@ -21,10 +21,11 @@ It also carries through what the old boundary destroyed: ``expert_ids`` (which
 experts proposed a span) and ``components`` (E1's structured field decomposition,
 spec §10.1), so L5 can consume them in Milestone 2 without another migration.
 
-``resolver.py`` is intentionally left in place. Its tests still pass against it and
-some of its per-type boundary policy has no equivalent here yet; deleting it before
-that behaviour is provably covered would lose it. It is no longer on the canonical
-path — see ``docs/architecture/ACTIVE_RUNTIME_MANIFEST.md``.
+Audit 0055 finished the job: the retired ``resolver.py`` had one unique behaviour —
+a configurable per-type boundary policy — and that policy now lives in
+``boundary.preference_rank``, which **both** paths used before the old module was
+deleted. ``resolution/resolver.py`` no longer exists, and this is the only public L4
+entry point in the repository.
 """
 
 from __future__ import annotations
@@ -160,11 +161,15 @@ def resolve_lattice_to_hypotheses(
             chosen_proposal_id=chosen,
             source_proposal_ids=tuple(source.proposal_id for source in sources),
             boundary_evidence=BoundaryEvidence(
-                policy=CANONICAL_L4_VERSION,
+                # The migrated boundary policy (Audit 0055) is the policy field when
+                # one applied, so a hypothesis records WHICH ladder rung selected it
+                # rather than only that the canonical L4 ran.
+                policy=decision.boundary_policy or CANONICAL_L4_VERSION,
                 chosen_kind="|".join(decision.boundary_actions) or "unshaped",
                 chosen_proposal_id=chosen,
                 considered_kinds=tuple(decision.boundary_actions),
-                note=f"original=[{decision.original_start},{decision.original_end})"),
+                note=(f"original=[{decision.original_start},{decision.original_end})"
+                      f" l4={CANONICAL_L4_VERSION}")),
             type_evidence=TypeEvidence(
                 entity_type=_organizer_label(decision.entity_type),
                 source_specialist=source_specialist,

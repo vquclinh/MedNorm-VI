@@ -23,28 +23,56 @@
 #     silently succeeding.
 #
 # --- MOUNTS an authorized build/run must supply ---------------------------
-#   /models/e3/best.pt            the E3 checkpoint
-#                                 sha256 a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
-#   /models/hf                    HF cache holding the ViHealthBERT config +
-#                                 tokenizer at revision f89e80b4…24b6c5
-#                                 (weights are NOT needed: the checkpoint carries
-#                                 the complete state dict)
-#   /models/vncorenlp             VnCoreNLP-1.2.jar + models
-#   /kb/indices                   generated ICD-10 / RxNorm index.json files
-#   /input                        organizer .txt documents          (read-only)
-#   /output                       destination for output/ and output.zip
 #
-# Example (illustrative; do not run as part of this milestone):
-#   docker build -t mednorm-vi:0053 .
+# CORRECTED BY AUDIT 0055 after actually running the image. Two things in the
+# Audit-0053 contract were wrong, and only a real run could show it:
+#
+#   1. the mount points must match the paths the ACTIVE PROFILE resolves.
+#      `configs/pipeline/full_v1.yaml` declares `indices/...` and E3 defaults to
+#      `checkpoint/...`, both relative — and WORKDIR is /app. So they mount at
+#      /app/indices and /app/checkpoint, NOT at the /kb/indices and /models/e3
+#      paths Audit 0053 documented. With the old paths, `deterministic` mode
+#      reported NOT_READY (missing_icd_index, missing_rxnorm_index) — fail-closed,
+#      correctly, but for a reason that looked like a missing asset rather than a
+#      wrong contract. A profile that points at /kb and /models is equally valid;
+#      the paths simply have to agree with each other.
+#
+#   2. on an SELinux-enforcing host, every bind mount needs a relabel suffix.
+#      Without it /output is unwritable at mode 0777 and /input is unreadable,
+#      because the denial is a label mismatch and has nothing to do with the mode
+#      bits. Use `:ro,Z` for assets and `:Z` for the output directory.
+#
+#   /app/checkpoint     E3 checkpoint tree (read-only)
+#                       s1_mention_full_training_v1/best.pt
+#                       sha256 a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+#   /app/indices        generated ICD-10 / RxNorm index.json files (read-only)
+#   /models/hf          HF cache holding the ViHealthBERT config + tokenizer at
+#                       revision f89e80b4…24b6c5 (read-only). The WEIGHTS are not
+#                       needed: the checkpoint carries the complete state dict.
+#   /models/vncorenlp   VnCoreNLP-1.2.jar + models (read-only)
+#   /input              organizer .txt documents (read-only)
+#   /output             destination for output/ and output.zip — the ONLY writable
+#                       mount
+#
+# The command Audit 0055 actually ran, offline, for the specialist/E3 smoke. Drop
+# the checkpoint/hf/vncorenlp mounts for a `deterministic` run — E3 is not used.
+#
+#   docker build --pull -t mednorm-vi:framework-closed .
 #   docker run --rm --network=none \
-#     -v "$PWD/checkpoint/s1_mention_full_training_v1:/models/e3:ro" \
-#     -v "$HOME/.cache/huggingface:/models/hf:ro" \
-#     -v "$HOME/.cache/mednorm-vi/vncorenlp:/models/vncorenlp:ro" \
-#     -v "$PWD/indices:/kb/indices:ro" \
-#     -v "$PWD/data/organizer_test/input:/input:ro" \
-#     -v "$PWD/outputs:/output" \
-#     mednorm-vi:0053 run --input-dir /input --output-zip /output/output.zip \
-#       --config configs/pipeline/full_v1.yaml --mode deterministic
+#     -v "$PWD/checkpoint:/app/checkpoint:ro,Z" \
+#     -v "$PWD/indices:/app/indices:ro,Z" \
+#     -v "$HOME/.cache/huggingface:/models/hf:ro,Z" \
+#     -v "$HOME/.cache/mednorm-vi/vncorenlp:/models/vncorenlp:ro,Z" \
+#     -v "$PWD/data/organizer_test/input:/input:ro,Z" \
+#     -v "$PWD/outputs:/output:Z" \
+#     mednorm-vi:framework-closed run --input-dir /input \
+#       --output-zip /output/output.zip \
+#       --config configs/pipeline/full_v1.yaml --mode specialist \
+#       --run-manifest /output/run-manifest.json
+#
+# Drop `,Z` on a host without SELinux. Keep `:ro` regardless: Audit 0055 verified
+# every asset mount returns EROFS from inside the container, including the
+# checkpoint directory.
 #
 # `--network=none` is the point: if any path tried to reach the network, the run
 # would fail rather than quietly download.
@@ -58,6 +86,14 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Offline and deterministic by construction.
+# HF_HOME points at the mounted cache; the E3 adapter and the KB indices resolve
+# through the ACTIVE PROFILE's relative paths under WORKDIR (see MOUNTS above).
+#
+# MEDNORM_E3_CHECKPOINT and MEDNORM_VNCORENLP_DIR were declared here by Audit 0053
+# and REMOVED by Audit 0055: nothing in the source ever read them, and they pointed
+# at /models/e3 and /models/vncorenlp, which are not where the active profile looks.
+# A configuration variable no code reads is worse than no variable — it tells an
+# operator they have configured something when they have not.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONHASHSEED=0 \
@@ -66,9 +102,7 @@ ENV PYTHONUNBUFFERED=1 \
     TRANSFORMERS_OFFLINE=1 \
     HF_HOME=/models/hf \
     TOKENIZERS_PARALLELISM=false \
-    OMP_NUM_THREADS=1 \
-    MEDNORM_E3_CHECKPOINT=/models/e3/best.pt \
-    MEDNORM_VNCORENLP_DIR=/models/vncorenlp
+    OMP_NUM_THREADS=1
 
 WORKDIR /app
 

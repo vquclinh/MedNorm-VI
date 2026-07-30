@@ -8,13 +8,12 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
-- **Last updated by:** Audit 0054 (deterministic L5-L7: structured RxNorm linking, ICD
-  hierarchy + specificity, all L6 edges, the typed consistency contract, L7 locked-option
-  escalation, the inference run manifest, the code-linking evaluation contract). Audit
-  0054 is a **partial** milestone: of Milestone 2B's seven carried-forward tasks plus
-  container verification, **six are complete**, the old-L4 deletion is **characterized
-  but not migrated**, and the **Docker build is blocked by the environment** — §13 below
-  marks both.
+- **Last updated by:** Audit 0055 (framework closure: the obsolete non-canonical L4 is
+  migrated and **deleted**, and the offline container is **built and smoke-tested**).
+- **Framework status:** `FRAMEWORK_COMPLETE` / `DETERMINISTIC_ARCHITECTURE_COMPLETE` /
+  `PRETRAINED_READY` / `ENVIRONMENT_REPRODUCIBLE` — see §0a. This describes the
+  **framework**, not organizer readiness: candidate quality remains unmeasurable and
+  three of nine layers have no trained checkpoint.
 - **Date:** 2026-07-30
 - **Rule this file obeys:** a module is never described as implemented when it has
   no trained checkpoint, no wiring, or only a contract. "Implemented" here means
@@ -80,8 +79,44 @@ apart deliberately.
 | **A typed deterministic consistency report exists and L7/L8 consume it** | **YES, since Audit 0054** — `evidence_graph/consistency.py`, 12 rules, 4 verdicts; a fatal contradiction can no longer be silently accepted |
 | **L7 locked-option escalation contract** | **YES, since Audit 0054** — decisions are expressed as option ids only, so a code, label or coordinate that was not offered cannot be returned. **No model is loaded** |
 | **Deterministic run manifest** | **YES, since Audit 0054**, opt-in via `--run-manifest`; no clinical text, byte-identical apart from two documented runtime fields |
-| **Docker image built and smoke-tested** | **NO** — blocked by the environment, not by the Dockerfile (§10 below) |
-| **Obsolete non-canonical L4 deleted** | **NO** — characterized in 13 tests, not yet migrated (§13 below) |
+| **Docker image built and smoke-tested** | **YES, Audit 0055** — `mednorm-vi:framework-closed`, 1.95 GB, built in 164 s from base digest `sha256:a9bee155…9ccb`; all 11 offline checks pass with `--network=none`, plus deterministic and specialist/E3 `run_document` smokes |
+| **Obsolete non-canonical L4 deleted** | **YES, Audit 0055** — `resolution/resolver.py` is gone, `import mednorm_vi.resolution.resolver` raises `ModuleNotFoundError`, and no tracked file references it. Its three boundary policies were migrated first and equivalence proven on **84/84** boundary-group decisions |
+| **L4 public entry points** | **1** — `resolution.canonical.resolve_lattice_to_hypotheses`. The canonical runner, the Phase-1C CLI and the doctor all use it (asserted by an AST test) |
+
+## 0a. Framework-closure matrix (Audit 0055)
+
+The framework is **closed**: one runner, one L4, no duplicate active implementation, every
+deterministic L1-L9 path integrated, every learned slot typed and fail-closed, the
+container built and offline-smoke-tested.
+
+| Layer | Canonical implementation | Integrated | Deterministic complete | Pretrained adapter | Trained checkpoint | Remaining data/model dependency | Duplicate active impl. |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| L1 Document Intelligence | `document_intelligence/` + `position/` | YES | YES | none required | none required | section lexicons are seed-sized (§1) | none |
+| L2 Case Router | `case_router/` | YES | YES | none (learned router not in plan) | none | no route gold, so routing accuracy is unmeasured | none |
+| L3 Mention Factory | `mention_factory/registry.py` + `lattice/` | YES | YES (E1+E2) | E5/E6/E7 typed, fail-closed | **E3 only** | E5 head untrained; E6/E7 have no local weights | none |
+| L4 Boundary & Type | `resolution/canonical.py` | YES | YES | `learned_v2` typed, **disabled** | none | learned v2 needs a checkpoint; boundary-offset head (§7.1) not built | **none — deleted in Audit 0055** |
+| L5 Assertion | `specialists/assertion/` | YES | YES (A1-A3, §8.1 scope) | S2 head typed | none | **zero assertion supervision** | none |
+| L5 ICD-10 linking | `linking/icd10.py` + `icd10_hierarchy.py` | YES | YES (lexical + hierarchy + specificity) | S3/S4 typed | none | **zero ICD gold codes**; truncated `canonical_name` values | none |
+| L5 RxNorm linking | `linking/rxnorm.py` + `rxnorm_graph.py` + `structured_medication.py` | YES | YES (structured + TTY traversal + hard negatives) | S3/S4 typed | none | **zero RxCUI gold**; INN↔RxNorm crosswalk absent | none |
+| L6 Evidence Graph | `evidence_graph/graph.py` + `consistency.py` | YES | YES (9 edges + 12 typed rules) | none planned | none | global optimization (beam/ILP) not built | none |
+| L7 Confidence Cascade | `confidence_cascade/cascade.py` + `escalation.py` | YES | YES (thresholds + locked-option contract) | S5 critic/adjudicator typed, **no backend** | none | no local Qwen weights | none |
+| L8 Metric Decoder | `metric_decoder/decoder.py` | YES | YES (evidence-ranked; honestly named) | S6 calibration typed, **fails closed** | none | S6 needs out-of-fold predictions | none |
+| L9 Validator & Packager | `validator/` (incl. `kb_membership.py`) + `inference/packaging.py` | YES | YES (fail-fast, on the packaging path) | none | none | `output.zip` never produced for a real submission | none |
+
+Closure conditions, each verified in Audit 0055:
+
+```text
+one canonical runner                              inference/pipeline.py            YES
+one canonical L4                                  resolution.canonical             YES
+no obsolete resolver                              ModuleNotFoundError proven       YES
+every deterministic L1-L9 path integrated         run_document end to end          YES
+every learned/pretrained slot fail-closed typed   full mode NOT_READY, 12 blockers YES
+container build succeeds                          mednorm-vi:framework-closed      YES
+offline deterministic smoke succeeds              --network=none                   YES
+offline specialist/E3 smoke succeeds              checkpoint mounted :ro,Z         YES
+no runtime download is possible                   LocalEntryNotFoundError          YES
+no model or restricted data in Git or image       COPY audit + git ls-files        YES
+```
 
 **Organizer readiness is not claimed.** One mention expert now runs end to end; the
 candidate-set and assertion halves of the metric remain unimplemented and unmeasured.
@@ -225,7 +260,11 @@ DIAGNOSIS and SYMPTOM).
 | --- | --- |
 | Implementation | **canonical entry point `resolution/canonical.py`** over `SpanLattice`, wrapping `resolution/resolver_v1.py`'s decision logic; `resolution/learned_v2.py` is the future learned slot |
 | Status | `IMPLEMENTED_AND_INTEGRATED` (deterministic); learned v2 implemented, untrained |
-| Canonical entry points | **1.** Audit 0052 replaced the two-live-L4 situation. `resolution/resolver.py` is off the canonical path (a test asserts the runner does not import it) and **still exists**: Audit 0054 characterized its unique behaviour in 13 tests (`tests/unit/test_old_l4_characterization.py`) but did **not** migrate or delete it — see §13 |
+| Canonical entry points | **1.** Audit 0052 removed it from the canonical path; **Audit 0055 deleted it.** `resolution/resolver.py` and `configs/resolution/resolver_v1.yaml` no longer exist, `import mednorm_vi.resolution.resolver` raises `ModuleNotFoundError`, and no compatibility alias or shim was left. The canonical runner, the Phase-1C debug CLI and the doctor all call `resolution.canonical.resolve_lattice_to_hypotheses` |
+| Migrated boundary policies (Audit 0055) | The retired resolver's one unique behaviour. `medication_boundary` and `test_result_boundary` are now `boundary.group_preference.{medication,test_result}`, and `abstain_on_conflict` is `overlap.abstain_on_conflict`, all in `configs/resolution/boundary_type_resolver_v1.yaml`. The ladder is **one shared function**, `boundary.preference_rank`: exact configured kind, else the widest kind at or below it, else the narrowest above it. Every rung is recorded on `EntityHypothesis.boundary_evidence.policy` |
+| Equivalence proof | **84 of 84** boundary-group decisions agreed between the old and new implementations across 3 medication × 2 test-result policies on all four tracked fixtures, **0 disagreements**, measured before deletion (Audit 0055 §5) |
+| Defect found by the migration | Boundary **expansion** was silently undoing the boundary policy: with `medication_boundary: name_only` the ladder correctly chose `amlodipine` and `expand_to_competitor` then adopted the group's `full` sibling, so the policy had no observable effect. Expansion now excludes siblings of the node's own boundary group — it exists to adopt *another expert's* boundary, not to overrule the group decision |
+| Stale keys are rejected, not ignored | `PipelineConfig.load` **raises** on a profile declaring `resolver_config`, and the Phase-1C CLI **errors** on `--resolver-config`, each naming the replacement. A dead key is a key somebody can set |
 | Deterministic implementation | Yes: `resolver_v1.py`, `boundary.py`, `typing.py`, `overlap.py` (interval/graph selection, abstention, coordinate-identity merge) |
 | Pretrained adapter | None |
 | Trained checkpoint | **None** |
@@ -432,7 +471,7 @@ above the linker that spec §10.1/§6.2 needs them for.
 | Governed corpus + split identity | `data_engine/`, `training/governed_splits.py` | `IMPLEMENTED_AND_WIRED` | Splits resolved by SHA-256, never by name; `internal_test` refused by name |
 | KB intake | `kb/`, `data/manifests/*.yaml` | `IMPLEMENTED_AND_WIRED` | ICD-10 TT06-2026 derived deterministically from the protected source PDFs; RxNorm Full + Prescribable 2026-07-06 |
 | Experiment registry | `experiments/` | `IMPLEMENTED_NOT_WIRED` | `EXP-*.json` records tracked; no leaderboard decision has used it |
-| Reproducibility | `Dockerfile`, `requirements.lock`, `requirements-image.lock` | `AUDITED_AND_HARDENED__BUILD_BLOCKED` | Audit 0054 **attempted the build** and found two real defects. (1) `requirements.lock` pins `torch==2.13.0+cu126`, a local version identifier absent from PyPI, so `pip install -r requirements.lock` cannot resolve it — `requirements-image.lock` now installs the **same upstream version** from the CPU index, with both indexes named explicitly and the deviation recorded. (2) `package_output_zip` embedded file mtimes, so two identical runs produced different ZIP digests; entries now use a fixed timestamp and mode, and the archive is byte-reproducible. **The build itself is blocked by the environment, not the Dockerfile**: `~/.docker/config.json` holds stale Docker Hub tokens that the daemon sends on every pull, so even an anonymous pull of the public base image returns `401 Unauthorized`. Nothing was faked and the Dockerfile was not weakened to work around it |
+| Reproducibility | `Dockerfile`, `requirements.lock`, `requirements-image.lock` | **`BUILT_AND_OFFLINE_SMOKE_TESTED`** (Audit 0055) | Audit 0054 **attempted the build** and found two real defects. (1) `requirements.lock` pins `torch==2.13.0+cu126`, a local version identifier absent from PyPI, so `pip install -r requirements.lock` cannot resolve it — `requirements-image.lock` now installs the **same upstream version** from the CPU index, with both indexes named explicitly and the deviation recorded. (2) `package_output_zip` embedded file mtimes, so two identical runs produced different ZIP digests; entries now use a fixed timestamp and mode, and the archive is byte-reproducible. **Audit 0055 built it**: `mednorm-vi:framework-closed`, image `c65344f6e040`, 1.95 GB, 164 s, base digest `sha256:a9bee155…9ccb`, torch `2.13.0+cpu` (`cp314` manylinux wheel from PyTorch's CPU index). Three further defects surfaced only by running it: (a) an earlier `requirements-image.lock` listed transitive pins **from memory** and the build failed on the non-existent `fsspec==2026.5.0` — every pin is now read from `importlib.metadata`; (b) the documented mount points did not match the paths the active profile resolves (`/app/indices` and `/app/checkpoint`, not `/kb/indices` and `/models/e3`), which made `deterministic` report NOT_READY; (c) on an SELinux-enforcing host every bind mount needs a relabel suffix (`:ro,Z` / `:Z`), without which `/output` is unwritable at mode 0777. Two dead `MEDNORM_*` env vars that nothing read were removed. All 11 offline checks pass under `--network=none` |
 | Inference run manifest | `inference/manifest.py` | `IMPLEMENTED_AND_WIRED` (opt-in) | Audit 0054. `--run-manifest PATH`; nothing is written without it. Records git commit + dirty state, the PDF hash, every contract version, config hashes, readiness and fail-closed state, checkpoint roles/SHAs/revisions, snapshot ids, and aggregate counts for route gating, proposals, lattice, L4, assertions, linking, L6 edges, consistency, L7 dispositions, decoder candidate sizes and L9 issues. **No clinical text** (asserted by test), home-directory paths reduced to `role:` identifiers, byte-identical apart from `runtime_seconds` and `peak_memory_gib`. Written **even when L9 stops the run**, with `l9_stopped_the_run: true` |
 | Code-linking evaluation contract | `evaluation/code_linking.py` | `CONTRACT_ONLY__NO_GOLD_EXISTS` | Audit 0054. Strict record schemas, Recall@1/@5/@10, candidate Jaccard, exact-set match, and a 9-way error taxonomy separating broader-than-gold from wrong. It **refuses to score** without gold (`GoldSetUnavailable`) rather than returning zeros, and refuses `PENDING`/`DISPUTED` annotations. **No gold data ships**, no function turns predictions into labels, and `REQUIRED_ANNOTATION_ARTIFACT` specifies the human round that must happen first |
 
@@ -479,52 +518,35 @@ programmatically from its real configuration or checkpoint.
 
 ## 13. Ranked remaining architecture work
 
-**Updated by Audit 0054.** Of Milestone 2B's seven carried-forward tasks plus container
-verification, **six are complete** (structured RxNorm linking, ICD hierarchy +
-specificity, L6 edges, the typed consistency contract consumed by L7/L8, the L7
-locked-option contract, the run manifest) plus the code-linking evaluation contract.
-**Two are not**, and they head the list.
+**The framework is closed (§0a). Everything below needs DATA or a TRAINED MODEL, not
+more plumbing.** Audit 0055 removed the last two framework-level loose ends; there is no
+remaining duplicate implementation, no unbuilt container and no unmigrated behaviour.
 
-1. **Migrate and delete `resolution/resolver.py`** — Audit 0054 completed step 1 of the
-   five §10 asked for: its unique behaviour is characterized in 13 tests
-   (`tests/unit/test_old_l4_characterization.py`). What is unique is a **configurable
-   per-type boundary policy** (`medication_boundary` full/name_only/name_strength,
-   `test_result_boundary` value_only/value_unit, `abstain_on_conflict`) that the
-   canonical L4 has no equivalent of. Deleting the module also means migrating
-   `phase1c_foundation/cli.py`, `phase1c_foundation/doctor.py`, the
-   `resolution/__init__.py` re-export and `tests/unit/test_resolution.py`. Two L4
-   implementations must not coexist indefinitely.
-2. **Build and offline-smoke the Docker image** — blocked in Audit 0054 by stale Docker
-   Hub credentials in `~/.docker/config.json`, which make even an anonymous pull of the
-   public base image fail with `401`. The owner clears it with `docker logout` (or by
-   removing the `auths` entries) and then runs the build; the Dockerfile and both lock
-   files are already corrected and the static contract is tested. Required for the
-   private-test rebuild.
-3. **A code-bearing evaluation set** — still the single most consequential blocker in the
-   repository, and a *data* blocker. Candidates are 40% of the organizer metric and it
-   is **unmeasurable**: zero ICD-10 codes and zero RxCUIs in the governed corpus. Audit
-   0054 built the strict contract and the refusal path; what is missing is the human
-   annotation round specified in `evaluation.code_linking.REQUIRED_ANNOTATION_ARTIFACT`.
-   Everything below item 4 is being built blind until this exists.
-4. **Calibration (S6)** — nothing downstream of L4 has calibrated probabilities, so the
-   real spec §13 decoder has nothing to optimize over and L8 stays a deterministic
-   stand-in. S6 needs out-of-fold predictions no stage produces.
-5. **A governed INN ↔ RxNorm crosswalk at KB-intake time** — `paracetamol` occurs in
-   **zero** records of the locked snapshot. Audit 0054's 12-entry bridge is a stopgap
-   marked `REQUIRES_CLINICAL_REVIEW`; a large hand-written drug-name table is a
-   patient-safety hazard and must not be the answer.
-6. **Rebuild the KB indexes with labeled graph edges** — both graphs store unlabeled
+1. **Produce the code-bearing gold set** specified in
+   `evaluation.code_linking.REQUIRED_ANNOTATION_ARTIFACT`. Candidates are **40% of the
+   organizer metric** and remain `UNMEASURABLE_WITHOUT_CODE_BEARING_GOLD`: the governed
+   corpus has zero ICD-10 codes and zero RxCUIs. Every linking decision built in Audit
+   0054 is currently unvalidatable, and this is the single most consequential open item.
+2. **Assertion supervision.** 30% of the metric is held by regression tests against
+   constructed cases; the governed corpus has zero assertion labels, so S2 cannot be
+   validated and no assertion metric is computable.
+3. **Calibration (S6).** The only thing that turns L8's honest deterministic decoder
+   into spec §13. Needs out-of-fold predictions no stage produces yet.
+4. **A governed INN ↔ RxNorm crosswalk at KB-intake time**, retiring the 12-entry
+   `REQUIRES_CLINICAL_REVIEW` bridge. `paracetamol` is absent from the locked snapshot.
+5. **Rebuild the KB indexes keeping relation labels.** Both graphs store unlabeled
    symmetric adjacency, so ICD direction is inferred from code length and RxNorm
    direction from endpoint TTY. Both work and both are recorded as inferences; labeled
    edges would make them assertions.
-7. **L6 global optimization** — the graph is now read by L7 and L8 but not *searched*.
-   No beam search with global features, no ILP (spec §11).
-8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4 v1
-   still measures below the E3-only baseline (0.5521 against 0.5559).
-9. **Assertion supervision** — build an assertion corpus; until then no assertion metric
-   is computable and S2 cannot be validated.
-10. **L7 model stages** — the contract, entry conditions and refusal path are done, so a
-    critic/adjudicator backend is now a drop-in. Last, per spec §20's ordering.
+6. **Fix the truncated ICD `canonical_name` extraction** — lexical retrieval cannot beat
+   the names it is given, and some are PDF fragments.
+7. **Train the remaining L3 experts** (E5 head is randomly initialized; E6/E7 have no
+   local weights) and measure whether a wider lattice beats E3 alone.
+8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4 still
+   measures below the E3-only baseline (0.5521 against 0.5559).
+9. **L6 global optimization** — the graph is read by L7 and L8 but not searched.
+10. **L7 model stages.** The contract, entry conditions, locked option sets and refusal
+    path are complete, so a critic/adjudicator is a drop-in. Last, per spec §20.
 
 ## 14. Maintenance rule
 

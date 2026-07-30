@@ -203,7 +203,7 @@ def test_a_future_expert_reaches_the_runner_without_editing_it() -> None:
         l1_config=config.l1_config, router_config=config.router_config,
         medication_config=config.medication_config,
         laboratory_config=config.laboratory_config,
-        resolver_config=config.resolver_config, l4_config=config.l4_config,
+        l4_config=config.l4_config,
         icd_index=config.icd_index, rxnorm_index=config.rxnorm_index,
         checkpoint_root=config.checkpoint_root,
         expected_documents=config.expected_documents, feature_flags=flags)

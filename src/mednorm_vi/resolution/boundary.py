@@ -34,6 +34,81 @@ _MED_ORDER: dict[str, int] = {
     "name_strength_route": 2, "full": 3,
 }
 
+# Test-result kinds the policy can name, and the fallback ladder below.
+RESULT_VALUE_ONLY = "value_only"
+RESULT_VALUE_UNIT = "value_unit"
+# `value_with_unit` is the spelling the retired Phase-1C-A config used; both are
+# accepted so a migrated config cannot silently mean something else.
+_RESULT_UNIT_ALIASES: frozenset[str] = frozenset({RESULT_VALUE_UNIT, "value_with_unit"})
+
+# Rank bands for `preference_rank`. Exact policy match always wins; the bands keep
+# the two fallback directions from ever interleaving.
+_RANK_EXACT = 0
+_RANK_AT_OR_BELOW_TARGET = 1
+_RANK_ABOVE_TARGET = 100
+
+
+def medication_kind_order(kind: str) -> int:
+    """Narrow-to-wide position of a medication boundary kind (99 when unknown)."""
+    return _MED_ORDER.get(kind, 99)
+
+
+def preference_rank(entity_type: str, kind: str, preference: str) -> int:
+    """Rank one boundary kind against a configured preference. Lower is better.
+
+    This is the **single** implementation of the boundary-policy ladder, shared by
+    the canonical lattice L4 (`resolver_v1._select_within_boundary_groups`) and,
+    until Audit 0055 deleted it, by the retired Phase-1C-A resolver. Having one
+    function is the point: two ladders that "mirror" each other in comments are two
+    ladders that eventually disagree.
+
+    The ladder reproduces the retired resolver's documented semantics exactly:
+
+    * **medication** — the exact configured kind if the group offers it; otherwise
+      the **widest kind at or below** the policy's width (a narrower span is a safe
+      under-read); otherwise the **narrowest kind above** it.
+    * **test_result** — the exact configured kind; otherwise ``value_only``, which
+      is the conservative reading while the organizer's convention is unresolved;
+      otherwise anything else.
+
+    An empty ``preference`` means "no policy configured", and every kind ranks
+    equally so the caller's utility/width tie-breaks decide alone.
+    """
+    if not preference:
+        return _RANK_EXACT
+    if entity_type in {"MEDICATION", "THUỐC"}:
+        if kind == preference:
+            return _RANK_EXACT
+        target = medication_kind_order(preference)
+        order = medication_kind_order(kind)
+        if order <= target:
+            # Widest at or below the target ranks best: target - order == 0 is the
+            # target width itself, and each step narrower is one rank worse.
+            return _RANK_AT_OR_BELOW_TARGET + (target - order)
+        return _RANK_ABOVE_TARGET + order
+    if entity_type in {"TEST_RESULT", "KẾT_QUẢ_XÉT_NGHIỆM"}:
+        want = (RESULT_VALUE_UNIT if preference in _RESULT_UNIT_ALIASES
+                else RESULT_VALUE_ONLY)
+        if kind == want:
+            return _RANK_EXACT
+        if kind == RESULT_VALUE_ONLY:
+            return _RANK_AT_OR_BELOW_TARGET
+        return _RANK_ABOVE_TARGET
+    # Any other type has no configured ladder; every kind is equally acceptable.
+    return _RANK_EXACT
+
+
+def preference_note(entity_type: str, kind: str, preference: str) -> str:
+    """Human-readable record of why a kind won, for hypothesis provenance."""
+    if not preference:
+        return "no_boundary_policy"
+    rank = preference_rank(entity_type, kind, preference)
+    if rank == _RANK_EXACT:
+        return f"policy={preference}:exact"
+    if rank < _RANK_ABOVE_TARGET:
+        return f"policy={preference}:fallback_widest_at_or_below_target:kind={kind}"
+    return f"policy={preference}:fallback_narrowest_above_target:kind={kind}"
+
 
 def _by_deterministic(p: SpanProposal) -> tuple[int, int, str]:
     return (p.start, p.end, p.proposal_id)
@@ -49,47 +124,28 @@ def choose_boundary(
         return group[0], considered, "single boundary"
 
     if entity_type == "THUỐC":
-        return _choose_medication(group, medication_policy)
+        return _choose_by_ladder(entity_type, group, medication_policy)
     if entity_type == "KẾT_QUẢ_XÉT_NGHIỆM":
-        return _choose_result(group, test_result_policy)
+        return _choose_by_ladder(entity_type, group, test_result_policy)
     # default: widest, deterministic
     chosen = max(group, key=lambda p: (width(p), -p.start, p.proposal_id))
     return chosen, considered, "widest fallback"
 
 
-def _choose_medication(
-    group: list[SpanProposal], policy: str,
+def _choose_by_ladder(
+    entity_type: str, group: list[SpanProposal], policy: str,
 ) -> tuple[SpanProposal, tuple[str, ...], str]:
-    considered = tuple(sorted({boundary_kind(p) for p in group}))
-    target = _MED_ORDER.get(policy, _MED_ORDER["full"])
-    # exact policy kind if present
-    exact = [p for p in group if boundary_kind(p) == policy]
-    if exact:
-        return min(exact, key=_by_deterministic), considered, f"policy={policy}"
-    # else the widest whose order <= target, else the narrowest available
-    below = [p for p in group if _MED_ORDER.get(boundary_kind(p), 99) <= target]
-    if below:
-        chosen = max(below, key=lambda p: (_MED_ORDER.get(boundary_kind(p), 0),
-                                           width(p), -p.start))
-        return chosen, considered, f"policy={policy} (fallback to widest<=target)"
-    chosen = min(group, key=lambda p: (_MED_ORDER.get(boundary_kind(p), 0), _by_deterministic(p)))
-    return chosen, considered, f"policy={policy} (fallback narrowest)"
+    """Pick one alternative using the shared :func:`preference_rank` ladder.
 
-
-def _choose_result(
-    group: list[SpanProposal], policy: str,
-) -> tuple[SpanProposal, tuple[str, ...], str]:
+    Both L4 implementations route through the same ranking function, so the
+    Phase-1C-A foundation and the canonical lattice resolver cannot drift apart.
+    """
     considered = tuple(sorted({boundary_kind(p) for p in group}))
-    want = "value_unit" if policy in ("value_with_unit", "value_unit") else "value_only"
-    match = [p for p in group if boundary_kind(p) == want]
-    if match:
-        return min(match, key=_by_deterministic), considered, f"policy={policy}"
-    # fall back to value_only, else narrowest
-    vonly = [p for p in group if boundary_kind(p) == "value_only"]
-    if vonly:
-        return (min(vonly, key=_by_deterministic), considered,
-                f"policy={policy} (fallback value_only)")
-    return min(group, key=_by_deterministic), considered, f"policy={policy} (fallback narrowest)"
+    chosen = min(group, key=lambda p: (
+        preference_rank(entity_type, boundary_kind(p), policy),
+        _by_deterministic(p)))
+    return chosen, considered, preference_note(
+        entity_type, boundary_kind(chosen), policy)
 
 
 # ------------------------------------------------------------------------------
@@ -199,8 +255,13 @@ def expand_to_competitor(
 
 __all__ = [
     "LIST_MARKER_PATTERN",
+    "RESULT_VALUE_ONLY",
+    "RESULT_VALUE_UNIT",
     "BoundaryShape",
     "choose_boundary",
     "expand_to_competitor",
+    "medication_kind_order",
+    "preference_note",
+    "preference_rank",
     "trim_span",
 ]

@@ -95,7 +95,7 @@ def test_doctor_detects_both_snapshots_and_indexes(tmp_path: Path) -> None:
     paths = DoctorPaths(
         organizer_dir=REPO / "configs" / "organizer",
         position_config=REPO / "configs" / "organizer" / "position_policies_v1.yaml",
-        resolver_config=REPO / "configs" / "resolution" / "resolver_v1.yaml",
+        l4_config=REPO / "configs" / "resolution" / "boundary_type_resolver_v1.yaml",
         manifests_dir=tmp_path / "m",
         resource_templates_dir=REPO / "configs" / "resources",
         ner_manifests_dir=REPO / "configs" / "resources" / "ner",
@@ -120,7 +120,7 @@ def test_doctor_full_absent_when_only_prescribable(tmp_path: Path) -> None:
     paths = DoctorPaths(
         organizer_dir=REPO / "configs" / "organizer",
         position_config=REPO / "configs" / "organizer" / "position_policies_v1.yaml",
-        resolver_config=REPO / "configs" / "resolution" / "resolver_v1.yaml",
+        l4_config=REPO / "configs" / "resolution" / "boundary_type_resolver_v1.yaml",
         manifests_dir=tmp_path / "m",
         resource_templates_dir=REPO / "configs" / "resources",
         ner_manifests_dir=REPO / "configs" / "resources" / "ner",

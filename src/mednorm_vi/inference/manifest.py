@@ -397,7 +397,7 @@ def build_run_manifest(
     config_hashes = {
         name: _sha256_text(str(getattr(config, name, "")))
         for name in ("l1_config", "router_config", "medication_config",
-                     "laboratory_config", "resolver_config", "l4_config",
+                     "laboratory_config", "l4_config",
                      "icd_index", "rxnorm_index")
         if getattr(config, name, None)
     }

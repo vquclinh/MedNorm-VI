@@ -95,12 +95,17 @@ class OverlapOutcome:
 
     survivors: tuple[str, ...]
     suppressed: tuple[tuple[str, str, float], ...]  # (loser, winner, iou)
+    # Tied competitions the caller asked to abstain on rather than decide.
+    # Kept separate from `suppressed` because abstention is not rejection: neither
+    # span was judged wrong, the resolver simply could not tell them apart.
+    abstained_ties: tuple[tuple[str, str, float], ...] = ()
 
 
 def resolve_near_complete_overlaps(
     candidates: Sequence[OverlapCandidate], *,
     near_complete_iou: float, competition_penalty: float,
     suppress_cross_type: bool, protect_pairs: bool,
+    abstain_on_tie: bool = False,
 ) -> OverlapOutcome:
     """Suppress the weaker of two **near-completely overlapping** same-type spans.
 
@@ -114,9 +119,14 @@ def resolve_near_complete_overlaps(
       a genuinely different mention;
     * preserve TEST_NAME/TEST_RESULT pairs with a strong ``has_result`` edge —
       a protected partner is never suppressed by the span it is paired with.
+
+    ``abstain_on_tie`` migrates the retired resolver's ``abstain_on_conflict``: when
+    two competitors have **equal utility**, marking both unresolved is more honest
+    than breaking the tie on span geometry.
     """
     order = sorted(candidates, key=lambda c: (-c.utility, c.start, c.end, c.candidate_id))
     suppressed: dict[str, tuple[str, float]] = {}
+    abstained: dict[str, tuple[str, float]] = {}
     for index, winner in enumerate(order):
         if winner.candidate_id in suppressed:
             continue
@@ -134,15 +144,22 @@ def resolve_near_complete_overlaps(
                 continue
             # The penalty makes the competition auditable: the loser is only
             # suppressed when it still ranks below the winner after it applies.
+            if abstain_on_tie and loser.utility == winner.utility:
+                abstained[loser.candidate_id] = (winner.candidate_id, round(iou, 6))
+                abstained[winner.candidate_id] = (loser.candidate_id, round(iou, 6))
+                continue
             if loser.utility - competition_penalty >= winner.utility:
                 continue
             suppressed[loser.candidate_id] = (winner.candidate_id, round(iou, 6))
+    decided = set(suppressed) | set(abstained)
     survivors = tuple(
-        c.candidate_id for c in candidates if c.candidate_id not in suppressed)
+        c.candidate_id for c in candidates if c.candidate_id not in decided)
     return OverlapOutcome(
         survivors=survivors,
         suppressed=tuple(
-            (loser, winner, iou) for loser, (winner, iou) in sorted(suppressed.items())))
+            (loser, winner, iou) for loser, (winner, iou) in sorted(suppressed.items())),
+        abstained_ties=tuple(
+            (left, right, iou) for left, (right, iou) in sorted(abstained.items())))
 
 
 __all__ = [

@@ -97,3 +97,4 @@ Each audit should record, at minimum:
 - `0052-canonical-l3-lattice-e3-activation-and-assertion-correctness.md`
 - `0053-route-gating-honest-l8-and-l9-kb-membership.md`
 - `0054-deterministic-l5-l7-run-manifest-and-container-audit.md`
+- `0055-framework-closure-old-l4-removal-and-offline-container.md`
