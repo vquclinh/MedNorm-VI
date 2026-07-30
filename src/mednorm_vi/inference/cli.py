@@ -7,7 +7,7 @@ import sys
 from collections.abc import Sequence
 
 from .config import PipelineConfig
-from .pipeline import run_input_dir
+from .pipeline import KbMembershipViolation, run_input_dir
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -17,7 +17,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--input-dir", required=True)
     run.add_argument("--output-zip", required=True)
     run.add_argument("--config", required=True)
-    run.add_argument("--mode", choices=("deterministic", "specialist", "full"), required=True)
+    run.add_argument(
+        "--mode", choices=("deterministic", "specialist", "full"), required=True)
+    run.add_argument(
+        "--run-manifest", default=None, metavar="PATH",
+        help=(
+            "write a deterministic, clinical-text-free run manifest to PATH. "
+            "Opt-in: nothing is written unless this flag is given."))
     args = parser.parse_args(argv)
     if args.command == "run":
         config = PipelineConfig.load(args.config)
@@ -27,12 +33,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_zip=args.output_zip,
                 config=config,
                 mode=args.mode,
+                run_manifest_path=args.run_manifest,
             )
+        except KbMembershipViolation as exc:
+            # L9 stopped the run. When a manifest was requested it has already been
+            # written with `l9_stopped_the_run: true`, so the refusal is recorded.
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
         except RuntimeError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         print(f"processed_documents: {len(results)}")
         print(f"output_zip: {args.output_zip}")
+        if args.run_manifest:
+            print(f"run_manifest: {args.run_manifest}")
         return 0
     return 2
 

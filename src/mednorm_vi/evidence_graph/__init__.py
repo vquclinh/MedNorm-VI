@@ -1,5 +1,51 @@
-"""Clinical Evidence Graph (L6)."""
+"""Clinical Evidence Graph (L6) and its typed public consistency contract."""
 
-from .graph import ClinicalEvidenceGraph, EvidenceEdge, EvidenceNode, build_evidence_graph
+from .consistency import (
+    CONSISTENCY_VERSION,
+    CONTRADICTED,
+    NOT_APPLICABLE,
+    REC_EMIT,
+    REC_EMIT_WITH_CAUTION,
+    REC_ESCALATE,
+    REC_WITHHOLD,
+    RULES,
+    SUPPORTED,
+    UNRESOLVED,
+    ConsistencyDecision,
+    ConsistencyIssue,
+    GraphConsistencyReport,
+    SupportSignal,
+    evaluate_consistency,
+)
+from .graph import (
+    EVIDENCE_GRAPH_VERSION,
+    RELATIONS,
+    ClinicalEvidenceGraph,
+    EvidenceEdge,
+    EvidenceNode,
+    build_evidence_graph,
+)
 
-__all__ = ["ClinicalEvidenceGraph", "EvidenceEdge", "EvidenceNode", "build_evidence_graph"]
+__all__ = [
+    "CONSISTENCY_VERSION",
+    "CONTRADICTED",
+    "EVIDENCE_GRAPH_VERSION",
+    "NOT_APPLICABLE",
+    "REC_EMIT",
+    "REC_EMIT_WITH_CAUTION",
+    "REC_ESCALATE",
+    "REC_WITHHOLD",
+    "RELATIONS",
+    "RULES",
+    "SUPPORTED",
+    "UNRESOLVED",
+    "ClinicalEvidenceGraph",
+    "ConsistencyDecision",
+    "ConsistencyIssue",
+    "EvidenceEdge",
+    "EvidenceNode",
+    "GraphConsistencyReport",
+    "SupportSignal",
+    "build_evidence_graph",
+    "evaluate_consistency",
+]

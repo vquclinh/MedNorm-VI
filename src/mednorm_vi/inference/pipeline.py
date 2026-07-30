@@ -20,16 +20,26 @@ E1/E2 pair that Phase 1B owns.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..confidence_cascade import apply_confidence_cascade
+from ..confidence_cascade.escalation import CascadeReport, run_cascade_escalation
 from ..deterministic_baseline.models import Phase1BConfig
 from ..deterministic_baseline.pipeline import run_phase1b
 from ..document_intelligence import analyze_document
 from ..document_intelligence.builder import load_config as load_l1_config
-from ..evidence_graph import ClinicalEvidenceGraph, build_evidence_graph
+from ..document_intelligence.models import NodeKind
+from ..evidence_graph import (
+    ClinicalEvidenceGraph,
+    GraphConsistencyReport,
+    build_evidence_graph,
+    evaluate_consistency,
+)
 from ..kb.indexing.retrieval import LocalIndex, load_index
 from ..lattice.builder import build_span_lattice, lattice_config_hash
 from ..lattice.models import SpanLattice
@@ -51,6 +61,7 @@ from ..metric_decoder import decode_entities
 from ..resolution.canonical import resolution_counts, resolve_lattice_to_hypotheses
 from ..resolution.config_v1 import load_resolver_v1_config
 from ..resolution.models import EntityHypothesis
+from ..schemas.constants import CANDIDATE_ONTOLOGY_BY_TYPE, ORGANIZER_LABEL_BY_TYPE
 from ..schemas.prediction import EntityPrediction
 from ..specialists.assertion import resolve_assertions
 from ..validator.kb_membership import (
@@ -58,7 +69,20 @@ from ..validator.kb_membership import (
     LockedSnapshots,
     validate_document_candidates,
 )
-from .config import PipelineConfig, flags_for_mode, validate_readiness
+from .config import (
+    PipelineConfig,
+    evaluate_readiness,
+    flags_for_mode,
+    validate_readiness,
+)
+from .manifest import (
+    CheckpointRecord,
+    SnapshotRecord,
+    build_run_manifest,
+    peak_memory_gib,
+    role_safe_path,
+    write_run_manifest,
+)
 from .packaging import package_output_zip, write_output_directory
 from .serialization import to_entity_predictions, to_submission_json
 
@@ -82,6 +106,10 @@ class PipelineResult:
     # visible without reading parser source — which is how the Audit-0052 C2
     # over-routing stayed hidden.
     route_gate: RouteGateDiagnostics | None = None
+    # L6/L7 typed public contracts (Audit 0054). Reported so a consistency
+    # contradiction or an escalation is visible without re-deriving it downstream.
+    consistency: GraphConsistencyReport | None = None
+    escalation: CascadeReport | None = None
 
     def experts_that_ran(self) -> tuple[str, ...]:
         return tuple(
@@ -196,9 +224,34 @@ def run_document(
     icd_index, rxnorm_index = _indexes(config)
     links = _link(accepted, icd_index=icd_index, rxnorm_index=rxnorm_index)
     cascade = apply_confidence_cascade(accepted)
-    decoded = decode_entities(accepted, cascade, assertions, links)
+
+    # --- L6: graph + typed consistency ---------------------------------------
+    evidence_graph = build_evidence_graph(
+        graph.document_id, accepted, assertions, links,
+        document=graph, relations=phase1b.relations)
+    section_categories = {
+        node.node_id: str(node.category or "")
+        for node in graph.nodes if node.kind == NodeKind.SECTION}
+    consistency = evaluate_consistency(
+        graph.document_id, evidence_graph, accepted, assertions, links,
+        section_categories=section_categories)
+
+    # --- L7: locked-option escalation (no model; deterministic fallback) ------
+    escalation = run_cascade_escalation(
+        graph.document_id, accepted, cascade=cascade, assertions=assertions,
+        link_results=links, consistency=consistency,
+        ontology_by_type={
+            # Keyed by the ORGANIZER-facing label, because that is what
+            # `EntityHypothesis.entity_type` carries (see `consistency.ontology_for`).
+            ORGANIZER_LABEL_BY_TYPE[internal]: ontology
+            for internal, ontology in CANDIDATE_ONTOLOGY_BY_TYPE.items()
+            if ontology is not None and internal in ORGANIZER_LABEL_BY_TYPE})
+
+    # --- L8: decode, now consuming L6 and L7 ---------------------------------
+    decoded = decode_entities(
+        accepted, cascade, assertions, links,
+        consistency=consistency, escalation=escalation)
     predictions = to_entity_predictions(decoded)
-    evidence_graph = build_evidence_graph(graph.document_id, accepted, assertions, links)
     proposals_by_expert: dict[str, int] = {}
     for proposal in lattice.proposals:
         for source in proposal.sources:
@@ -216,10 +269,14 @@ def run_document(
         route_gate=build_route_gate_diagnostics(
             graph.document_id, phase1b.routings,
             proposals_by_expert=proposals_by_expert),
+        consistency=consistency,
+        escalation=escalation,
     )
 
 
-def _gate_kb_membership(payloads: dict[str, str], config: PipelineConfig) -> None:
+def _gate_kb_membership(
+    payloads: dict[str, str], config: PipelineConfig
+) -> dict[str, int]:
     """L9's membership gate on the canonical packaging path (spec §16).
 
     This is the step that makes ``validator/kb_membership`` matter: without a caller
@@ -234,14 +291,18 @@ def _gate_kb_membership(payloads: dict[str, str], config: PipelineConfig) -> Non
     icd_index, rxnorm_index = _indexes(config)
     snapshots = LockedSnapshots(icd10=icd_index, rxnorm=rxnorm_index)
     violations: list[str] = []
+    counts: dict[str, int] = {}
     for name in sorted(payloads, key=lambda n: (0, int(Path(n).stem))
                        if Path(n).stem.isdigit() else (1, n)):
         document_id = Path(name).stem
         result = validate_document_candidates(
             json.loads(payloads[name]), snapshots, document_id=document_id)
+        for issue in result.issues:
+            counts[issue.code] = counts.get(issue.code, 0) + 1
         violations.extend(f"{name}:{issue.code}" for issue in result.errors)
     if violations:
         raise KbMembershipViolation(violations)
+    return counts
 
 
 def run_input_dir(
@@ -250,8 +311,15 @@ def run_input_dir(
     output_zip: str | Path,
     config: PipelineConfig,
     mode: str,
+    run_manifest_path: str | Path | None = None,
 ) -> tuple[PipelineResult, ...]:
-    """Run all ``*.txt`` inputs and package deterministic organizer JSON."""
+    """Run all ``*.txt`` inputs and package deterministic organizer JSON.
+
+    ``run_manifest_path`` is opt-in (the CLI's ``--run-manifest``). Nothing is written
+    unless it is given, and the manifest is written **even when L9 stops the run** —
+    Audit 0053 §11 recorded that a detected violation left no record at all.
+    """
+    started = time.monotonic()
     readiness = validate_readiness(config, mode=mode)
     if readiness:
         raise RuntimeError(f"pipeline not ready for mode={mode}: {', '.join(readiness)}")
@@ -272,13 +340,95 @@ def run_input_dir(
     }
     # L9 membership gate BEFORE anything is written: a violating run must not leave a
     # partial package on disk for someone to submit by mistake.
-    _gate_kb_membership(payloads, config)
+    try:
+        l9_counts = _gate_kb_membership(payloads, config)
+    except KbMembershipViolation as violation:
+        if run_manifest_path is not None:
+            _write_manifest(
+                results, mode=mode, config=config, path=run_manifest_path,
+                started=started,
+                l9_issue_counts=_violation_counts(violation), l9_stopped=True)
+        raise
     output_dir = Path(output_zip).with_suffix("")
     if output_dir.name != "output":
         output_dir = Path(output_zip).parent / "output"
     write_output_directory(payloads, output_dir)
     package_output_zip(output_dir, output_zip, expected_count=config.expected_documents)
+    if run_manifest_path is not None:
+        _write_manifest(
+            results, mode=mode, config=config, path=run_manifest_path,
+            started=started, l9_issue_counts=l9_counts, l9_stopped=False,
+            output_zip=output_zip)
     return results
+
+
+def _violation_counts(violation: KbMembershipViolation) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in violation.violations:
+        code = entry.rsplit(":", 1)[-1]
+        counts[code] = counts.get(code, 0) + 1
+    return counts
+
+
+def _write_manifest(
+    results: Sequence[PipelineResult],
+    *,
+    mode: str,
+    config: PipelineConfig,
+    path: str | Path,
+    started: float,
+    l9_issue_counts: Mapping[str, int],
+    l9_stopped: bool,
+    output_zip: str | Path | None = None,
+) -> None:
+    """Assemble and write the run manifest. Only called when a path was requested."""
+    icd_index, rxnorm_index = _indexes(config)
+    snapshots = [
+        SnapshotRecord(
+            role=role, index_type=index.index_type,
+            snapshot_id=index.source_snapshot_id,
+            concept_count=len(index.records),
+            safe_path=role_safe_path(source, role=role))
+        for role, index, source in (
+            ("icd10_index", icd_index, config.icd_index),
+            ("rxnorm_index", rxnorm_index, config.rxnorm_index))
+        if index is not None and source
+    ]
+    # The checkpoint SHA-256 the expert itself verified is reused rather than
+    # recomputed: E3's checkpoint is 1.6 GB and the adapter already hashed it.
+    checkpoints = [
+        CheckpointRecord(
+            role=record.expert_id, present=bool(record.path),
+            sha256=record.checkpoint_sha256 or None,
+            model_revision=record.model_revision,
+            parameter_count_status="NOT_VERIFIED",
+            safe_path=role_safe_path(record.path, role=record.expert_id)
+            if record.path else f"role:{record.expert_id}")
+        for result in results[:1]
+        for record in result.expert_records if record.executed
+    ]
+    manifest = build_run_manifest(
+        results, mode=mode, config=config,
+        readiness=evaluate_readiness(config, mode=mode),
+        architecture_pdf="docs/MedNorm-VI_Architecture.pdf",
+        checkpoints=checkpoints, snapshots=snapshots,
+        l9_issue_counts=l9_issue_counts, l9_stopped=l9_stopped,
+        runtime_seconds=time.monotonic() - started,
+        peak_memory_gib=peak_memory_gib(),
+        output_zip_sha256=(
+            _sha256_of(output_zip) if output_zip is not None else None))
+    write_run_manifest(manifest, path)
+
+
+def _sha256_of(path: str | Path) -> str | None:
+    target = Path(path)
+    if not target.is_file():
+        return None
+    digest = hashlib.sha256()
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 __all__ = [

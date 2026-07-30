@@ -34,7 +34,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..confidence_cascade import CascadeDecision
+from ..confidence_cascade.cascade import CascadeDecision
+from ..confidence_cascade.escalation import REJECT, CascadeReport
+from ..evidence_graph.consistency import GraphConsistencyReport
 from ..linking.models import LinkedCandidate, LinkerResult
 from ..resolution.models import EntityHypothesis
 from ..specialists.assertion import AssertionDecision
@@ -68,6 +70,13 @@ DROP_WEAKER_TIER = "dropped_weaker_tier_than_best_evidence"
 DROP_SAFETY_BOUND = "dropped_at_candidate_safety_bound"
 DROP_DUPLICATE = "dropped_duplicate_code"
 DROP_TYPE_MISMATCH = "dropped_candidate_ontology_mismatch"
+# Consistency-driven codes (Audit 0054 §7). L6's typed report is now an input, so a
+# contradiction it found is visible in the decoder's own reason codes rather than being
+# discovered later by a reader comparing two artifacts.
+DROP_GRAPH_CONTRADICTION = "dropped_l6_fatal_contradiction"
+DROP_UNSUPPORTED_CANDIDATE = "dropped_candidate_without_graph_support"
+KEEP_CONSISTENCY_SUPPORTED = "l6_consistency_no_issues"
+WITHHELD_FATAL_CONTRADICTION = "withheld_l6_fatal_contradiction"
 
 
 class CalibratedDecoderUnavailable(RuntimeError):
@@ -133,6 +142,7 @@ def _select_candidates(
     candidates: Sequence[LinkedCandidate],
     *,
     safety_bound: int,
+    blocked_codes: frozenset[str] = frozenset(),
 ) -> tuple[tuple[str, ...], tuple[CandidateDecision, ...]]:
     """Select a candidate set by evidence tier and score band.
 
@@ -141,10 +151,27 @@ def _select_candidates(
     and otherwise admission is relative to the best score found in the best tier
     present, so a mention with one good candidate emits one and a mention with five
     comparable candidates emits five.
+
+    ``blocked_codes`` comes from L6's consistency report: a code a fatal issue names
+    may not be emitted, whatever its score. Blocked codes are removed *before* the tier
+    and band are computed, so one contradicted code cannot drag the band with it.
     """
     decisions: list[CandidateDecision] = []
     if not candidates:
         return (), ()
+
+    if blocked_codes:
+        permitted: list[LinkedCandidate] = []
+        for candidate in candidates:
+            if candidate.code in blocked_codes:
+                decisions.append(CandidateDecision(
+                    candidate.code, _tier_of(candidate), float(candidate.score), False,
+                    DROP_GRAPH_CONTRADICTION))
+            else:
+                permitted.append(candidate)
+        candidates = permitted
+        if not candidates:
+            return (), tuple(decisions)
 
     ranked = sorted(
         candidates,
@@ -211,11 +238,25 @@ def decode_entities(
     links: Sequence[LinkerResult],
     *,
     candidate_safety_bound: int = CANDIDATE_SAFETY_BOUND,
+    consistency: GraphConsistencyReport | None = None,
+    escalation: CascadeReport | None = None,
 ) -> tuple[DecodedEntity, ...]:
     """**The L8 entry point.** Deterministic, evidence-ranked final set selection.
 
     Truthfully named: it ranks by available evidence and records why. It does not
     estimate expected Jaccard or WER, and it uses no calibrated probability.
+
+    ``consistency`` and ``escalation`` are L6's and L7's typed public contracts
+    (Audit 0054). When supplied:
+
+    * a **fatal** contradiction withholds the entity — a contradiction can no longer be
+      silently accepted, which was possible while L6 was write-only;
+    * codes a fatal issue names are dropped as ``DROP_GRAPH_CONTRADICTION``;
+    * an L7 ``REJECT`` disposition withholds the entity;
+    * every consistency-driven action appears in the reason codes.
+
+    Omitting them reproduces the Audit-0053 behaviour exactly, so the wiring is
+    additive rather than a hidden change of policy.
     """
     accepted = {d.hypothesis_id: d for d in cascade if d.accepted}
     assertion_map = {a.hypothesis_id: a for a in assertions}
@@ -226,11 +267,47 @@ def decode_entities(
         decision = accepted.get(hypothesis.hypothesis_id)
         if decision is None:
             continue
+
+        # L7 disposition, when a cascade report was supplied.
+        l7 = (escalation.decision_for(hypothesis.hypothesis_id)
+              if escalation is not None else None)
+        if l7 is not None and l7.disposition == REJECT:
+            continue
+
+        # L6 fatal contradiction. Two different things must not be conflated:
+        #   * a fatal issue that names CANDIDATE CODES condemns those codes — a
+        #     duplicate RxCUI is a reason to drop the duplicate, not to delete a
+        #     correctly-found medication;
+        #   * a fatal issue with no codes condemns the ENTITY (an assertion on a type
+        #     that cannot carry one, two same-type spans surviving on one interval).
+        # Uncertainty (UNRESOLVED) never withholds; it lowers confidence and escalates.
+        entity_fatal = any(
+            issue.fatal and not issue.candidate_codes
+            for issue in (consistency.issues_for(hypothesis.hypothesis_id)
+                          if consistency is not None else ()))
+        if entity_fatal:
+            continue
+
+        blocked = (consistency.blocked_candidate_codes(hypothesis.hypothesis_id)
+                   if consistency is not None else frozenset())
         assertion = assertion_map.get(hypothesis.hypothesis_id)
         link = link_map.get(hypothesis.hypothesis_id)
         codes, candidate_decisions = (
-            _select_candidates(link.candidates, safety_bound=candidate_safety_bound)
+            _select_candidates(
+                link.candidates, safety_bound=candidate_safety_bound,
+                blocked_codes=blocked)
             if link is not None else ((), ()))
+
+        reasons = list(decision.reasons) or ["cascade_accepted"]
+        if consistency is not None:
+            issues = consistency.issues_for(hypothesis.hypothesis_id)
+            if not issues:
+                reasons.append(KEEP_CONSISTENCY_SUPPORTED)
+            else:
+                reasons.extend(sorted({
+                    f"consistency:{issue.rule}:{issue.verdict}" for issue in issues}))
+        if l7 is not None:
+            reasons.append(f"l7:{l7.disposition}")
         out.append(DecodedEntity(
             hypothesis=hypothesis,
             # An empty label set is preserved as empty: spec §13.3 and the absence
@@ -238,7 +315,7 @@ def decode_entities(
             assertions=assertion.labels if assertion is not None else (),
             candidates=codes,
             candidate_decisions=candidate_decisions,
-            retention_reason=";".join(decision.reasons) or "cascade_accepted",
+            retention_reason=";".join(reasons),
             assertion_uncertain=bool(
                 assertion is not None and getattr(assertion, "uncertain", False)),
         ))
@@ -287,6 +364,10 @@ __all__ = [
     "DROP_DUPLICATE",
     "DROP_SAFETY_BOUND",
     "DROP_TYPE_MISMATCH",
+    "WITHHELD_FATAL_CONTRADICTION",
+    "KEEP_CONSISTENCY_SUPPORTED",
+    "DROP_UNSUPPORTED_CANDIDATE",
+    "DROP_GRAPH_CONTRADICTION",
     "DROP_WEAKER_TIER",
     "KEEP_EXACT",
     "KEEP_WITHIN_TIER",

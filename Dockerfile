@@ -5,9 +5,13 @@
 #     external API."
 #   * "One command runs from the input directory to output.zip."
 #
-# NOT BUILT by Audit 0053. This file is authored as source/environment
-# reproducibility infrastructure; building it, and any organizer inference, is a
-# separate authorized step. Nothing here downloads a model.
+# BUILT AND OFFLINE-SMOKE-TESTED by Audit 0054. Audit 0053 authored this file without
+# building it; the first real build failed at the pip step, because
+# `requirements.lock` pins `torch==2.13.0+cu126` — a local version identifier that
+# does not exist on PyPI. The image now installs `requirements-image.lock`, the same
+# upstream torch version from the CPU index, and that file records why.
+#
+# Nothing here downloads a model. No organizer inference runs. No output.zip is made.
 #
 # --- What is deliberately NOT in the image ---------------------------------
 #   * model weights — never in Git and never baked in (see MOUNTS below);
@@ -68,12 +72,31 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependencies first, from the lock file only, so a source change does not
-# re-resolve the environment. `--no-deps` is safe because requirements.lock
-# enumerates the full graph (see its header).
-COPY requirements.lock ./
+# Torch variant, selectable and explicit. The default is the CPU wheel, because every
+# recorded E3 validation run in Audits 0052-0054 was a CPU forward pass and the CUDA
+# runtime would add ~2.5 GB the inference path never touches. A GPU image is the same
+# Dockerfile with both args overridden:
+#   --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126
+#   --build-arg TORCH_SPEC=torch==2.13.0+cu126
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_SPEC=torch==2.13.0
+
+# Dependencies first, from the lock file only, so a source change does not re-resolve
+# the environment. `--no-deps` is safe because requirements-image.lock enumerates the
+# full graph (see its header). Both indexes are named explicitly rather than inherited
+# from ambient pip configuration, so the build cannot silently resolve a different
+# torch build than the one recorded.
+COPY requirements-image.lock ./
 RUN python -m pip install --no-cache-dir --upgrade pip \
- && python -m pip install --no-cache-dir --no-deps -r requirements.lock
+ && python -m pip install --no-cache-dir --no-deps \
+      --index-url "${TORCH_INDEX_URL}" \
+      --extra-index-url https://pypi.org/simple \
+      "${TORCH_SPEC}" \
+ && python -m pip install --no-cache-dir --no-deps \
+      --index-url "${TORCH_INDEX_URL}" \
+      --extra-index-url https://pypi.org/simple \
+      -r requirements-image.lock \
+ && python -c "import torch; print('torch', torch.__version__)"
 
 # Source, configs and the schema/contract docs. No data, no weights, no notebooks.
 COPY pyproject.toml ./
@@ -83,9 +106,12 @@ COPY schemas/ ./schemas/
 
 # Non-root runtime. The mount points are created and owned before the drop so a
 # read-only bind works and /output stays writable.
+# `/models`, `/kb` and `/input` are mounted READ-ONLY in the documented run command;
+# only `/output` is writable, and only by the non-root user.
 RUN mkdir -p /models /kb /input /output \
  && useradd --create-home --shell /usr/sbin/nologin --uid 10001 mednorm \
- && chown -R mednorm:mednorm /app /output
+ && chown -R mednorm:mednorm /app /output \
+ && chmod 0755 /models /kb /input
 USER mednorm
 
 # Fail fast on a broken image: the package must import and the L1-L9 contracts

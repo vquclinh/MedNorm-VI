@@ -8,12 +8,14 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
-- **Last updated by:** Audit 0053 (route gating + honest L8 + L9 KB membership +
-  reproducibility infrastructure). Audit 0053 is a **partial** milestone: of the
-  **thirteen implementation tasks** in the Milestone 2 prompt (its sections 2-14;
-  sections 1 and 15 were verification and the audit itself), **seven were not
-  attempted**, and §13 below marks them.
-- **Date:** 2026-07-29
+- **Last updated by:** Audit 0054 (deterministic L5-L7: structured RxNorm linking, ICD
+  hierarchy + specificity, all L6 edges, the typed consistency contract, L7 locked-option
+  escalation, the inference run manifest, the code-linking evaluation contract). Audit
+  0054 is a **partial** milestone: of Milestone 2B's seven carried-forward tasks plus
+  container verification, **six are complete**, the old-L4 deletion is **characterized
+  but not migrated**, and the **Docker build is blocked by the environment** — §13 below
+  marks both.
+- **Date:** 2026-07-30
 - **Rule this file obeys:** a module is never described as implemented when it has
   no trained checkpoint, no wiring, or only a contract. "Implemented" here means
   code that runs and is exercised by tests; it does **not** mean measured against
@@ -64,13 +66,22 @@ apart deliberately.
 | **Deterministic experts are route-gated with recorded suppression** | **YES, since Audit 0053** — `required_evidence` per case in `signals_v1`; suppression reasons carried on `NodeRouting.gate_reasons` |
 | **L8 no longer claims metric-aware decoding** | **Renamed and re-implemented in Audit 0053** — `decode_entities`, evidence-tier + relative-score band; the calibrated path raises `CalibratedDecoderUnavailable` |
 | **L9 enforces KB membership independently of the linker** | **YES, since Audit 0053** — `validator/kb_membership.py`, imports no linker or model, and the canonical packaging path invokes it before writing anything |
-| Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), L5 linking (lexical), L6, L7 (deterministic fallback), L8 (deterministic, honestly named), L9 (incl. KB membership) |
-| Layers that are contract-or-scaffold only | L7 LLM cascade (no local weights), L8 **calibrated** expected-Jaccard/WER decoding (fails loudly), L6 global reasoning |
-| Reproducibility infrastructure | **Authored in Audit 0053** — `Dockerfile` + `requirements.lock`. **The image has never been built.** |
+| Layers implemented and wired | L1, L2, L3 (E1+E2+E3), L4 (canonical over the lattice), L5 assertion (deterministic, §8.1 scope), **L5 linking (structured RxNorm + ICD hierarchy)**, **L6 (9 edges + typed consistency)**, **L7 (deterministic fallback + locked-option escalation contract)**, L8 (deterministic, honestly named, consuming L6/L7), L9 (incl. KB membership) |
+| Layers that are contract-or-scaffold only | L7 **model** stages (no local weights), L8 **calibrated** expected-Jaccard/WER decoding (fails loudly), L6 global *optimization* (beam/ILP — the graph is now read, but not searched) |
+| Reproducibility infrastructure | `Dockerfile` + `requirements.lock` + **`requirements-image.lock`** (Audit 0054). The lock's `torch==2.13.0+cu126` pin **cannot install from PyPI**, which Audit 0054's first real build proved; the image file records the deviation. `output.zip` is now **byte-reproducible** (fixed ZIP entry timestamps). **The image has still never been built — see §10.** |
 | `output.zip` ever produced | **No** |
 | Organizer metric ever computed | **No** — only exact mention span/type |
 | Organizer inference ever run | **No** |
-| Candidate Recall@K ever measured | **No** — the governed corpus carries **zero** ontology codes (see §0 measurement note) |
+| Candidate Recall@K ever measured | **No** — the governed corpus carries **zero** ontology codes. Audit 0054 added the strict evaluation contract (`evaluation/code_linking.py`), which **refuses to score** rather than returning zeros; the status constant is `UNMEASURABLE_WITHOUT_CODE_BEARING_GOLD` |
+| **RxNorm consumes E1's structured components** | **YES, since Audit 0054** — `linking/structured_medication.py` + `linking/rxnorm.py`; ingredient/strength/unit/concentration/dose-form/release/route conflicts are hard negatives |
+| **RxNorm graph traversal against the real snapshot** | **YES, since Audit 0054** — IN → SCDC → SCD → SBD by TTY role. The graph carries **no relation labels**, so the walk is TTY-inferred and every path is recorded (see §5.3) |
+| **ICD-10 hierarchy + specificity controller** | **YES, since Audit 0054** — ancestor/descendant/sibling expansion, and a descendant is kept only when the mention states the detail it adds |
+| **All supportable L6 edge types** | **YES, since Audit 0054** — 9 relations; `treats` requires explicit evidence and co-occurrence is refused |
+| **A typed deterministic consistency report exists and L7/L8 consume it** | **YES, since Audit 0054** — `evidence_graph/consistency.py`, 12 rules, 4 verdicts; a fatal contradiction can no longer be silently accepted |
+| **L7 locked-option escalation contract** | **YES, since Audit 0054** — decisions are expressed as option ids only, so a code, label or coordinate that was not offered cannot be returned. **No model is loaded** |
+| **Deterministic run manifest** | **YES, since Audit 0054**, opt-in via `--run-manifest`; no clinical text, byte-identical apart from two documented runtime fields |
+| **Docker image built and smoke-tested** | **NO** — blocked by the environment, not by the Dockerfile (§10 below) |
+| **Obsolete non-canonical L4 deleted** | **NO** — characterized in 13 tests, not yet migrated (§13 below) |
 
 **Organizer readiness is not claimed.** One mention expert now runs end to end; the
 candidate-set and assertion halves of the metric remain unimplemented and unmeasured.
@@ -214,7 +225,7 @@ DIAGNOSIS and SYMPTOM).
 | --- | --- |
 | Implementation | **canonical entry point `resolution/canonical.py`** over `SpanLattice`, wrapping `resolution/resolver_v1.py`'s decision logic; `resolution/learned_v2.py` is the future learned slot |
 | Status | `IMPLEMENTED_AND_INTEGRATED` (deterministic); learned v2 implemented, untrained |
-| Canonical entry points | **1.** Audit 0052 replaced the two-live-L4 situation: `resolution/resolver.py` (Phase-1C-A) is no longer on the canonical path and is retained only until its remaining per-type boundary policy is provably covered |
+| Canonical entry points | **1.** Audit 0052 replaced the two-live-L4 situation. `resolution/resolver.py` is off the canonical path (a test asserts the runner does not import it) and **still exists**: Audit 0054 characterized its unique behaviour in 13 tests (`tests/unit/test_old_l4_characterization.py`) but did **not** migrate or delete it — see §13 |
 | Deterministic implementation | Yes: `resolver_v1.py`, `boundary.py`, `typing.py`, `overlap.py` (interval/graph selection, abstention, coordinate-identity merge) |
 | Pretrained adapter | None |
 | Trained checkpoint | **None** |
@@ -251,7 +262,7 @@ is the one L4 module.
 | Field | Value |
 | --- | --- |
 | Implementation | `src/mednorm_vi/linking/icd10.py`, `linking/snapshot.py`; KB `src/mednorm_vi/kb/` (32 files, 2,230 lines) |
-| Status | `PARTIAL` — lexical retrieval over a locked snapshot |
+| Status | `IMPLEMENTED_AND_WIRED` (deterministic) — lexical retrieval **plus hierarchy traversal and the §9.3 specificity controller**, since Audit 0054 |
 | Deterministic implementation | Yes: alias/lexical retrieval, snapshot membership enforced twice, cross-ontology linking refused |
 | Pretrained adapter | None local |
 | Trained checkpoint | **None** |
@@ -260,19 +271,27 @@ is the one L4 module.
 | Contract version | `snapshot-linking-v1` |
 | Configuration source | `configs/pipeline/full_v1.yaml` (`icd_index`), `data/manifests/icd10-vi-tt06-2026-official.yaml` |
 | Parameter-ledger behaviour | 0 today; BGE-M3 / Qwen3-Embedding / reranker counted when added |
-| Known missing | No BM25, no character n-gram index, no dense embedder, no cross-encoder, **no hierarchy-graph specificity controller** (spec §9.3). Recall@K has never been measured |
+| Hierarchy | `linking/icd10_hierarchy.py`. The graph is **untyped and symmetric** (`dict[str, list[str]]`, 0 asymmetric edges), so **direction is reconstructed from code length**; `metadata.specificity` equals `len(code) - 3` for every record and is therefore reported but **excluded from ranking**. The hierarchy is incomplete by design of the source: 410 codes have no parent record, 454 three-char codes have no children, 774 records are absent from the graph — each is reported, never raised |
+| Specificity rule | A descendant outranks its ancestor **only when the mention's text expresses the detail the descendant adds** (token difference between the two canonical names). Otherwise it is suppressed as `DROP_UNSUPPORTED_SPECIFICITY` with the missing tokens recorded, and the ancestor is the conservative fallback |
+| Measured, Audit 0054 (200 rows) | 3,328 unsupported-specificity suppressions, 11,609 no-lexical-support suppressions, 478 supported-specific retentions, 193 broader fallbacks, 290 sibling-competition retentions, 10 exact-name hits. Candidate-set size spans **21 distinct values (0-20)** |
+| Known missing | No BM25, no dense embedder, no cross-encoder. **Candidate accuracy is still unmeasured and unmeasurable** — zero ICD codes in the governed corpus. The extracted `canonical_name` of some records is visibly truncated (`'- Bao gồm: viêm'`), which is a KB-intake data-quality gap, not a linker gap |
 
 ### 5.3 RxNorm Super Linker (spec §10)
 
 | Field | Value |
 | --- | --- |
 | Implementation | `src/mednorm_vi/linking/rxnorm.py` (TTY priority), `kb/rxnorm/` |
-| Status | `PARTIAL` — lexical retrieval + TTY preference |
+| Status | `IMPLEMENTED_AND_WIRED` (deterministic) — **structured linking + TTY-role graph traversal + hard negatives**, since Audit 0054 |
 | Trained checkpoint | **None** |
 | Future checkpoint slot | Same S3/S4 slots as ICD |
 | Enabled | Yes — `indices/rxnorm/prescribable-2026-07-06/index.json`; a Full snapshot index also exists and is selectable by config |
 | Configuration source | `configs/linking/rxnorm_snapshots_v1.yaml`; active selection `prescribable` |
-| Known missing | **No structured drug parse feeding the linker** (spec §10.1 `D = {ingredient, strength, dose_form, …}`), no RxNorm relation graph traversal (§10.2), no strength/dose-form hard negatives. These are the highest-value ICD/RxNorm gaps, since candidates carry 40% of the metric |
+| Structured representation | `linking/structured_medication.py` — spec §10.1's `D = {ingredient, salt, strength, concentration, dose_form, release, brand, route, frequency, prn, duration}`, built **only** from E1 ComponentSpans that Audit 0052 preserved through L4. Missing evidence is distinguished from negative evidence: an unstated field lands in `unresolved_fields` and cannot conflict |
+| Graph traversal | `linking/rxnorm_graph.py` — IN → SCDC → SCD → SBD. **The generated index stores an unlabeled symmetric adjacency**: the builder saw 2,563,978 relations and kept none of their names, so direction is inferred from endpoint **TTY**, and every emitted candidate records the TTY path it was reached by. Rebuilding the index with labeled edges would let this tighten from "a neighbour with the right TTY" to "a neighbour across the right relation" |
+| Hard negatives | Conflicting strength (incl. cross-unit mass conversion), unit **family** (mass vs volume is a category error, not a near miss), concentration (mg/mL), dose form, release form and route each suppress the candidate with a distinct reason code. Suppressed and obsoleted concepts are never offered; grouper TTYs are evidence, never codes |
+| INN bridge | **A governed-data gap found by measurement:** `paracetamol` occurs in **zero** records of the locked snapshot — RxNorm is a US vocabulary and names it `Acetaminophen`. A 12-entry INN→USAN bridge widens *retrieval* only, is marked `REQUIRES_CLINICAL_REVIEW`, is recorded on every affected decision, and is listed in full in Audit 0054 §3 for clinical review. The real fix is a governed crosswalk at KB-intake time |
+| Measured, Audit 0054 (medication fixture) | 59 structured matches, 74 strength conflicts, 9 dose-form conflicts, 9 concentration conflicts, 146 grouper suppressions, 5 suppressed-concept drops. Candidate-set size per mention `[14, 1, 1, 1, 2, 2]` where the old lexical linker returned 20/1/20/20/1/20 |
+| Known missing | No dense retrieval, no reranker. **Candidate accuracy is unmeasured and unmeasurable** — zero RxCUIs in the governed corpus |
 
 Note: `specialists/icd/` and `specialists/rxnorm/` were duplicate bootstrap
 packages whose `link()` returned `[]`; Audit 0051 deleted them. `linking/` — the
@@ -282,29 +301,37 @@ path spec §19 names — is the one L5 linking module.
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/evidence_graph/` (2 files, 100 lines) |
-| Status | `PARTIAL` — node/edge construction and a deterministic graph hash |
-| Deterministic implementation | Builds proposal → hypothesis → assertion → candidate nodes and `supports` / `has_assertion` / `has_candidate` edges; wired into `inference/pipeline.py` |
+| Implementation | `src/mednorm_vi/evidence_graph/` — `graph.py` (v2) + **`consistency.py`** (Audit 0054) |
+| Status | `IMPLEMENTED_AND_WIRED` — all supportable edge types, plus a typed consistency contract that L7 and L8 consume |
+| Deterministic implementation | 9 relations: `supports`, `has_assertion`, `has_candidate`, **`has_result`** (from E2 pair groups preserved through L4), **`modified_by`** (E1 components only), **`in_section`** (L1 section nodes), **`overlaps`** (verified character intervals), **`same_surface`** (normalized repeats, separate coordinates preserved), **`treats`**. Every edge carries `evidence_source`, `confidence_tier`, `provenance` and a rule version; edges are de-duplicated by (source, target, relation) |
+| `treats` is hard to create, on purpose | It requires an explicit Vietnamese trigger **between** the two mentions inside one sentence-scale window (120 chars, broken by any sentence terminator), or a governed KB relation. **Co-occurrence produces no edge at all**, and the declined pair is recorded so the consistency layer can report a refused claim |
 | Trained checkpoint | None; none planned |
 | Enabled | Yes |
 | Parameter-ledger behaviour | 0 |
-| Measured, Audit 0053 (200 rows) | Exactly three relations occur: `has_assertion` 333, `has_candidate` 4,000, `supports` 333. There is **no consistency-check module and no typed public contract**, so "consistency violations" is not a measurable quantity today and Audit 0053 reports it as unmeasurable rather than as zero |
-| Known missing | Most of spec §11. Absent edges: `has_result`, `modified_by`, `in_section`, `treats`, `overlaps`, `same_surface`. **No global reasoning at all** — no beam search with global features, no ILP, no consistency constraints. The graph currently records evidence rather than using it, and nothing downstream reads it: L7 and L8 both take L4 output directly (Audit 0053 items 5-6, not attempted) |
+| Consistency contract | `GraphConsistencyReport` / `ConsistencyDecision` / `ConsistencyIssue` / `SupportSignal`, contract `graph-consistency-v1`. **12 rules** (C01 section compatibility … C12 unsafe `treats`), each returning one of **four verdicts** — `SUPPORTED`, `CONTRADICTED`, `UNRESOLVED`, `NOT_APPLICABLE`. **Uncertainty is never encoded as false**: folding `UNRESOLVED` into `CONTRADICTED` invents contradictions and folding it into `SUPPORTED` hides them |
+| Fatal vs advisory | An issue is fatal only when the evidence *contradicts*. A fatal issue naming **candidate codes** condemns those codes; a fatal issue naming **no codes** condemns the entity. Conflating the two is a defect Audit 0054 introduced and its own tests caught — a duplicate RxCUI must not delete a correctly-found medication |
+| Measured, Audit 0054 (200 rows, specialist arm) | edges `supports` 333, `has_assertion` 333, `has_candidate` 2,099, `in_section` 333, `same_surface` 15, `has_result` 1, `modified_by` 7. Consistency: 1,193 SUPPORTED / 81 UNRESOLVED / 1 CONTRADICTED / 1,005 NOT_APPLICABLE. Issues by rule: C02 3, C04 12, C05 28, C09 4, C10 35. **`overlaps` and `treats` are 0 on this corpus** — L4 leaves no surviving same-type overlap, and narrative DIAGNOSIS/SYMPTOM text contains no medications to relate |
+| Known missing | **No global optimization**: no beam search with global features, no ILP. The graph is now read by L7 and L8, but it is not *searched*. `treats` has never fired on real governed data, so its trigger list is untested outside unit fixtures |
 
 ## 7. L7 — Confidence Cascade
 
 | Field | Value |
 | --- | --- |
-| Implementation | `src/mednorm_vi/confidence_cascade/` (2 files, 59 lines); local-only loaders and constrained schemas `src/mednorm_vi/llm/` (3 files, 422 lines) |
-| Status | `PARTIAL` — deterministic threshold fallback implemented; **no LLM stage runs** |
-| Deterministic implementation | Yes: `apply_confidence_cascade` accepts/rejects on resolver score |
+| Implementation | `src/mednorm_vi/confidence_cascade/` — `cascade.py` + **`escalation.py`** (Audit 0054); local-only loaders and constrained schemas `src/mednorm_vi/llm/` |
+| Status | `PARTIAL` — deterministic thresholds **plus a complete locked-option escalation contract**; **no model stage runs, and none can be loaded from here** |
+| Deterministic implementation | `apply_confidence_cascade` accepts/rejects on resolver score, **and** `escalation.py` provides `CascadeTier`, `EvidenceBundle`, `LockedBoundaryOption` / `LockedTypeOption` / `LockedAssertionOption` / `LockedCandidateOption` / `LockedOptionSet`, `EscalationRequest` / `EscalationDecision` / `EscalationValidationResult`, and the four dispositions `ACCEPT` / `REJECT` / `UNRESOLVED` / `ESCALATE` |
+| Spec P7 lives in the plumbing, not a prompt | An `EscalationDecision` names its choices by **option id**, never by value, so it *cannot* express a code, label or coordinate that was not offered. `validate_escalation_decision` re-checks every id and refuses anything else; a refused decision degrades to the deterministic fallback rather than propagating |
+| Entry conditions | Ten, explicit and deterministic: L4 confidence, expert disagreement, graph contradiction, graph unresolved, assertion uncertainty, candidate ambiguity, boundary competition, wrong-type risk, missing structured evidence, repeated-mention conflict. **Both the fired and the not-fired conditions are recorded**, so "why did this *not* escalate?" is answerable |
+| No-model fallback | Explicit: `deterministic_fallback` keeps what L4 chose and returns `UNRESOLVED` with reason `no_decision_source` when a condition fired, `ACCEPT` when none did. It never guesses and never silently accepts |
+| Measured, Audit 0054 (200 rows, specialist arm) | 239 ACCEPT, 94 UNRESOLVED, 0 REJECT. Conditions fired: assertion uncertainty 35, candidate ambiguity 33, graph unresolved 66, repeated-mention conflict 8, graph contradiction 1. An earlier threshold choice escalated 6/6 subjects on the medication fixture; `boundary_competition` was tightened from `> 0` to `> 1` retained alternatives and `graph_unresolved` narrowed to issues whose own recommendation is ESCALATE — both recorded rather than tuned silently |
+| Thresholds | Fixed and written down (`LOW_CONFIDENCE_BELOW = 0.35`, `AMBIGUOUS_CANDIDATE_COUNT = 8`). **Not searched** — this milestone forbids broad threshold optimization, and an unsearched threshold that is documented is more honest than a tuned one that is not |
 | Pretrained adapter | `llm/backends.CausalLMBackend`, `local_files_only=True` always, fails closed via `LocalCheckpointMissing` |
 | Trained checkpoint | **None** |
 | Future checkpoint slot | S5 Qwen LoRA critic/adjudicator (`qwen_lora`) |
 | Enabled | Deterministic path only. `enable_e7_qwen_proposer: false` |
 | Contract version | `local-backend-v1`, `structured-output-v1` |
 | Parameter-ledger behaviour | 0 today. A shared backbone is counted **once**; a LoRA counts base **plus** adapter; peak concurrent residency is reported separately (spec §21) |
-| Known missing | No critic stage, no adjudicator stage, no entry conditions per spec §12, no local Qwen weights. Constrained-decision *parsing* and the *option-set* constraints exist and are tested; the models do not |
+| Known missing | No critic model, no adjudicator model, no local Qwen weights. The contract, the entry conditions, the locked option sets and the refusal path exist and are tested; **the models do not**. A future backend implements one `EscalationDecisionSource` method and needs no change to the canonical runner. `ESCALATE` is therefore never returned today — the fallback answers `UNRESOLVED` instead, which is the truthful state |
 
 ## 8. L8 — Metric-aware Set Decoder
 
@@ -317,6 +344,8 @@ path spec §19 names — is the one L5 linking module.
 | Trained checkpoint | **None** |
 | Future checkpoint slot | S6 calibration meta-model (`calibration/full_v1`) |
 | Enabled | Yes; `decoder_status()` reports the active contract |
+| Consumes L6 and L7 (Audit 0054) | A **fatal** contradiction withholds the entity; codes a fatal issue names are dropped as `dropped_l6_fatal_contradiction`; an L7 `REJECT` withholds the entity; every consistency verdict appears in `retention_reason`. Omitting both arguments reproduces the Audit-0053 behaviour exactly, so the wiring is additive rather than a silent policy change |
+| Measured, Audit 0054 (200 rows) | Candidate-set size spans **15 distinct values** (0-18). Per-candidate reasons: 617 kept-within-band, 10 kept-exact, 812 dropped-below-band, 660 dropped-weaker-tier |
 | Parameter-ledger behaviour | Small meta-model counted when it exists |
 | Fixed in Audit 0053 | `decode_expected_jaccard` was the most misleading name in the repository: it applied a **fixed top-10**, exactly the "fixed top-K" spec §13.2 rules out, under a name promising expected-Jaccard search. The name is gone; a test asserts it cannot be imported |
 | Known missing | Spec §13 proper: expected-Jaccard candidate-set search, expected-WER boundary utility, per-label assertion thresholds, entity-retention utility subtracting wrong-type risk. All of it needs calibrated probabilities, which **no stage produces** — so S6 remains the true blocker. `DecodedEntity.as_dict()` asserts `performs_expected_jaccard_decoding: False` |
@@ -403,7 +432,9 @@ above the linker that spec §10.1/§6.2 needs them for.
 | Governed corpus + split identity | `data_engine/`, `training/governed_splits.py` | `IMPLEMENTED_AND_WIRED` | Splits resolved by SHA-256, never by name; `internal_test` refused by name |
 | KB intake | `kb/`, `data/manifests/*.yaml` | `IMPLEMENTED_AND_WIRED` | ICD-10 TT06-2026 derived deterministically from the protected source PDFs; RxNorm Full + Prescribable 2026-07-06 |
 | Experiment registry | `experiments/` | `IMPLEMENTED_NOT_WIRED` | `EXP-*.json` records tracked; no leaderboard decision has used it |
-| Reproducibility | `Dockerfile`, `requirements.lock` | `AUTHORED_NOT_BUILT` | Added in Audit 0053. `python:3.14.5-slim-bookworm`, JRE only, `HF_HUB_OFFLINE=1`, `PYTHONHASHSEED=0`, non-root uid 10001, one `ENTRYPOINT` (the canonical inference CLI), weights and KB payloads **mounted, never baked in**. `requirements.lock` pins every version from `importlib.metadata` in the environment that produced these measurements. **The image has never been built and no organizer inference has run**; building it is a separate authorized step |
+| Reproducibility | `Dockerfile`, `requirements.lock`, `requirements-image.lock` | `AUDITED_AND_HARDENED__BUILD_BLOCKED` | Audit 0054 **attempted the build** and found two real defects. (1) `requirements.lock` pins `torch==2.13.0+cu126`, a local version identifier absent from PyPI, so `pip install -r requirements.lock` cannot resolve it — `requirements-image.lock` now installs the **same upstream version** from the CPU index, with both indexes named explicitly and the deviation recorded. (2) `package_output_zip` embedded file mtimes, so two identical runs produced different ZIP digests; entries now use a fixed timestamp and mode, and the archive is byte-reproducible. **The build itself is blocked by the environment, not the Dockerfile**: `~/.docker/config.json` holds stale Docker Hub tokens that the daemon sends on every pull, so even an anonymous pull of the public base image returns `401 Unauthorized`. Nothing was faked and the Dockerfile was not weakened to work around it |
+| Inference run manifest | `inference/manifest.py` | `IMPLEMENTED_AND_WIRED` (opt-in) | Audit 0054. `--run-manifest PATH`; nothing is written without it. Records git commit + dirty state, the PDF hash, every contract version, config hashes, readiness and fail-closed state, checkpoint roles/SHAs/revisions, snapshot ids, and aggregate counts for route gating, proposals, lattice, L4, assertions, linking, L6 edges, consistency, L7 dispositions, decoder candidate sizes and L9 issues. **No clinical text** (asserted by test), home-directory paths reduced to `role:` identifiers, byte-identical apart from `runtime_seconds` and `peak_memory_gib`. Written **even when L9 stops the run**, with `l9_stopped_the_run: true` |
+| Code-linking evaluation contract | `evaluation/code_linking.py` | `CONTRACT_ONLY__NO_GOLD_EXISTS` | Audit 0054. Strict record schemas, Recall@1/@5/@10, candidate Jaccard, exact-set match, and a 9-way error taxonomy separating broader-than-gold from wrong. It **refuses to score** without gold (`GoldSetUnavailable`) rather than returning zeros, and refuses `PENDING`/`DISPUTED` annotations. **No gold data ships**, no function turns predictions into labels, and `REQUIRED_ANNOTATION_ARTIFACT` specifies the human round that must happen first |
 
 ## 11. Training stages (spec §15)
 
@@ -448,46 +479,52 @@ programmatically from its real configuration or checkpoint.
 
 ## 13. Ranked remaining architecture work
 
-**Carried forward from Audit 0053, which did not attempt them.** Audit 0053
-completed six of the **thirteen implementation tasks** in its scope — prompt sections
-2, 8, 9, 11, 13 and 14 (sections 1 and 15 were verification and the audit itself, so
-the denominator is thirteen, not fifteen). The following seven were declared out of
-scope for that turn and remain open. Its acceptance criteria are therefore
-**not met**.
+**Updated by Audit 0054.** Of Milestone 2B's seven carried-forward tasks plus container
+verification, **six are complete** (structured RxNorm linking, ICD hierarchy +
+specificity, L6 edges, the typed consistency contract consumed by L7/L8, the L7
+locked-option contract, the run manifest) plus the code-linking evaluation contract.
+**Two are not**, and they head the list.
 
-1. **L5 RxNorm structured linking** (Audit 0053 item 4) — consume
-   `EntityHypothesis.components` (the E1 parse that Audit 0052 preserved to L5 and
-   the linker still ignores), traverse `ingredient → component → SCD → SBD` over
-   the loaded `index["graph"]` (77,055 nodes), add strength/dose-form/release hard
-   negatives. Highest expected value: candidates are 40% of the score and this is
-   the one gap where the required inputs already exist and are unused.
-2. **L5 ICD-10 hierarchy + specificity controller** (item 3, spec §9.3) —
-   `LocalIndex.graph` carries 14,534 nodes, is materialized, is loaded, and
-   `linking/icd10.py` never reads it.
-3. **Calibration (S6)** — nothing downstream of L4 has calibrated probabilities, so
-   the real §13 decoder has nothing to optimize over. Audit 0053's L8 is honest
-   about being a deterministic stand-in; only S6 removes the stand-in.
-4. **L6 edges, consistency checks and a typed downstream contract** (items 5-6,
-   spec §11) — six missing relations, eight deterministic consistency checks, and a
-   contract L7/L8 actually consume. Until then L6 is write-only.
-5. **L7 deterministic escalation contract with locked option sets** (item 7,
-   spec §12.1) — the constrained-decision *parsing* exists; the locked
-   assertion/candidate/boundary option sets an escalation must choose from do not.
-6. **Inference run manifest** (item 10) — deterministic, no clinical-text leakage.
-   It closes two loops on L9's wired gate: the gate now stops a violating run but
-   nothing **records** the stop, and it cannot enforce spec P7 until something
-   records which codes were offered per mention.
-7. **Migrate and delete `resolution/resolver.py`** (item 12) — its per-type
-   boundary policy must be provably covered by the canonical L4 first, with
-   equivalence tests, then the file goes. Two L4 implementations must not coexist.
-8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4
-   v1 still measures below the E3-only baseline (0.5521 against 0.5559).
-9. **Assertion supervision** — build an assertion corpus; until then no assertion
-   metric is computable and S2 cannot be validated.
-10. **Build and verify the Docker image** — the file exists; the image does not.
-    Required for the private-test rebuild, and a separate authorized step.
-11. **L7 LLM cascade** — last, per spec §20's ordering: evaluator, offsets and
-    validator before heavy architecture.
+1. **Migrate and delete `resolution/resolver.py`** — Audit 0054 completed step 1 of the
+   five §10 asked for: its unique behaviour is characterized in 13 tests
+   (`tests/unit/test_old_l4_characterization.py`). What is unique is a **configurable
+   per-type boundary policy** (`medication_boundary` full/name_only/name_strength,
+   `test_result_boundary` value_only/value_unit, `abstain_on_conflict`) that the
+   canonical L4 has no equivalent of. Deleting the module also means migrating
+   `phase1c_foundation/cli.py`, `phase1c_foundation/doctor.py`, the
+   `resolution/__init__.py` re-export and `tests/unit/test_resolution.py`. Two L4
+   implementations must not coexist indefinitely.
+2. **Build and offline-smoke the Docker image** — blocked in Audit 0054 by stale Docker
+   Hub credentials in `~/.docker/config.json`, which make even an anonymous pull of the
+   public base image fail with `401`. The owner clears it with `docker logout` (or by
+   removing the `auths` entries) and then runs the build; the Dockerfile and both lock
+   files are already corrected and the static contract is tested. Required for the
+   private-test rebuild.
+3. **A code-bearing evaluation set** — still the single most consequential blocker in the
+   repository, and a *data* blocker. Candidates are 40% of the organizer metric and it
+   is **unmeasurable**: zero ICD-10 codes and zero RxCUIs in the governed corpus. Audit
+   0054 built the strict contract and the refusal path; what is missing is the human
+   annotation round specified in `evaluation.code_linking.REQUIRED_ANNOTATION_ARTIFACT`.
+   Everything below item 4 is being built blind until this exists.
+4. **Calibration (S6)** — nothing downstream of L4 has calibrated probabilities, so the
+   real spec §13 decoder has nothing to optimize over and L8 stays a deterministic
+   stand-in. S6 needs out-of-fold predictions no stage produces.
+5. **A governed INN ↔ RxNorm crosswalk at KB-intake time** — `paracetamol` occurs in
+   **zero** records of the locked snapshot. Audit 0054's 12-entry bridge is a stopgap
+   marked `REQUIRES_CLINICAL_REVIEW`; a large hand-written drug-name table is a
+   patient-safety hazard and must not be the answer.
+6. **Rebuild the KB indexes with labeled graph edges** — both graphs store unlabeled
+   symmetric adjacency, so ICD direction is inferred from code length and RxNorm
+   direction from endpoint TTY. Both work and both are recorded as inferences; labeled
+   edges would make them assertions.
+7. **L6 global optimization** — the graph is now read by L7 and L8 but not *searched*.
+   No beam search with global features, no ILP (spec §11).
+8. **L4 boundary-offset head** (spec §7.1) and a re-run ablation: deterministic L4 v1
+   still measures below the E3-only baseline (0.5521 against 0.5559).
+9. **Assertion supervision** — build an assertion corpus; until then no assertion metric
+   is computable and S2 cannot be validated.
+10. **L7 model stages** — the contract, entry conditions and refusal path are done, so a
+    critic/adjudicator backend is now a drop-in. Last, per spec §20's ordering.
 
 ## 14. Maintenance rule
 

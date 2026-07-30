@@ -96,3 +96,4 @@ Each audit should record, at minimum:
 - `0051-repository-wide-architecture-review-and-cleanup.md`
 - `0052-canonical-l3-lattice-e3-activation-and-assertion-correctness.md`
 - `0053-route-gating-honest-l8-and-l9-kb-membership.md`
+- `0054-deterministic-l5-l7-run-manifest-and-container-audit.md`

@@ -9,6 +9,10 @@ fail-closed :func:`decode_expected_jaccard_calibrated` slot.
 from .decoder import (
     CANDIDATE_SAFETY_BOUND,
     DECODER_VERSION,
+    DROP_GRAPH_CONTRADICTION,
+    DROP_UNSUPPORTED_CANDIDATE,
+    KEEP_CONSISTENCY_SUPPORTED,
+    WITHHELD_FATAL_CONTRADICTION,
     CalibratedDecoderUnavailable,
     CandidateDecision,
     DecodedEntity,
@@ -18,6 +22,10 @@ from .decoder import (
 )
 
 __all__ = [
+    "WITHHELD_FATAL_CONTRADICTION",
+    "KEEP_CONSISTENCY_SUPPORTED",
+    "DROP_UNSUPPORTED_CANDIDATE",
+    "DROP_GRAPH_CONTRADICTION",
     "CANDIDATE_SAFETY_BOUND",
     "DECODER_VERSION",
     "CalibratedDecoderUnavailable",

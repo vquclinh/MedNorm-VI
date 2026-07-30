@@ -1,0 +1,74 @@
+# MedNorm-VI — the pin set the OFFLINE INFERENCE IMAGE installs (Audit 0054).
+#
+# Why this file exists, and why `requirements.lock` alone was not enough.
+#
+# `requirements.lock` records the environment that produced the Audit-0052/0053/0054
+# measurements, exactly as `importlib.metadata` reported it. That environment has
+#
+#     torch==2.13.0+cu126
+#
+# a CUDA 12.6 build resolved from PyTorch's own index. Audit 0053 authored the
+# Dockerfile against that lock and never built it. Audit 0054 built it, and the build
+# failed at the first pip step for the reason the file itself hinted at: `+cu126` is a
+# local version identifier that does not exist on PyPI, so `pip install --no-deps -r
+# requirements.lock` cannot resolve it without PyTorch's index, and pulling the CUDA
+# build into a slim image adds roughly 2.5 GB of CUDA runtime the inference path never
+# touches.
+#
+# So the image installs the SAME upstream version from the CPU index:
+#
+#     torch==2.13.0   (from https://download.pytorch.org/whl/cpu)
+#
+# This is a deliberate, recorded deviation, not a loosened pin:
+#   * the version is identical — 2.13.0 either way, no range, no `>=`;
+#   * every recorded E3 validation run in Audits 0052-0054 was a **CPU forward pass**,
+#     so the CPU wheel is the variant that actually produced the measurements;
+#   * the E3 checkpoint loads on CPU (`map_location="cpu"` in the adapter);
+#   * a GPU image is a separate, explicitly-built variant — pass
+#     `--build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu126` and
+#     `--build-arg TORCH_SPEC=torch==2.13.0+cu126`.
+#
+# Development and verification tools (pytest, ruff, mypy) are absent on purpose: the
+# inference image runs inference. `requirements.lock` remains the file a verification
+# image installs.
+#
+#     pip install --no-deps --index-url https://download.pytorch.org/whl/cpu \
+#         --extra-index-url https://pypi.org/simple -r requirements-image.lock
+#
+# `--no-deps` is safe because the graph below is fully enumerated.
+
+# --- core runtime -----------------------------------------------------------
+PyYAML==6.0.3
+
+# --- L3 neural expert (E3) --------------------------------------------------
+# CPU variant of the SAME version as requirements.lock. See the header.
+torch==2.13.0
+transformers==4.57.6
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface-hub==0.36.2
+numpy==2.5.1
+sentencepiece==0.2.2
+
+# --- Vietnamese word segmentation (E3 alignment contract) -------------------
+# Needs a JRE and the VnCoreNLP jar mounted at runtime; E3 refuses to fall back to
+# whitespace segmentation.
+py_vncorenlp==0.1.4
+
+# --- transitive pins, enumerated so --no-deps is safe -----------------------
+filelock==3.32.0
+fsspec==2026.5.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+mpmath==1.3.0
+networkx==3.5.1
+packaging==26.2
+regex==2026.7.19
+requests==2.34.2
+sympy==1.14.0
+tqdm==4.69.1
+typing-extensions==4.15.0
+certifi==2026.6.15
+charset-normalizer==3.4.4
+idna==3.11
+urllib3==2.6.0
