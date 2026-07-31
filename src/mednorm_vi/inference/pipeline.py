@@ -45,7 +45,7 @@ from ..lattice.builder import build_span_lattice, lattice_config_hash
 from ..lattice.models import SpanLattice
 from ..linking.icd10 import link_icd10
 from ..linking.models import LinkerResult
-from ..linking.rxnorm import link_rxnorm
+from ..linking.rxnorm import governed_bridge_notes, link_rxnorm
 from ..mention_factory import experts as _registered_experts  # noqa: F401
 from ..mention_factory.registry import (
     ExpertRegistry,
@@ -331,7 +331,16 @@ def run_document(
         document_id=Path(path).stem,
         predictions=predictions,
         evidence_graph=evidence_graph,
-        warnings=tuple(phase1b.warnings) + tuple(resolved.warnings),
+        # Governed INN-bridge evidence is lifted from L5 into the document-level
+        # warning channel (Audit 0058B). Audit 0058A found the note stopped at the
+        # linker report, so a run could use a governed bridge with nothing above L5
+        # recording it. This is observability only: it reads `links`, which L8 has
+        # already consumed, and adds nothing to `predictions`.
+        warnings=(
+            tuple(phase1b.warnings)
+            + tuple(resolved.warnings)
+            + governed_bridge_notes(note for link in links for note in link.warnings)
+        ),
         lattice=lattice,
         expert_records=expert_records,
         l4_counts=resolution_counts(resolved),

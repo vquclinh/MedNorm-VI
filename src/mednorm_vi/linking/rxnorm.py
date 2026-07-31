@@ -36,7 +36,7 @@ determinism.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -119,6 +119,12 @@ TIER_ORDER: tuple[str, ...] = (
     TIER_INGREDIENT_ONLY,
     TIER_LEXICAL,
 )
+
+# Prefix identifying a governed INN-bridge traversal note (Audit 0058B). The note is
+# emitted below as `inn_bridge:<surface>-><rxnorm_name>:<status>`; this constant lets
+# the runner recognise one without re-deriving the format, so the module that *writes*
+# the note also owns how it is *found*.
+INN_BRIDGE_NOTE_PREFIX = "inn_bridge:"
 
 # Safety bound on emitted candidates. A bound, not the selection rule (Audit 0053 §9).
 CANDIDATE_BOUND = 20
@@ -832,6 +838,26 @@ def _decision_fields(decision: RxNormCandidateDecision) -> dict[str, Any]:
     }
 
 
+def governed_bridge_notes(warnings: Iterable[str]) -> tuple[str, ...]:
+    """Governed INN-bridge notes from linker warnings: deduplicated and sorted.
+
+    Audit 0058A found these notes stopped at the linker report, so a run could use a
+    governed bridge with nothing above L5 recording it. This is the accessor the runner
+    uses to lift them into the document-level warning channel.
+
+    Deduplication is the point of doing it here rather than at the call site: one
+    document can mention `paracetamol` several times and each mention emits the same
+    note, which would otherwise make the run-level record vary with mention count
+    rather than with which bridges were used. Sorting makes repeated runs identical.
+
+    The notes carry ingredient **names**, never RxCUIs, and the surface in one is
+    always a key of the 12-entry ``INN_TO_RXNORM_NAME`` table — a bridge only fires
+    when the normalized surface is in that table — so a note cannot carry arbitrary
+    clinical text out of a document.
+    """
+    return tuple(sorted({w for w in warnings if w.startswith(INN_BRIDGE_NOTE_PREFIX)}))
+
+
 def link_rxnorm(
     hypothesis: EntityHypothesis, index: LocalIndex, *, limit: int = CANDIDATE_BOUND
 ) -> LinkerResult:
@@ -886,6 +912,7 @@ __all__ = [
     "DROP_STRENGTH_CONFLICT",
     "DROP_SUPPRESSED_CONCEPT",
     "DROP_UNIT_CONFLICT",
+    "INN_BRIDGE_NOTE_PREFIX",
     "KEEP_EXACT_INGREDIENT",
     "KEEP_INGREDIENT_FALLBACK",
     "KEEP_LEXICAL_ONLY",
@@ -903,6 +930,7 @@ __all__ = [
     "RxNormCandidateDecision",
     "RxNormLinkReport",
     "compare_candidate",
+    "governed_bridge_notes",
     "link_rxnorm",
     "link_rxnorm_structured",
 ]

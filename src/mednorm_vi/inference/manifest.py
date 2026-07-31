@@ -333,7 +333,7 @@ def build_run_manifest(
     from ..confidence_cascade.escalation import ESCALATION_CONTRACT_VERSION
     from ..evidence_graph import CONSISTENCY_VERSION, EVIDENCE_GRAPH_VERSION
     from ..linking.icd10 import ICD10_LINKER_VERSION
-    from ..linking.rxnorm import RXNORM_LINKER_VERSION
+    from ..linking.rxnorm import RXNORM_LINKER_VERSION, governed_bridge_notes
     from ..mention_factory.route_gate import ROUTE_GATE_DIAGNOSTICS_VERSION
     from ..metric_decoder import DECODER_VERSION
     from ..validator.kb_membership import KB_MEMBERSHIP_VALIDATOR_VERSION
@@ -343,7 +343,16 @@ def build_run_manifest(
     lattice: dict[str, int] = {"nodes": 0, "merged_coordinate_groups": 0}
     l4: dict[str, int] = {}
     assertions: dict[str, int] = {"with_labels": 0, "uncertain": 0, "all_three": 0}
-    linking: dict[str, int] = {"results": 0, "candidates": 0, "empty_results": 0}
+    # `governed_inn_bridge_expansions` (Audit 0058B) counts the DISTINCT governed
+    # bridges used per document, summed. A count, not the notes themselves: the run
+    # manifest is aggregate-only and must stay free of anything document-derived, and
+    # `write_run_manifest` refuses to write a manifest that reports otherwise.
+    linking: dict[str, int] = {
+        "results": 0,
+        "candidates": 0,
+        "empty_results": 0,
+        "governed_inn_bridge_expansions": 0,
+    }
     edges: dict[str, int] = {}
     consistency_decisions: dict[str, int] = {}
     consistency_issues: dict[str, int] = {}
@@ -384,6 +393,9 @@ def build_run_manifest(
         if cascade is not None:
             accumulate(dispositions, cascade.disposition_counts())
             accumulate(conditions, cascade.condition_counts())
+        linking["governed_inn_bridge_expansions"] += len(
+            governed_bridge_notes(getattr(result, "warnings", ()) or ())
+        )
         for prediction in result.predictions:
             codes = getattr(prediction, "candidates", None) or ()
             candidate_sizes.append(len(codes))
