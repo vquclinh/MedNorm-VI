@@ -1,0 +1,17 @@
+{
+  "profile": "B",
+  "derivation": "deterministic candidate truncation from Profile C",
+  "source_profile": "C",
+  "source_zip_sha256": "29ef6670a6cf01d7a98567a11601fa59c4e3e8ad191887d0ec8b54871fbebe3d",
+  "output_zip_sha256": "f3f63af9c5ee6afe59ec5909587c7b6d0288f68a4fd67dc0e71d0523e6532c3e",
+  "policy": {
+    "medication": "top-1",
+    "diagnosis": "adaptive top-2 inherited from Profile C"
+  },
+  "statistics": {
+    "documents": 100,
+    "entities": 957,
+    "candidate_lists_truncated": 4,
+    "candidates_removed": 4
+  }
+}

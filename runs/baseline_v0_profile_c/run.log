@@ -1,0 +1,4 @@
+nohup: ignoring input
+processed_documents: 100
+output_zip: runs/baseline_v0_profile_c/output.zip
+run_manifest: runs/baseline_v0_profile_c/run-manifest.json

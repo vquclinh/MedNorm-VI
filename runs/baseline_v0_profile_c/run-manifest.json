@@ -1,0 +1,175 @@
+{
+  "aggregates": {
+    "assertions": {
+      "all_three": 0,
+      "uncertain": 0,
+      "with_labels": 79
+    },
+    "cascade_dispositions": {
+      "ACCEPT": 240,
+      "ESCALATE": 0,
+      "REJECT": 0,
+      "UNRESOLVED": 729
+    },
+    "consistency_decisions": {
+      "CONTRADICTED": 77,
+      "NOT_APPLICABLE": 2681,
+      "SUPPORTED": 2149,
+      "UNRESOLVED": 745
+    },
+    "consistency_issues": {
+      "C01.section_compatibility": 2,
+      "C02.test_pair_completeness": 102,
+      "C04.candidate_entity_type_compatibility": 20,
+      "C05.icd_hierarchy_compatibility": 31,
+      "C06.rxnorm_structured_compatibility": 4,
+      "C07.overlap_competition": 7,
+      "C09.repeated_mention_agreement": 26,
+      "C10.conflicting_assertion_evidence": 608,
+      "C11.unresolved_structured_medication_conflict": 11,
+      "C12.unsafe_or_unsupported_treats": 11
+    },
+    "decoder_candidate_sizes": {
+      "0": 767,
+      "1": 67,
+      "2": 123
+    },
+    "decoder_reasons": {},
+    "escalation_conditions": {
+      "assertion_uncertainty": 608,
+      "boundary_competition": 7,
+      "candidate_ambiguity": 44,
+      "graph_contradiction": 83,
+      "graph_unresolved": 643,
+      "repeated_mention_conflict": 48
+    },
+    "graph_edges": {
+      "declined_treats": 11,
+      "has_assertion": 969,
+      "has_candidate": 2288,
+      "has_result": 35,
+      "in_section": 969,
+      "modified_by": 210,
+      "overlaps": 7,
+      "same_surface": 159,
+      "supports": 969,
+      "treats": 0
+    },
+    "l4": {
+      "accepted": 969,
+      "rejected": 52,
+      "total": 1161,
+      "unresolved": 140
+    },
+    "l9_issues": {},
+    "lattice": {
+      "merged_coordinate_groups": 0,
+      "nodes": 1161
+    },
+    "linking": {
+      "candidates": 313,
+      "empty_results": 0,
+      "governed_inn_bridge_expansions": 0,
+      "results": 0
+    },
+    "proposals_by_expert": {
+      "E1_medication_grammar": 101,
+      "E2_laboratory_parser": 274,
+      "E3_vihealthbert_span_type": 786
+    },
+    "route_gate": {
+      "eligible:E1_medication_grammar": 3213,
+      "eligible:E2_laboratory_parser": 177,
+      "skipped:E1_medication_grammar": 497,
+      "skipped:E2_laboratory_parser": 3533
+    }
+  },
+  "architecture_pdf_sha256": "0d5eaa2045f6a4fba6c6505c14507a44e1c15768cb4adea76088b5f42081e09b",
+  "checkpoints": [
+    {
+      "model_revision": "f89e80b461e86f9cfc1c84019bd819830c24b6c5",
+      "parameter_count": null,
+      "parameter_count_status": "NOT_VERIFIED",
+      "path": "role:E3_vihealthbert_span_type",
+      "present": false,
+      "role": "E3_vihealthbert_span_type",
+      "sha256": "a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c",
+      "size_bytes": null
+    }
+  ],
+  "config_hashes": {
+    "icd_index": "01d1f5da2e7eb40c565de017b8af2cd6fd07ddbaf458b9d0c3509af0c7f3ba15",
+    "l1_config": "7dbb77d679d4165b7a01343869404f791094a99c571b734e54ebc67456ae3a7c",
+    "l4_config": "3079084627d88c37b2c42c0e4c39ca9499ae6d10e5f1d90a6c422b276e05b216",
+    "laboratory_config": "4c56106d3423121a7b0d058ea48ecaee6bb94fe570370cafc3970230ca30eb26",
+    "medication_config": "5ab95dce4593863f5e597d8557d14f71d3198a15b4c6decbe088008eaf98e455",
+    "router_config": "6fc61c110da67489ef56fd5834b8cefcbbb5d49c54293cefd91c0fb8ef3e9703",
+    "rxnorm_index": "08c4d57188ed7151789f5e88895142e7ee6a235465b4227026c9428ce1f2399e"
+  },
+  "contains_clinical_text": false,
+  "contract_versions": {
+    "consistency": "graph-consistency-v1",
+    "decoder": "l8-deterministic-evidence-ranked-v1",
+    "escalation": "l7-locked-option-escalation-v1",
+    "evidence_graph": "clinical-evidence-graph-v2",
+    "icd10_linker": "icd10-hierarchy-linker-v1",
+    "kb_membership_validator": "l9-kb-membership-v1",
+    "route_gate": "route-gate-diagnostics-v1",
+    "rxnorm_linker": "rxnorm-structured-linker-v1"
+  },
+  "documents": 100,
+  "experts": {
+    "expected": [
+      "enable_e1_medication_grammar",
+      "enable_e2_laboratory_parser",
+      "enable_e3_vihealthbert"
+    ],
+    "ran": [
+      "E3_vihealthbert_span_type"
+    ]
+  },
+  "git": {
+    "branch": "main",
+    "commit": "5ba04dcf0b7e2bc8c3180e6d7b9c3c2c45da888c",
+    "dirty": true
+  },
+  "interpreter": "CPython 3.14.5",
+  "l9_stopped_the_run": false,
+  "manifest_schema_version": "inference-run-manifest-v1",
+  "mode": "specialist",
+  "output_directory_hash": null,
+  "output_zip_sha256": "29ef6670a6cf01d7a98567a11601fa59c4e3e8ad191887d0ec8b54871fbebe3d",
+  "peak_memory_gib": 2.677,
+  "readiness": {
+    "degraded": [],
+    "errors": [],
+    "fail_closed": false,
+    "status": "READY"
+  },
+  "runtime_seconds": 409.315,
+  "seeds": {
+    "numpy_seed": 0,
+    "python_hash_seed": 0,
+    "torch_manual_seed": 0
+  },
+  "snapshots": [
+    {
+      "concept_count": 15308,
+      "deterministic_index_hash": "",
+      "index_id": "",
+      "index_type": "icd10_vi",
+      "path": "role:icd10_index/index.json",
+      "role": "icd10_index",
+      "snapshot_id": "competition-kb-v3-candidate-4d206538e7d24c32"
+    },
+    {
+      "concept_count": 211949,
+      "deterministic_index_hash": "",
+      "index_id": "",
+      "index_type": "rxnorm",
+      "path": "role:rxnorm_index/index.json",
+      "role": "rxnorm_index",
+      "snapshot_id": "competition-kb-v3-candidate-4d206538e7d24c32"
+    }
+  ]
+}
