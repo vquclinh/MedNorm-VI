@@ -1159,9 +1159,46 @@ def test_an_l7_reject_withholds_the_entity() -> None:
 
 
 def test_no_fixed_top_k_returns() -> None:
-    result = run_document(FIX / "synthetic_medication_list.txt", _config(), mode="deterministic")
-    sizes = {len(p.candidates or ()) for p in result.predictions}
-    assert len(sizes) > 1, f"candidate-set size collapsed to a constant: {sizes}"
+    """No *hidden* fixed top-K — the Audit-0053 guard, made profile-aware.
+
+    This test was written to catch `decode_expected_jaccard`'s unconditional
+    `candidates[:10]`: a constant candidate-set size meant a hardcoded slice nobody had
+    declared. Audit 0060 made the cap a **governed profile**, and `competition_top1`
+    legitimately produces a constant size of 1 — which the original assertion would have
+    reported as the very bug it was written to catch.
+
+    So the property is now checked where it is meaningful and strengthened where it is
+    not. Under `competition_adaptive` the size must still vary with the evidence, exactly
+    as before. Under `competition_top1` the size must respect the *declared*
+    `max_candidates`, and the same input under adaptive must produce a strictly larger
+    set — proving the narrowing is policy-driven and reversible rather than a slice
+    baked into the decoder.
+    """
+    from dataclasses import replace
+
+    from mednorm_vi.kb.competition.topk import COMPETITION_TOP1
+
+    base = _config()
+    adaptive = run_document(
+        FIX / "synthetic_medication_list.txt",
+        replace(base, decoding_profile="competition_adaptive"),
+        mode="deterministic",
+    )
+    adaptive_sizes = {len(p.candidates or ()) for p in adaptive.predictions}
+    assert len(adaptive_sizes) > 1, (
+        f"candidate-set size collapsed to a constant under adaptive: {adaptive_sizes}"
+    )
+
+    top1 = run_document(
+        FIX / "synthetic_medication_list.txt",
+        replace(base, decoding_profile="competition_top1"),
+        mode="deterministic",
+    )
+    top1_sizes = {len(p.candidates or ()) for p in top1.predictions}
+    assert max(top1_sizes) <= COMPETITION_TOP1.max_candidates
+    assert max(adaptive_sizes) > max(top1_sizes), (
+        "top-1 must be a narrowing of adaptive, not an independently hardcoded slice"
+    )
 
 
 def test_the_calibrated_decoder_still_fails_closed() -> None:

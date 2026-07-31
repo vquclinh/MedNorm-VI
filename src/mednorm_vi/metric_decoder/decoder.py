@@ -38,9 +38,11 @@ from ..confidence_cascade.cascade import CascadeDecision
 from ..confidence_cascade.escalation import REJECT, CascadeReport
 from ..evidence_graph.consistency import GraphConsistencyReport
 from ..kb.competition.topk import (
+    COMPETITION_ADAPTIVE,
     COMPETITION_TOPK_VERSION,
     MAX_CANDIDATES,
     RankedCandidate,
+    TopKPolicy,
     apply_competition_topk,
 )
 from ..linking.models import LinkedCandidate, LinkerResult
@@ -250,6 +252,7 @@ def decode_entities(
     consistency: GraphConsistencyReport | None = None,
     escalation: CascadeReport | None = None,
     competition_topk: bool = True,
+    topk_policy: TopKPolicy = COMPETITION_ADAPTIVE,
 ) -> tuple[DecodedEntity, ...]:
     """**The L8 entry point.** Deterministic, evidence-ranked final set selection.
 
@@ -326,6 +329,7 @@ def decode_entities(
                     RankedCandidate(
                         code, kept_by_code[code].score, kept_by_code[code].tier)
                     for code in codes if code in kept_by_code),
+                topk_policy,
             )
             cut = set(codes) - set(selection.codes)
             candidate_decisions = tuple(

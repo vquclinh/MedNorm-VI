@@ -64,6 +64,73 @@ DROP_TYPE_TAKES_NO_CANDIDATES = "dropped_type_takes_no_candidates"
 
 
 @dataclass(frozen=True, slots=True)
+class TopKPolicy:
+    """A named, governed decoding profile (Audit 0060 §4).
+
+    The thresholds were module constants until the Audit-0059 baseline, which meant the
+    only way to produce a stricter submission was to post-process the JSON with an
+    untracked script — and that is exactly what happened for profiles A and B, leaving
+    two leaderboard artifacts that could not be regenerated from the repository.
+    Making the policy a value fixes that at the source: a profile is now a config
+    string that the canonical runner threads into the decoder.
+
+    Every field defaults to the Audit-0058 adaptive behaviour, so constructing a policy
+    without arguments reproduces exactly what the repository did before.
+    """
+
+    name: str = "competition_adaptive"
+    max_candidates: int = MAX_CANDIDATES
+    medication_tie_ratio: float = MEDICATION_TIE_RATIO
+    diagnosis_tie_ratio: float = DIAGNOSIS_TIE_RATIO
+    diagnosis_specificity_ratio: float = DIAGNOSIS_SPECIFICITY_RATIO
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "profile": self.name,
+            "max_candidates": self.max_candidates,
+            "medication_tie_ratio": self.medication_tie_ratio,
+            "diagnosis_tie_ratio": self.diagnosis_tie_ratio,
+            "diagnosis_specificity_ratio": self.diagnosis_specificity_ratio,
+        }
+
+
+#: The Audit-0058 adaptive policy, unchanged. Available only as an explicit experiment.
+COMPETITION_ADAPTIVE = TopKPolicy()
+
+#: Strict top-1 for both ontologies. The canonical profile for competition runs.
+#:
+#: Under Jaccard a second candidate is only worth emitting when it is more likely right
+#: than wrong, and nothing in this pipeline produces a calibrated probability that could
+#: establish that. `max_candidates = 1` makes the tie ratios unreachable rather than
+#: merely unlikely, so the profile cannot silently drift back to two.
+COMPETITION_TOP1 = TopKPolicy(name="competition_top1", max_candidates=1)
+
+DECODING_PROFILES: dict[str, TopKPolicy] = {
+    COMPETITION_TOP1.name: COMPETITION_TOP1,
+    COMPETITION_ADAPTIVE.name: COMPETITION_ADAPTIVE,
+}
+
+#: What a competition run uses unless a caller explicitly asks for an experiment.
+DEFAULT_DECODING_PROFILE = COMPETITION_TOP1.name
+
+
+def resolve_decoding_profile(name: str | None) -> TopKPolicy:
+    """Look up a governed profile by name, refusing anything unknown.
+
+    Fails loudly: a typo in a config must not silently fall back to a different
+    candidate policy than the operator asked for.
+    """
+    if name is None:
+        return DECODING_PROFILES[DEFAULT_DECODING_PROFILE]
+    try:
+        return DECODING_PROFILES[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown decoding profile {name!r}; known profiles: {sorted(DECODING_PROFILES)}"
+        ) from None
+
+
+@dataclass(frozen=True, slots=True)
 class RankedCandidate:
     """One candidate as L8 ranked it. ``score`` is an evidence score, not a probability."""
 
@@ -133,12 +200,16 @@ def ontology_for(entity_type: str) -> str | None:
 def apply_competition_topk(
     entity_type: str,
     candidates: Sequence[RankedCandidate],
+    policy: TopKPolicy = COMPETITION_ADAPTIVE,
 ) -> TopKSelection:
-    """Narrow an L8-selected candidate list to the competition top-k policy.
+    """Narrow an L8-selected candidate list to a governed decoding profile.
 
     ``candidates`` must already be in L8's deterministic order. The result is a
     sub-sequence of that input in the same order, so ordering is inherited rather
     than recomputed and no code can be introduced.
+
+    ``policy`` defaults to the Audit-0058 adaptive behaviour so existing callers are
+    unchanged; the canonical runner passes :data:`COMPETITION_TOP1`.
     """
     ontology = ontology_for(entity_type)
     if ontology is None:
@@ -158,7 +229,7 @@ def apply_competition_topk(
     decisions = [TopKDecision(leader.code, 1, True, KEEP_TOP1)]
 
     for rank, candidate in enumerate(candidates[1:], start=2):
-        if len(kept) >= MAX_CANDIDATES:
+        if len(kept) >= policy.max_candidates:
             decisions.append(TopKDecision(candidate.code, rank, False, DROP_BEYOND_TOPK))
             continue
         # A runner-up from a weaker evidence tier is not a tie, however close its
@@ -168,16 +239,16 @@ def apply_competition_topk(
             continue
         ratio = (candidate.score / leader.score) if leader.score > 0 else 0.0
         if ontology == "RXNORM":
-            if ratio >= MEDICATION_TIE_RATIO:
+            if ratio >= policy.medication_tie_ratio:
                 kept.append(candidate.code)
                 decisions.append(TopKDecision(candidate.code, rank, True, KEEP_CLOSE_TIE))
             else:
                 decisions.append(TopKDecision(candidate.code, rank, False, DROP_NOT_CLOSE))
             continue
-        if ratio >= DIAGNOSIS_TIE_RATIO:
+        if ratio >= policy.diagnosis_tie_ratio:
             kept.append(candidate.code)
             decisions.append(TopKDecision(candidate.code, rank, True, KEEP_CLOSE_TIE))
-        elif ratio >= DIAGNOSIS_SPECIFICITY_RATIO and is_specific_unspecified_pair(
+        elif ratio >= policy.diagnosis_specificity_ratio and is_specific_unspecified_pair(
             leader.code, candidate.code
         ):
             kept.append(candidate.code)
@@ -189,7 +260,11 @@ def apply_competition_topk(
 
 
 __all__ = [
+    "COMPETITION_ADAPTIVE",
+    "COMPETITION_TOP1",
     "COMPETITION_TOPK_VERSION",
+    "DECODING_PROFILES",
+    "DEFAULT_DECODING_PROFILE",
     "DIAGNOSIS_SPECIFICITY_RATIO",
     "DIAGNOSIS_TIE_RATIO",
     "DROP_BEYOND_TOPK",
@@ -203,8 +278,10 @@ __all__ = [
     "MEDICATION_TIE_RATIO",
     "RankedCandidate",
     "TopKDecision",
+    "TopKPolicy",
     "TopKSelection",
     "apply_competition_topk",
     "is_specific_unspecified_pair",
     "ontology_for",
+    "resolve_decoding_profile",
 ]

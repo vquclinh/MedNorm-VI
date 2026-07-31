@@ -207,30 +207,49 @@ def test_warnings_are_not_an_input_to_candidate_selection() -> None:
 
 
 @_needs_index
-def test_serialized_candidate_output_matches_its_regression_pin() -> None:
-    """Requirement 6, as a forward guard.
+@pytest.mark.parametrize(
+    ("profile", "digest"),
+    [
+        (
+            "competition_adaptive",
+            "4203bcc00fbbc77bcb018f8fbed2995dbcaa08401bab2918e7deaff3b29103a4",
+        ),
+        (
+            "competition_top1",
+            "cb2e81f98343439ba03dd506ef71847a99c973af1382395693bfffcf1a101c5b",
+        ),
+    ],
+)
+def test_serialized_candidate_output_matches_its_regression_pin(profile: str, digest: str) -> None:
+    """Requirement 6, as a forward guard — pinned **per decoding profile**.
 
     The pre/post invariance was established by measurement outside the suite: the
     canonical runner was captured immediately before the propagation change and again
     after, over the same inputs, and the serialized bytes were identical
     (`cac6e87cc4f9ddcf8d6289e8c296f6fba8384df54120d80307fe6b92e515b086`, recorded in
     Audit 0058B §4). That comparison cannot be re-run from inside the suite once the
-    change is in the tree, so this digest — over the same four fixtures keyed by their
-    own stems — pins the result going forward. It is a regression guard, not the
-    original proof, and this docstring says so rather than implying otherwise.
+    change is in the tree, so these digests pin the result going forward.
+
+    Audit 0060 made the decoding profile a config value and set the canonical default
+    to `competition_top1`. This pin originally read the config's default and so would
+    have moved with it, which would have made a *policy* change look like an
+    observability regression. Naming the profile keeps the guard measuring what it
+    claims: `competition_adaptive` still reproduces the original digest exactly, which
+    is itself the evidence that bridge observability remained side-effect free.
     """
     import hashlib
+    from dataclasses import replace
 
-    config = PipelineConfig.load(PIPELINE_CFG)
+    config = replace(PipelineConfig.load(PIPELINE_CFG), decoding_profile=profile)
     payloads = {}
     for fixture in sorted(FIX.glob("*.txt")):
         result = run_document(fixture, config, mode="deterministic")
         payloads[f"{result.document_id}.json"] = to_submission_json(result.predictions)
     blob = json.dumps(payloads, ensure_ascii=False, sort_keys=True)
 
-    assert hashlib.sha256(blob.encode()).hexdigest() == (
-        "4203bcc00fbbc77bcb018f8fbed2995dbcaa08401bab2918e7deaff3b29103a4"
-    ), "serialized candidate output moved; observability must stay side-effect free"
+    assert hashlib.sha256(blob.encode()).hexdigest() == digest, (
+        f"serialized candidate output moved under profile {profile!r}"
+    )
 
 
 @_needs_index

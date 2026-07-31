@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 
+from ..kb.competition.topk import resolve_decoding_profile
 from .config import PipelineConfig
 from .pipeline import FinalValidationError, KbMembershipViolation, run_input_dir
 
@@ -19,6 +21,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--config", required=True)
     run.add_argument("--mode", choices=("deterministic", "specialist", "full"), required=True)
     run.add_argument(
+        "--decoding-profile",
+        default=None,
+        help=(
+            "override the config's governed decoding profile "
+            "(competition_top1 | competition_adaptive)"
+        ),
+    )
+    run.add_argument(
         "--run-manifest",
         default=None,
         metavar="PATH",
@@ -30,6 +40,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         config = PipelineConfig.load(args.config)
+        if args.decoding_profile:
+            # Validate eagerly so an unknown profile fails before any inference runs.
+            resolve_decoding_profile(args.decoding_profile)
+            config = replace(config, decoding_profile=args.decoding_profile)
         try:
             results = run_input_dir(
                 args.input_dir,

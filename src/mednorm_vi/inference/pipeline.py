@@ -22,6 +22,7 @@ deterministic E1/E2 pair that Phase 1B owns, and there is exactly one L4 entry p
 from __future__ import annotations
 
 import hashlib
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ from ..evidence_graph import (
     build_evidence_graph,
     evaluate_consistency,
 )
+from ..kb.competition.topk import resolve_decoding_profile
 from ..kb.indexing.retrieval import LocalIndex, load_index
 from ..lattice.builder import build_span_lattice, lattice_config_hash
 from ..lattice.models import SpanLattice
@@ -146,7 +148,44 @@ class PipelineResult:
         return dict(sorted(counts.items()))
 
 
-def _indexes(config: PipelineConfig) -> tuple[LocalIndex | None, LocalIndex | None]:
+@dataclass(slots=True)
+class PreparedIndexes:
+    """Loaded KB indices reused across the documents of ONE run (Audit 0060 §10).
+
+    Audit 0059 measured `run_document` reloading both indices per document — 0.33 s for
+    ICD and 2.56 s for RxNorm, about 4.8 minutes of pure waste in a 100-document run.
+
+    This is a **caller-owned** cache, not a process-wide singleton. Identity is the
+    exact configured path, so two configs cannot contaminate each other and a fixture
+    index stays injectable; a run that wants fresh state simply constructs a new one.
+    A module-level cache would have been fewer lines and would have made every test
+    that swaps indices order-dependent.
+    """
+
+    icd_path: str = ""
+    rxnorm_path: str = ""
+    icd: LocalIndex | None = None
+    rxnorm: LocalIndex | None = None
+    loads: int = 0
+
+    def for_config(self, config: PipelineConfig) -> tuple[LocalIndex | None, LocalIndex | None]:
+        if config.icd_index != self.icd_path:
+            self.icd = load_index(config.icd_index) if config.icd_index else None
+            self.icd_path = config.icd_index
+            self.loads += 1
+        if config.rxnorm_index != self.rxnorm_path:
+            self.rxnorm = load_index(config.rxnorm_index) if config.rxnorm_index else None
+            self.rxnorm_path = config.rxnorm_index
+            self.loads += 1
+        return self.icd, self.rxnorm
+
+
+def _indexes(
+    config: PipelineConfig, prepared: PreparedIndexes | None = None
+) -> tuple[LocalIndex | None, LocalIndex | None]:
+    """Load the configured indices, reusing ``prepared`` when the caller supplied one."""
+    if prepared is not None:
+        return prepared.for_config(config)
     icd = load_index(config.icd_index) if config.icd_index else None
     rxn = load_index(config.rxnorm_index) if config.rxnorm_index else None
     return icd, rxn
@@ -194,6 +233,7 @@ def run_document(
     registry: ExpertRegistry | None = None,
     prepared_experts: dict[str, L3Expert] | None = None,
     learned_l4_backend: LearnedL4Backend | None = None,
+    prepared_indexes: PreparedIndexes | None = None,
 ) -> PipelineResult:
     """Run one document through the canonical L1-L9 path.
 
@@ -267,7 +307,7 @@ def run_document(
 
     # --- L5 - L9 (unchanged) -----------------------------------------------
     assertions = resolve_assertions(graph.original_text, accepted)
-    icd_index, rxnorm_index = _indexes(config)
+    icd_index, rxnorm_index = _indexes(config, prepared_indexes)
     links = _link(accepted, icd_index=icd_index, rxnorm_index=rxnorm_index)
     cascade = apply_confidence_cascade(accepted)
 
@@ -308,7 +348,13 @@ def run_document(
 
     # --- L8: decode, now consuming L6 and L7 ---------------------------------
     decoded = decode_entities(
-        accepted, cascade, assertions, links, consistency=consistency, escalation=escalation
+        accepted,
+        cascade,
+        assertions,
+        links,
+        consistency=consistency,
+        escalation=escalation,
+        topk_policy=resolve_decoding_profile(config.decoding_profile),
     )
     predictions = to_entity_predictions(decoded)
     # Spec P7's offered set, captured at the ONLY place that knows it: L5 linking.
@@ -354,10 +400,30 @@ def run_document(
     )
 
 
+def _report_progress(ordinal: int, total: int, result: PipelineResult, *, started: float) -> None:
+    """One flushed progress line per document, on stderr (Audit 0060 §11).
+
+    stderr, not stdout: stdout carries the CLI's machine-readable result lines, and a
+    progress stream interleaved into them would break anything parsing them. Carries
+    counts only — never clinical text, and not even the document\'s entity texts.
+    """
+    elapsed = time.monotonic() - started
+    rate = elapsed / max(ordinal, 1)
+    eta = rate * (total - ordinal)
+    print(
+        f"[{ordinal}/{total}] document={result.document_id} "
+        f"entities={len(result.predictions)} warnings={len(result.warnings)} "
+        f"elapsed={elapsed:.1f}s eta={eta:.0f}s",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _gate_final_output(
     results: Sequence[PipelineResult],
     payloads: dict[str, str],
     config: PipelineConfig,
+    prepared_indexes: PreparedIndexes | None = None,
 ) -> dict[str, int]:
     """The canonical final L9 gate on the packaging path (spec §16, Appendix A).
 
@@ -371,7 +437,7 @@ def _gate_final_output(
     receives: validating an in-memory model would leave the serializer unchecked. On
     any violation it raises, so no output directory and no ``output.zip`` is written.
     """
-    icd_index, rxnorm_index = _indexes(config)
+    icd_index, rxnorm_index = _indexes(config, prepared_indexes)
     snapshots = LockedSnapshots(icd10=icd_index, rxnorm=rxnorm_index)
     by_document = {result.document_id: result for result in results}
     documents: list[FinalDocument] = []
@@ -425,20 +491,29 @@ def run_input_dir(
     # and, when the learned route is selected, its failure stops the run here rather
     # than on the first document.
     prepared: dict[str, L3Expert] = {}
+    prepared_indexes = PreparedIndexes()
     l4_backend = resolve_l4_backend(config, learned_backend=learned_l4_backend)
-    results = tuple(
-        run_document(
-            path, config, mode=mode, prepared_experts=prepared, learned_l4_backend=l4_backend
+    collected: list[PipelineResult] = []
+    total = len(inputs)
+    for ordinal, path in enumerate(inputs, start=1):
+        result = run_document(
+            path,
+            config,
+            mode=mode,
+            prepared_experts=prepared,
+            learned_l4_backend=l4_backend,
+            prepared_indexes=prepared_indexes,
         )
-        for path in inputs
-    )
+        collected.append(result)
+        _report_progress(ordinal, total, result, started=started)
+    results = tuple(collected)
     payloads = {
         f"{result.document_id}.json": to_submission_json(result.predictions) for result in results
     }
     # The final L9 gate runs BEFORE anything is written: a violating run must not
     # leave a partial package on disk for someone to submit by mistake.
     try:
-        l9_counts = _gate_final_output(results, payloads, config)
+        l9_counts = _gate_final_output(results, payloads, config, prepared_indexes)
     except (FinalValidationError, KbMembershipViolation) as violation:
         if run_manifest_path is not None:
             _write_manifest(

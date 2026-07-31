@@ -38,6 +38,7 @@ from ..governance.e4_retirement import (
     assert_e4_absent_from_flags,
     assert_no_e4_checkpoint_required,
 )
+from ..kb.competition.topk import DEFAULT_DECODING_PROFILE
 from ..mention_factory.expert_spec import (
     EXPERT_FEATURE_FLAGS,
     EXPERT_SPEC_BY_FLAG,
@@ -103,6 +104,9 @@ class PipelineConfig:
     learned_l4_config: str = "configs/resolution/learned_l4_v2.yaml"
     icd_index: str = ""
     rxnorm_index: str = ""
+    # Governed decoding profile name (Audit 0060 §4). Resolved by
+    # `kb.competition.topk.resolve_decoding_profile`; an unknown name is refused.
+    decoding_profile: str = DEFAULT_DECODING_PROFILE
     checkpoint_root: str = "models/checkpoints/full_v1"
     full_requires_checkpoints: tuple[str, ...] = field(default_factory=tuple)
     specialist_requires_checkpoints: tuple[str, ...] = field(default_factory=tuple)
@@ -176,6 +180,7 @@ class PipelineConfig:
             ),
             icd_index=str(doc.get("icd_index", "")),
             rxnorm_index=str(doc.get("rxnorm_index", "")),
+            decoding_profile=str(doc.get("decoding_profile", DEFAULT_DECODING_PROFILE)),
             checkpoint_root=str(doc.get("checkpoint_root", "models/checkpoints/full_v1")),
             full_requires_checkpoints=tuple(
                 str(v) for v in doc.get("full_requires_checkpoints", [])

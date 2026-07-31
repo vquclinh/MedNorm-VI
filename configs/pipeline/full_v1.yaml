@@ -47,6 +47,12 @@ rxnorm_selection:
   rollback:
     icd_index: indices/icd10_vi/tt06-2026/index.json
     rxnorm_index: indices/rxnorm/prescribable-2026-07-06/index.json
+# Governed decoding profile (Audit 0060 §4). `competition_top1` is the canonical
+# profile for competition runs: under Jaccard a second candidate only pays when it is
+# more likely right than wrong, and nothing here produces a calibrated probability that
+# could establish that. `competition_adaptive` reproduces the Audit-0058 behaviour and
+# is retained as an explicit experiment only.
+decoding_profile: competition_top1
 checkpoint_root: models/checkpoints/full_v1
 # No expert_settings.e3_vncorenlp_dir is configured in the shipped active
 # profile. E3 therefore uses the verified default/pre-segmented-source path.
