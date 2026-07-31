@@ -3,12 +3,16 @@
 Milestone 3A produced a versioned candidate ICD-10 KB freeze from the existing
 local TT06-2026 derived CSV. No external ICD data was downloaded or used.
 
-The candidate snapshot is **not active**. The currently verified runtime index
-remains:
+The 3A candidate snapshot is not active. **Superseded by Audit 0058A:** the active
+runtime index is now the competition v3 view built from this evidence:
 
 ```text
-indices/icd10_vi/tt06-2026/index.json
+active    indices/candidate/icd10_vi/competition-v3/index.json
+rollback  indices/icd10_vi/tt06-2026/index.json
 ```
+
+The rollback index is retained unmodified and remains byte-identical to its
+pre-activation hash.
 
 ## Candidate Snapshot
 
@@ -91,7 +95,10 @@ reach. Exact lexical evidence outweighs it 1000:1.
 | Suspect names (searchable, penalised) | 3,470 |
 | Advisory hierarchy edges | 12,968 |
 | Edges that may offer a candidate | 0 |
-| Runtime activation | Staged; see `docs/kb/KB_COMPETITION_0058.md` |
+| Runtime activation | **ACTIVE since Audit 0058A (2026-07-31)** |
+| Active index path | `indices/candidate/icd10_vi/competition-v3/index.json` |
+| `deterministic_index_hash` | `b050a2d5ead90c8410101d257b08b347c129f5a8faa713d7e5f2757c7931a975` |
+| Rollback path | `indices/icd10_vi/tt06-2026/index.json` (retained, unmodified) |
 
 No manual review of thousands of names or hierarchy edges is required before
 competition activation. This is a competition-scoring judgement, **not** a clinical

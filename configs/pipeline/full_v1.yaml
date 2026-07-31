@@ -4,15 +4,32 @@ l1_config: configs/document_intelligence/base.yaml
 router_config: configs/case_router/base.yaml
 medication_config: configs/medication/grammar_v1.yaml
 laboratory_config: configs/laboratory/parser_v1.yaml
-icd_index: indices/icd10_vi/tt06-2026/index.json
-# Active RxNorm index consumed by the linker. Audit 0014 kept the CONSERVATIVE
-# default (Prescribable) until BTC publishes the upgraded task and clarifies the
-# candidate/membership policy. To switch snapshots, point this at the Full index
-# below (config-only change; the linker is snapshot-agnostic).
-rxnorm_index: indices/rxnorm/prescribable-2026-07-06/index.json
-# Registry of available RxNorm snapshots and the selection policy. See
+# ACTIVE ICD INDEX (Audit 0058A). Competition KB v3, snapshot
+# `competition-kb-v3-candidate-4d206538e7d24c32`, deterministic_index_hash
+# b050a2d5ead90c8410101d257b08b347c129f5a8faa713d7e5f2757c7931a975.
+# 15,308 searchable records; suspect names indexed with a ranking penalty rather
+# than excluded; hierarchy is advisory and may never offer a candidate on its own.
+# ROLLBACK: indices/icd10_vi/tt06-2026/index.json (retained, unmodified).
+icd_index: indices/candidate/icd10_vi/competition-v3/index.json
+# ACTIVE RxNorm INDEX (Audit 0058A). Same v3 snapshot, deterministic_index_hash
+# d3c45f349bad1532135b70214c48e54c270ede6ae6988e1444a9949887d92ac3.
+# 211,949 records = 82,429 searchable + 129,520 closure-only graph endpoints.
+# Closure-only concepts are absent from the postings, dropped by the linker with
+# DROP_CLOSURE_ONLY, and refused by L9 with kb.candidate_not_final_eligible.
+#
+# Audit 0014's conservative Prescribable default stood until here. It is superseded
+# for the competition runtime, not deleted: v3 is *derived from* Prescribable, adds
+# only source-supported closure endpoints from the local Full package, and emits
+# nothing the Prescribable subset did not already permit as a candidate.
+# ROLLBACK: indices/rxnorm/prescribable-2026-07-06/index.json (retained, unmodified).
+rxnorm_index: indices/candidate/rxnorm/competition-v3/index.json
+# Registry of available RxNorm indices and the selection policy. See
 # configs/linking/rxnorm_snapshots_v1.yaml for the full contract.
 rxnorm_snapshots:
+  competition_v3:
+    index: indices/candidate/rxnorm/competition-v3/index.json
+    snapshot_id: competition-kb-v3-candidate-4d206538e7d24c32
+    manifest: data/derived/kb_freeze/0058_competition_candidate_v3/competition_snapshot_manifest_v1.json
   prescribable:
     index: indices/rxnorm/prescribable-2026-07-06/index.json
     snapshot_id: rxnorm-local-75a100c0b70b67d0
@@ -22,9 +39,14 @@ rxnorm_snapshots:
     snapshot_id: rxnorm-full-local-f77a33c352817f36
     manifest: data/manifests/rxnorm-full-2026-07-06.yaml
 rxnorm_selection:
-  active: prescribable
-  modes: [prescribable_only, full_only, full_prefer_prescribable, ablation_full_vs_prescribable]
+  active: competition_v3
+  modes: [competition_v3_only, prescribable_only, full_only, full_prefer_prescribable, ablation_full_vs_prescribable]
+  # Still true of the *candidate* policy: v3 emits only concepts that were
+  # prescribable-searchable. The Full package contributes graph reach, never a code.
   current_prescribable_preference: true
+  rollback:
+    icd_index: indices/icd10_vi/tt06-2026/index.json
+    rxnorm_index: indices/rxnorm/prescribable-2026-07-06/index.json
 checkpoint_root: models/checkpoints/full_v1
 # No expert_settings.e3_vncorenlp_dir is configured in the shipped active
 # profile. E3 therefore uses the verified default/pre-segmented-source path.

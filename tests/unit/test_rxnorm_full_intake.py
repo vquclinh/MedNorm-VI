@@ -135,21 +135,47 @@ def test_doctor_full_absent_when_only_prescribable(tmp_path: Path) -> None:
 
 # --- Selection configuration --------------------------------------------------
 
-def test_snapshot_selection_config_is_conservative_and_complete() -> None:
+def test_snapshot_selection_config_is_complete_and_conservative_in_candidacy() -> None:
+    """Both source packages stay registered; the active view is now the v3 derivative.
+
+    Audit 0014 pinned `active: prescribable` as the conservative default. Audit 0058A
+    supersedes the *path* without loosening the *policy*: competition v3 is derived
+    from Prescribable, and only prescribable-searchable concepts may be emitted. The
+    Full package contributes graph reach, never a candidate — which is why
+    `current_prescribable_preference` is still true.
+    """
     cfg = yaml.safe_load(SNAP_CFG.read_text(encoding="utf-8"))
-    assert cfg["active"] == "prescribable"
+    assert cfg["active"] == "competition_v3"
     assert cfg["current_prescribable_preference"] is True
-    assert set(cfg["snapshots"]) == {"prescribable", "full"}
+    assert set(cfg["snapshots"]) == {"competition_v3", "prescribable", "full"}
     assert cfg["snapshots"]["full"]["semantic_types"] is True
     assert cfg["snapshots"]["prescribable"]["semantic_types"] is False
 
+    v3 = cfg["snapshots"]["competition_v3"]
+    assert v3["derived_from"] == ["prescribable", "full"]
+    assert v3["searchable_concepts"] == 82429
+    assert v3["closure_only_concepts"] == 129520
+    assert v3["governance"] == "COMPETITION_RUNTIME_ELIGIBLE_NOT_CLINICALLY_APPROVED"
 
-def test_pipeline_config_registers_both_snapshots_default_prescribable() -> None:
+    # The rollback target must remain declared and must not be the active one.
+    assert cfg["rollback"]["active"] == "prescribable"
+    assert cfg["rollback"]["index"].endswith("prescribable-2026-07-06/index.json")
+
+
+def test_pipeline_config_activates_competition_v3_and_declares_rollback() -> None:
     doc = yaml.safe_load(PIPELINE_CFG.read_text(encoding="utf-8"))
-    assert doc["rxnorm_index"].endswith("prescribable-2026-07-06/index.json")
+    assert doc["rxnorm_index"] == "indices/candidate/rxnorm/competition-v3/index.json"
+    assert doc["icd_index"] == "indices/candidate/icd10_vi/competition-v3/index.json"
     sel = doc["rxnorm_selection"]
-    assert sel["active"] == "prescribable"
-    for mode in ("prescribable_only", "full_only", "full_prefer_prescribable",
-                 "ablation_full_vs_prescribable"):
+    assert sel["active"] == "competition_v3"
+    for mode in ("competition_v3_only", "prescribable_only", "full_only",
+                 "full_prefer_prescribable", "ablation_full_vs_prescribable"):
         assert mode in sel["modes"]
-    assert set(doc["rxnorm_snapshots"]) == {"prescribable", "full"}
+    assert set(doc["rxnorm_snapshots"]) == {"competition_v3", "prescribable", "full"}
+
+    # Rollback is a declared configuration, not folklore in an audit.
+    rollback = sel["rollback"]
+    assert rollback["icd_index"] == "indices/icd10_vi/tt06-2026/index.json"
+    assert rollback["rxnorm_index"] == "indices/rxnorm/prescribable-2026-07-06/index.json"
+    assert (REPO / rollback["icd_index"]).is_file(), "rollback ICD index must still exist"
+    assert (REPO / rollback["rxnorm_index"]).is_file(), "rollback RxNorm index must exist"

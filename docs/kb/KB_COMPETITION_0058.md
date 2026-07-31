@@ -217,12 +217,15 @@ Full digests are in `competition_snapshot_manifest_v1.json`.
 - governed `RETRIEVAL_ONLY` crosswalk expansion in L5 medication retrieval;
 - the closure-only leak guards in `linking/rxnorm.py` and `validator/kb_membership.py`.
 
-**Staged, not active**: the v3 snapshot and its derived runtime indices under
-`indices/candidate/`. The verified runtime configs still point at
-`indices/icd10_vi/tt06-2026/index.json` and
-`indices/rxnorm/prescribable-2026-07-06/index.json`. Switching them is a one-line
-config change the repository owner makes; the previous indices are untouched, so
-rollback is immediate.
+**Activated by Audit 0058A on 2026-07-31** (this section previously read "staged, not
+active"). `configs/pipeline/full_v1.yaml` now opens the v3 indices; the legacy indices
+are retained unmodified and declared as `rxnorm_selection.rollback`, so reverting is
+editing two lines back.
+
+One caveat carried forward: the Dockerfile bakes `configs/` into the image, so
+`mednorm-vi:framework-frozen` — built at Audit 0056g — still contains the pre-activation
+config and **requires a rebuild** before it runs on v3. The `indices/` mount contract
+itself needs no change.
 
 | Candidate index | Records | deterministic_index_hash |
 | --- | ---: | --- |

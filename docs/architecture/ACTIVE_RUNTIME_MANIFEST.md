@@ -8,7 +8,11 @@ describes a candidate *super*-architecture. This file records what the repositor
 built one without running the code.
 
 - **Established by:** Audit 0051 (repository-wide architecture review and cleanup)
-- **Last updated by:** Audit 0058 (Milestone 3B: competition KB policy, canonical
+- **Last updated by:** Audit 0058A (Milestone 3B.1: the competition KB v3 runtime
+  indices are **ACTIVE**; `configs/pipeline/full_v1.yaml` now opens them, the legacy
+  indices are retained unmodified as the declared rollback, and the frozen container
+  image needs a rebuild to pick up the changed config). See **§0c**.
+- **Previously updated by:** Audit 0058 (Milestone 3B: competition KB policy, canonical
   crosswalk normalization, candidate v3 snapshot, and the runtime activations that
   need no index migration — competition top-k decoding, governed `RETRIEVAL_ONLY`
   crosswalk expansion, and closure-only leak guards). See §5.2, §5.3, §8 and §10.
@@ -107,6 +111,64 @@ apart deliberately.
 | **The final L9 gate validates the serialized payload against the source** | **Audit 0056a.** `validator/final_gate.py`. Appendix A's `original_text[start:end] == text` was enforced four times upstream and **never** on the emitted bytes, and spec P7's offered-set rule never received data. Both now run on the canonical packaging path, before anything is written |
 | **Checkpoint deserialization is a policy, not a call-site habit** | **Audit 0056a.** `mention_factory/neural/checkpoint_loading.py`. Only E3's one digest-verified legacy artifact may use `weights_only=False`; every other checkpoint must be safetensors or `weights_only=True`, and an unverified file cannot reach the pickle path at all. **Runtime verification of the E3 forward pass under this policy is deferred to Milestone 2D-C** |
 | **Output-directory writing refuses unowned destinations** | **Audit 0056a.** `write_output_directory` recursively removed its destination with no guard whatsoever. It now refuses a filesystem root, a home directory, the repository root, a symlink, a non-`output` name, and any existing directory holding files this workflow did not write |
+
+## 0c. Active KB indices (Audit 0058A, activated 2026-07-31)
+
+The canonical runtime reads the competition KB v3 indices. This is a **config-only**
+change: no runner, linker or validator logic was redesigned for it, and the graph is
+written as the same symmetric unlabeled adjacency the legacy indices used, so the
+TTY-role walk is unchanged.
+
+| Field | ICD-10 | RxNorm |
+| --- | --- | --- |
+| **Active path** | `indices/candidate/icd10_vi/competition-v3/index.json` | `indices/candidate/rxnorm/competition-v3/index.json` |
+| Snapshot ID | `competition-kb-v3-candidate-4d206538e7d24c32` | `competition-kb-v3-candidate-4d206538e7d24c32` |
+| `deterministic_index_hash` | `b050a2d5ead90c8410101d257b08b347c129f5a8faa713d7e5f2757c7931a975` | `d3c45f349bad1532135b70214c48e54c270ede6ae6988e1444a9949887d92ac3` |
+| Records | 15,308 (all searchable) | 211,949 = **82,429 searchable + 129,520 closure-only** |
+| **Rollback path** | `indices/icd10_vi/tt06-2026/index.json` | `indices/rxnorm/prescribable-2026-07-06/index.json` |
+| Rollback index unchanged | `94a1378b0f355afc…1727a768` | `4e02ecbfc61e586e…2692aec` |
+
+Rollback is a **declared configuration**, not folklore: `rxnorm_selection.rollback` in
+`configs/pipeline/full_v1.yaml` names both paths, a test asserts both files still
+exist, and a test asserts the legacy indices are byte-identical to their pre-activation
+hashes. Reverting is editing two lines back.
+
+**Status: `COMPETITION_RUNTIME_ELIGIBLE`, not clinically approved.** Nothing in this
+snapshot claims human adjudication. The 12 INN crosswalk bridges are `RETRIEVAL_ONLY`;
+0 are `CLINICALLY_APPROVED`; the ICD searchability decision is a competition-scoring
+judgement, explicitly not a clinical one. `assert_automated_decision` raises rather
+than let any builder record clinical approval.
+
+Verified end to end through the canonical runner on tracked synthetic fixtures, with
+no model loaded:
+
+```text
+config icd_index    indices/candidate/icd10_vi/competition-v3/index.json
+config rxnorm_index indices/candidate/rxnorm/competition-v3/index.json
+loaded snapshot     competition-kb-v3-candidate-4d206538e7d24c32 (both)
+L9 final gate       PASSED
+serialized output   byte-identical across two runs
+candidate sizes     {0, 1, 2}  (competition top-k active)
+offered-set escapes 0
+closure-only codes in final output  NONE
+paracetamol 500mg khi cần  ->  ["161"]   (ACETAMINOPHEN, via the governed bridge)
+```
+
+`paracetamol` is absent from the index's exact and accent-folded postings, and with the
+governed bridge disabled the linker returns **nothing** for it. The bridge is what makes
+that mention linkable at all, and it does so by returning a *name* that re-enters
+retrieval — never a code.
+
+**Container note.** The `indices/` mount contract needs no change: the v3 files sit
+under the existing `/app/indices` mount and were confirmed readable inside
+`mednorm-vi:framework-frozen` under `--network=none`. But the Dockerfile **bakes
+`configs/` into the image** (`COPY configs/ ./configs/`), and that image was built at
+Audit 0056g, so its baked `full_v1.yaml` still names the legacy paths. **The frozen
+image therefore requires a rebuild** before it runs on v3. With the repository config
+mounted as a one-off diagnostic overlay, the same image reported `deterministic READY`,
+loaded the v3 ICD index in-container (15,308 records, correct snapshot ID) and confirmed
+the network was blocked (`OSError 101`) — so the rebuild is expected to be routine and
+no Docker contract redesign is needed.
 
 ## 0b. Isolated container/runtime verification (Audit 0056e)
 

@@ -4,12 +4,18 @@ Milestone 3A produced a versioned candidate RxNorm KB freeze from the existing
 local prescribable 2026-07-06 RRF files. No external RxNorm, drug database, model
 or API was downloaded or used.
 
-The candidate snapshot is **not active**. The currently verified runtime index
-remains:
+The 3A candidate snapshot is not active. **Superseded by Audit 0058A:** the active
+runtime index is now the competition v3 view derived from this Prescribable subset:
 
 ```text
-indices/rxnorm/prescribable-2026-07-06/index.json
+active    indices/candidate/rxnorm/competition-v3/index.json
+rollback  indices/rxnorm/prescribable-2026-07-06/index.json
 ```
+
+Candidacy is unchanged in kind: only prescribable-searchable concepts may be emitted.
+The 129,520 closure endpoints the Full package contributes are traversable and are
+refused as candidates by the postings, the linker and L9 independently. The rollback
+index is retained unmodified and remains byte-identical to its pre-activation hash.
 
 ## Candidate Snapshot
 
@@ -104,7 +110,11 @@ The 3B competition snapshot supersedes this one for runtime purposes:
 | Retained directed labelled relations | 960,086 |
 | Missing endpoints after closure | 0 |
 | Validation status | `VALID_COMPETITION_CANDIDATE` |
-| Runtime activation | Staged; see `docs/kb/KB_COMPETITION_0058.md` |
+| Runtime activation | **ACTIVE since Audit 0058A (2026-07-31)** |
+| Active index path | `indices/candidate/rxnorm/competition-v3/index.json` |
+| `deterministic_index_hash` | `d3c45f349bad1532135b70214c48e54c270ede6ae6988e1444a9949887d92ac3` |
+| Index records | 211,949 = 82,429 searchable + 129,520 closure-only |
+| Rollback path | `indices/rxnorm/prescribable-2026-07-06/index.json` (retained, unmodified) |
 
 The INN bridge is now governed rather than disabled: `RETRIEVAL_ONLY` permits query
 expansion (`paracetamol` -> `acetaminophen`), which took that surface from **0**

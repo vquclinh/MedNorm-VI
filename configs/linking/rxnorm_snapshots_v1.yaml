@@ -13,6 +13,21 @@ name: rxnorm_snapshots_v1
 # profile to Full without that clarification.
 
 snapshots:
+  # Audit 0058A: the ACTIVE runtime index. Not a third source package — a derived
+  # view built from the two below. Searchable candidacy comes entirely from the
+  # Prescribable subset; the Full package contributes only source-supported closure
+  # endpoints, which are traversable and can never be emitted.
+  competition_v3:
+    resource_id: competition-kb-v3
+    snapshot_id: competition-kb-v3-candidate-4d206538e7d24c32
+    index: indices/candidate/rxnorm/competition-v3/index.json
+    manifest: data/derived/kb_freeze/0058_competition_candidate_v3/competition_snapshot_manifest_v1.json
+    semantic_types: false        # derived from the Prescribable atom set
+    governance: COMPETITION_RUNTIME_ELIGIBLE_NOT_CLINICALLY_APPROVED
+    derived_from: [prescribable, full]
+    searchable_concepts: 82429
+    closure_only_concepts: 129520
+    deterministic_index_hash: d3c45f349bad1532135b70214c48e54c270ede6ae6988e1444a9949887d92ac3
   prescribable:
     resource_id: rxnorm-prescribable-2026-07-06
     snapshot_id: rxnorm-local-75a100c0b70b67d0
@@ -29,15 +44,23 @@ snapshots:
     governance: REDISTRIBUTION_RESTRICTED   # UMLS-licensed local use
 
 # Selection modes (choose one via `active`):
+#   competition_v3_only            - link against the derived competition v3 index
+#                                    (ACTIVE since Audit 0058A).
 #   prescribable_only              - link only against the Prescribable index.
 #   full_only                      - link only against the Full index.
 #   full_prefer_prescribable       - link against Full, but boost candidates that
 #                                    are members of the current Prescribable set
 #                                    (recall of Full + precision anchor of RPS).
 #   ablation_full_vs_prescribable  - build candidates from both for comparison.
-active: prescribable
-default_mode: prescribable_only
+active: competition_v3
+default_mode: competition_v3_only
+# Still true of the candidate policy: only prescribable-searchable concepts may be
+# emitted. Closure endpoints exist for traversal and are refused at three layers.
 current_prescribable_preference: true
+# Explicit rollback target, retained and unmodified (Audit 0058A).
+rollback:
+  active: prescribable
+  index: indices/rxnorm/prescribable-2026-07-06/index.json
 
 # Documented trade-offs (Full vs Prescribable), not a claim that Full is better:
 tradeoffs:
