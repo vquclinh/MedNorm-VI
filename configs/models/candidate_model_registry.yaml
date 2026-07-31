@@ -1,209 +1,145 @@
-# MedNorm-VI — candidate model registry (Audit 0042)
-# ==============================================================================
-# The CANDIDATE inventory: every model trained or evaluated during research.
-#
-# The spec §17 9B limit is NOT applied to this file. Training several
-# alternatives is permitted even when their sum exceeds 9B, provided they are not
-# all deployed together. The limit is enforced only against a selected
-# DEPLOYMENT manifest (see deployment_budget_template.yaml).
-#
-# The complete architecture is preserved. A component that is not implemented yet
-# is recorded as PLANNED with NO invented model id and NO guessed parameter
-# count — a PLANNED entry carrying a count is rejected by the loader.
-#
-# Counting policy:
-#   * `parameter_count_verified: true` requires a real programmatic count
-#     (counted_from_config / counted_from_checkpoint). Spec §17 says counts
-#     "must be verified by an automated parameter-count script before
-#     submission".
-#   * `published_estimate` values are recorded for planning ONLY and are NOT
-#     verified. A deployment that selects an unverified component fails closed.
-#   * The spec §17 table (~8.852B total) is an approximate planning figure and is
-#     deliberately NOT hardcoded as fact anywhere in this repository.
 version: candidate-model-registry-v1
-
 components:
-  # --------------------------------------------------------------------------
-  # E3 / S1 — the only trained mention expert today (Audits 0031-0034)
-  # --------------------------------------------------------------------------
-  - component_id: e3_vihealthbert_span_type
-    architecture_layer: L3
-    training_stage: S1
-    status: TRAINED
-    model_id: demdecuong/vihealthbert-base-word
-    pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
-    checkpoint_role: mention_span_type
-    # VERIFIED: AutoModel.from_config() instantiated from the locally cached
-    # config and counted programmatically on 2026-07-27.
-    total_parameters: 134998272
-    trainable_parameters: 134998272
-    adapter_parameters: 0
-    loaded_at_inference: true
-    shares_weights_with: vihealthbert_base
-    parameter_count_method: counted_from_config
-    parameter_count_verified: true
-    notes: >-
-      Exact character-offset F1 0.7103 on governed internal_test (Audit 0033).
-      Spec §17 lists "approximately 0.135B"; the verified count is 134,998,272.
-
-  # --------------------------------------------------------------------------
-  # E4 PhoBERT-W2NER — removed from this registry by Audit 0051.
-  #
-  # It is RETIRED_FROM_ACTIVE_ARCHITECTURE. Its completed Stage-2 tiny-recipe
-  # ablation selected no recipe (best exact F1 0.7333 by group_balanced_ce against
-  # a 0.95 gate), no checkpoint was ever produced, and its parameter count was
-  # never programmatically verified. A registry entry exists so a deployment can
-  # select from it; a component that can never be selected does not belong here.
-  #
-  # The record: src/mednorm_vi/governance/e4_retirement.py, Audits 0043-0048, 0051.
-  # --------------------------------------------------------------------------
-
-  # --------------------------------------------------------------------------
-  # E5 — ready for Colab smoke, never trained
-  # --------------------------------------------------------------------------
-  - component_id: e5_xlmr_mrc_ner
-    architecture_layer: L3
-    training_stage: S1
-    status: IMPLEMENTED
-    model_id: xlm-roberta-large
-    pinned_revision: ""
-    checkpoint_role: mrc_start_end
-    total_parameters: null
-    trainable_parameters: null
-    adapter_parameters: 0
-    loaded_at_inference: false
-    shares_weights_with: ""
-    parameter_count_method: published_estimate
-    parameter_count_verified: false
-    notes: >-
-      Spec §17 lists 0.560B for XLM-R large as a planning figure. Not counted
-      locally; the revision is resolved in Colab before training.
-
-  # --------------------------------------------------------------------------
-  # L4 v2 — learned resolver; tiny, locally instantiable, verified
-  # --------------------------------------------------------------------------
-  - component_id: l4_learned_resolver_v2
-    architecture_layer: L4
-    training_stage: L4
-    status: IMPLEMENTED
-    model_id: mednorm_vi.training.phase2.l4_training.build_l4_mlp
-    pinned_revision: ""
-    checkpoint_role: boundary_type_resolver
-    # VERIFIED: the tracked MLP is built from repository code and counted.
-    total_parameters: 6542
-    trainable_parameters: 6542
-    adapter_parameters: 0
-    loaded_at_inference: false
-    shares_weights_with: ""
-    parameter_count_method: counted_from_config
-    parameter_count_verified: true
-    notes: >-
-      22 tracked features, hidden size 64. Small, but it is still counted: the
-      budget includes every loaded parameter, not only large models.
-
-  # --------------------------------------------------------------------------
-  # S2 assertion — implemented, blocked on assertion supervision
-  # --------------------------------------------------------------------------
-  - component_id: s2_assertion_head
-    architecture_layer: L5
-    training_stage: S2
-    status: IMPLEMENTED
-    model_id: demdecuong/vihealthbert-base-word
-    pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
-    checkpoint_role: assertion_multi_label
-    # Shares the ViHealthBERT backbone with E3 (spec §15.1: "backbones are loaded
-    # once with multiple adapters/heads"). When both are deployed, the shared
-    # base is counted ONCE; only the head adds.
-    total_parameters: 134998272
-    trainable_parameters: 134998272
-    adapter_parameters: 9228
-    loaded_at_inference: false
-    shares_weights_with: vihealthbert_base
-    parameter_count_method: counted_from_config
-    parameter_count_verified: true
-    notes: >-
-      Four 3-label task heads (cue, scope, relation, final assertion logits) over
-      the shared 768-hidden ViHealthBERT backbone. The head count is reproduced
-      by build_s2_assertion_head(). The governed corpus currently has ZERO
-      assertion supervision, so this component is code-ready and data-blocked;
-      see Audit 0042.
-
-  # --------------------------------------------------------------------------
-  # S3-S6 — architecture-declared, not implemented. PLANNED, never guessed.
-  # --------------------------------------------------------------------------
-  - component_id: s3_retrieval_dense
-    architecture_layer: L5
-    training_stage: S3
-    status: PLANNED
-    checkpoint_role: dense_retrieval
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: >-
-      Spec §9.1/§15 name BGE-M3 and Qwen3-Embedding-0.6B as candidates. No model
-      id is committed here until the component is implemented.
-
-  - component_id: s3_retrieval_ontology_encoder
-    architecture_layer: L5
-    training_stage: S3
-    status: PLANNED
-    checkpoint_role: ontology_synonym_embedding
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: SapBERT/BiomedBERT-style contrastive encoder (spec §9.1).
-
-  - component_id: s4_reranker
-    architecture_layer: L5
-    training_stage: S4
-    status: PLANNED
-    checkpoint_role: cross_encoder_reranker
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: Spec §9.2 step 4; Qwen3-Reranker-0.6B is a named candidate.
-
-  - component_id: s5_qwen_lora_critic
-    architecture_layer: L7
-    training_stage: S5
-    status: PLANNED
-    checkpoint_role: llm_critic_adjudicator
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: >-
-      Spec §12 names Qwen3-1.7B (critic) and Qwen3-4B (adjudicator). A LoRA
-      deployment counts the BASE model plus its adapters, never the adapter
-      alone.
-
-  - component_id: s6_calibration_meta_model
-    architecture_layer: L8
-    training_stage: S6
-    status: PLANNED
-    checkpoint_role: calibration_stacking
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: >-
-      Spec §15 "small meta-model". Small does not mean exempt: its parameters are
-      counted in the deployment total like any other loaded component.
-
-  - component_id: e6_gliner_open_type
-    architecture_layer: L3
-    training_stage: S1
-    status: PLANNED
-    checkpoint_role: open_type_proposals
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: Spec §6 expert E6; §17 lists GLiNER medium v2.1 at 0.209B.
-
-  - component_id: e7_qwen_proposer
-    architecture_layer: L3
-    training_stage: S5
-    status: PLANNED
-    checkpoint_role: anchored_substring_proposer
-    loaded_at_inference: false
-    parameter_count_method: unknown
-    parameter_count_verified: false
-    notes: Spec §6 expert E7, proposal-only role.
+- component_id: e3_vihealthbert_span_type
+  architecture_layer: L3
+  training_stage: S1
+  status: TRAINED
+  model_id: demdecuong/vihealthbert-base-word
+  pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+  checkpoint_role: mention_span_type
+  total_parameters: 134998272
+  trainable_parameters: 134998272
+  adapter_parameters: 0
+  loaded_at_inference: true
+  shares_weights_with: vihealthbert_base
+  parameter_count_method: counted_from_config
+  parameter_count_verified: true
+  notes: Exact character-offset F1 0.7103 on governed internal_test (Audit 0033). Spec §17 lists "approximately
+    0.135B"; the verified count is 134,998,272.
+- component_id: e5_xlmr_mrc_ner
+  architecture_layer: L3
+  training_stage: S1
+  status: IMPLEMENTED
+  model_id: xlm-roberta-large
+  pinned_revision: ''
+  checkpoint_role: mrc_start_end
+  total_parameters: null
+  trainable_parameters: null
+  adapter_parameters: 0
+  loaded_at_inference: false
+  shares_weights_with: ''
+  parameter_count_method: published_estimate
+  parameter_count_verified: false
+  notes: Spec §17 lists 0.560B for XLM-R large as a planning figure. Not counted locally; the revision
+    is resolved in Colab before training.
+- component_id: l4_learned_resolver_v2
+  architecture_layer: L4
+  training_stage: L4
+  status: IMPLEMENTED
+  model_id: mednorm_vi.training.phase2.l4_training.build_l4_mlp
+  pinned_revision: ''
+  checkpoint_role: boundary_type_resolver
+  total_parameters: 6542
+  trainable_parameters: 6542
+  adapter_parameters: 0
+  loaded_at_inference: false
+  shares_weights_with: ''
+  parameter_count_method: counted_from_config
+  parameter_count_verified: true
+  notes: '22 tracked features, hidden size 64. Small, but it is still counted: the budget includes every
+    loaded parameter, not only large models.'
+- component_id: s2_assertion_head
+  architecture_layer: L5
+  training_stage: S2
+  status: IMPLEMENTED
+  model_id: demdecuong/vihealthbert-base-word
+  pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+  checkpoint_role: assertion_multi_label
+  total_parameters: 134998272
+  trainable_parameters: 134998272
+  adapter_parameters: 9228
+  loaded_at_inference: false
+  shares_weights_with: vihealthbert_base
+  parameter_count_method: counted_from_config
+  parameter_count_verified: true
+  notes: Four 3-label task heads (cue, scope, relation, final assertion logits) over the shared 768-hidden
+    ViHealthBERT backbone. The head count is reproduced by build_s2_assertion_head(). The governed corpus
+    currently has ZERO assertion supervision, so this component is code-ready and data-blocked; see Audit
+    0042.
+- component_id: s3_retrieval_dense
+  architecture_layer: L5
+  training_stage: S3
+  status: PLANNED
+  checkpoint_role: dense_retrieval
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: Spec §9.1/§15 name BGE-M3 and Qwen3-Embedding-0.6B as candidates. No model id is committed here
+    until the component is implemented.
+- component_id: s3_retrieval_ontology_encoder
+  architecture_layer: L5
+  training_stage: S3
+  status: PLANNED
+  checkpoint_role: ontology_synonym_embedding
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: SapBERT/BiomedBERT-style contrastive encoder (spec §9.1).
+- component_id: s4_reranker
+  architecture_layer: L5
+  training_stage: S4
+  status: PLANNED
+  checkpoint_role: cross_encoder_reranker
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: Spec §9.2 step 4; Qwen3-Reranker-0.6B is a named candidate.
+- component_id: s5_qwen_lora_critic
+  architecture_layer: L7
+  training_stage: S5
+  status: PLANNED
+  checkpoint_role: llm_critic_adjudicator
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: Spec §12 names Qwen3-1.7B (critic) and Qwen3-4B (adjudicator). A LoRA deployment counts the BASE
+    model plus its adapters, never the adapter alone.
+- component_id: s6_calibration_meta_model
+  architecture_layer: L8
+  training_stage: S6
+  status: PLANNED
+  checkpoint_role: calibration_stacking
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: 'Spec §15 "small meta-model". Small does not mean exempt: its parameters are counted in the deployment
+    total like any other loaded component.'
+- component_id: e6_gliner_open_type
+  architecture_layer: L3
+  training_stage: S1
+  status: EXCLUDED_BY_ABLATION
+  checkpoint_role: open_type_proposals
+  loaded_at_inference: false
+  parameter_count_method: counted_from_checkpoint
+  parameter_count_verified: true
+  notes: 'Multilingual GLiNER v2.1, acquired and fully verified in Audit 0061 (license apache-2.0, safetensors
+    only, 0 offset violations, 288,949,504 parameters counted from the loaded model). NOT DEPLOYED: as
+    a zero-shot second-opinion validator over E3 symptom/diagnosis proposals it failed the governed acceptance
+    gate on the validation split - best policy delta was +0.03 F1 against a required +1.0, because agreement
+    raises precision (+8 to +15 points) while collapsing recall (-6 to -45). Its span convention does
+    not match the governed annotation convention. Retained for a future supervised or feature-level use,
+    never as an independent proposer.'
+  model_id: urchade/gliner_multi-v2.1
+  pinned_revision: 443d26d654e0324125a96bebd8e796c14ff2efe6
+  total_parameters: 288949504
+  trainable_parameters: 288949504
+  adapter_parameters: 0
+- component_id: e7_qwen_proposer
+  architecture_layer: L3
+  training_stage: S5
+  status: PLANNED
+  checkpoint_role: anchored_substring_proposer
+  loaded_at_inference: false
+  parameter_count_method: unknown
+  parameter_count_verified: false
+  notes: Spec §6 expert E7, proposal-only role.

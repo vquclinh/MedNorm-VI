@@ -10,18 +10,25 @@ hypotheses:
   - policy_id: ICDF-DOTTED-OUTPUT
     title: Dotted output
     description: Emit dotted codes (e.g. A09.9). Reversible to undotted internally.
-    status: hypothesis
-    confidence: low
+    status: CONFIRMED
+    confidence: high
     linked_unresolved: UNRES-ICD-DOTTED
-    leaderboard_experiment_id: null
+    leaderboard_experiment_id: EXP-ICD-DOTTED-0060
+    note: >-
+      Confirmed by the isolated dotted probe (+1.0277 J_candidates, WER and
+      J_assertion unchanged). Dotted is CANONICAL for competition submissions.
 
   - policy_id: ICDF-UNDOTTED-OUTPUT
     title: Undotted output
     description: Emit undotted codes (e.g. A099).
-    status: hypothesis
-    confidence: low
+    status: REJECTED_FOR_OUTPUT
+    confidence: high
     linked_unresolved: UNRES-ICD-DOTTED
-    leaderboard_experiment_id: null
+    leaderboard_experiment_id: EXP-ICD-DOTTED-0060
+    note: >-
+      Rejected as OUTPUT serialization only. Undotted remains the internal KB concept
+      identity and the offered-set key; it is retained as a diagnostic profile for
+      internal comparison and must not be used for a competition submission.
 
   - policy_id: ICDF-CATEGORY-ACCEPTED
     title: 3-char category accepted

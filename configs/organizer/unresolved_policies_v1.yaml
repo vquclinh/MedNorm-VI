@@ -225,17 +225,36 @@ policies:
 
   - policy_id: UNRES-ICD-DOTTED
     title: ICD dotted vs undotted output
-    status: unresolved
+    status: resolved
+    resolution: dotted
     question: Should codes be emitted dotted (A09.9) or undotted (A099)?
     options:
       - {id: dotted, description: dotted form}
       - {id: undotted, description: undotted form}
-    supporting_observation: ""
+    # RESOLVED by an isolated single-variable leaderboard probe (Audit 0060 built it,
+    # Audit 0061 records the result). The probe was derived from the already-scored
+    # dotless Profile A and differed ONLY by the reversible dot insertion in diagnosis
+    # candidates: 161 of 179 codes dotted, 18 three-char categories unchanged, every
+    # non-candidate field byte-identical, RxNorm candidates untouched.
+    supporting_observation: >-
+      Dotless Profile A scored 9.1625 (WER 87.0976, J_assertion 16.0234,
+      J_candidates 1.2119). The dotted probe scored 9.5736 with WER and J_assertion
+      UNCHANGED to four decimals and J_candidates 2.2396 (+1.0277, +0.4111 total).
+      A zero delta on the two components the probe did not touch is what makes the
+      attribution airtight: only the candidate component moved, and only the dot
+      changed. Probe ZIP SHA-256
+      f87db8aead3fd935e2a0b9e3245b359b65953f7d28430ca3b56aeff22f663d59.
     contradicting_evidence: ""
-    confidence: low
+    confidence: high
     test_method: probe both formats for the same diagnosis.
-    leaderboard_experiment_id: null
-    internal_default: unknown
+    leaderboard_experiment_id: EXP-ICD-DOTTED-0060
+    internal_default: dotted
+    # Scope of the resolution, deliberately narrow: this fixes the OUTPUT
+    # SERIALIZATION only. Dotless remains the internal KB concept identity, the dot is
+    # applied at the governed serialization boundary, and retrieval, ranking and
+    # offered-set membership are untouched. J_candidates is still only 2.24 of 40, so
+    # the codes themselves remain largely wrong - the format was necessary, not
+    # sufficient.
 
   - policy_id: UNRES-ICD-SPECIFICITY
     title: ICD specificity
