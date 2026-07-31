@@ -199,9 +199,20 @@ def test_crosswalk_rows_remain_review_required_not_authoritative(tmp_path: Path)
     assert not any(row["review_decision"] == APPROVED for row in crosswalk)
 
 
-def test_legacy_inn_bridge_inventory_does_not_widen_runtime_retrieval() -> None:
+def test_the_inn_bridge_widens_lookup_but_never_emits_a_code() -> None:
+    """Superseded by Audit 0058: 3A disabled the bridge outright; 3B governs it.
+
+    3A had one state for two questions and answered both with "no": an unreviewed
+    bridge could not widen retrieval *or* emit a code. Audit 0058 splits them. The 12
+    canonical bridges are ``RETRIEVAL_ONLY`` — an exact source-string equivalence, not
+    a clinical approval — so lookup may widen while emission stays gated by the
+    searchable index and the mention's own evidence.
+    """
     assert INN_TO_RXNORM_NAME["paracetamol"] == "acetaminophen"
-    assert bridged_ingredient_names("paracetamol") == ()
+    expanded = bridged_ingredient_names("paracetamol")
+    assert expanded == ("acetaminophen",), "a RETRIEVAL_ONLY bridge may widen lookup"
+    # Names, never codes: the return type makes emission structurally impossible.
+    assert not any(name.isdigit() for name in expanded)
 
 
 def test_e4_retirement_is_unchanged_by_kb_freeze_contracts() -> None:

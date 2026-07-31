@@ -565,8 +565,17 @@ def test_no_assistant_control_file_is_tracked() -> None:
 
 
 def test_no_audit_was_deleted() -> None:
+    """Every audit number is present, counting lettered instalments.
+
+    The glob used to require a digit immediately followed by ``-``, which silently
+    excluded the lettered audits. Milestone 56 was only ever written as ``0056a``
+    through ``0056g``, so its number looked deleted the moment any later audit
+    existed — a latent failure that survived because the suite was last run in full
+    before ``0057-*.md`` was created. Numbering, not file naming, is what this test
+    is about, so it now reads the number and ignores any instalment letter.
+    """
     audits = sorted(
-        p.name for p in (REPO / "docs" / "audits").glob("[0-9][0-9][0-9][0-9]-*.md"))
-    numbers = [int(name[:4]) for name in audits]
+        p.name for p in (REPO / "docs" / "audits").glob("[0-9][0-9][0-9][0-9]*-*.md"))
+    numbers = sorted({int(name[:4]) for name in audits})
     assert numbers == list(range(1, max(numbers) + 1)), "an audit number is missing"
     assert max(numbers) >= 51

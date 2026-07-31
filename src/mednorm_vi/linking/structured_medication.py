@@ -134,11 +134,27 @@ _TO_MG: Mapping[str, float] = {"mg": 1.0, "g": 1000.0, "mcg": 0.001}
 # TOPICAL GEL` scored highest for "paracetamol"), which is worse than answering
 # nothing.
 #
-# Milestone 3A freezes the safer contract: unreviewed lexical bridges are retained as
-# an inventory/review queue input, but they are not runtime-authoritative and must not
-# widen candidate retrieval. Only APPROVED rows from a governed crosswalk may do that.
-INN_BRIDGE_STATUS = "REQUIRES_CLINICAL_REVIEW"
-LEGACY_INN_BRIDGE_RUNTIME_ENABLED = False
+# Milestone 3A froze the safer contract: unreviewed lexical bridges were inventory
+# only and could not widen retrieval, because 3A had one governance state
+# ("reviewed?") for two different questions.
+#
+# Milestone 3B (Audit 0058) separates them. The 46 atom-level rows collapse to 12
+# canonical (surface, RxCUI) bridges, each adjudicated automatically as
+# RETRIEVAL_ONLY: an equivalence established by exact source-string match against the
+# frozen snapshot, and explicitly **not** a clinical approval. That role permits
+# exactly one runtime effect — widening how a surface is looked up — and forbids the
+# other — emitting the bridged RxCUI as an answer.
+#
+# The distinction is load-bearing here. `paracetamol` occurs in zero records of the
+# locked snapshot, so with expansion disabled a mention of the single most common
+# Vietnamese medication surface returns **no candidates at all**. With expansion
+# enabled it is looked up as `acetaminophen`, and the concept that comes back must
+# still earn candidacy through the searchable index and the mention's own strength,
+# dose-form and TTY evidence. No bridge ever hands a code to the organizer.
+INN_BRIDGE_STATUS = "RETRIEVAL_ONLY_NOT_CLINICALLY_APPROVED"
+#: Whether a governed RETRIEVAL_ONLY bridge may widen lookup. See above: this permits
+#: query expansion only, never candidate emission.
+GOVERNED_INN_BRIDGE_RETRIEVAL_ENABLED = True
 
 INN_TO_RXNORM_NAME: Mapping[str, str] = {
     "paracetamol": "acetaminophen",
@@ -157,13 +173,15 @@ INN_TO_RXNORM_NAME: Mapping[str, str] = {
 
 
 def bridged_ingredient_names(surface: str) -> tuple[str, ...]:
-    """Approved RxNorm-side names to also retrieve on, for an INN surface form.
+    """RxNorm-side **names** to also retrieve on, for an INN surface form.
 
-    The legacy bridge above is currently ``REQUIRES_CLINICAL_REVIEW`` inventory.
-    Until an approved governed crosswalk is wired in, it must not widen runtime
-    retrieval or silently turn an unreviewed mapping into an authoritative candidate.
+    Returns names, never RxCUIs, and that is the point: a caller physically cannot
+    mistake the result for a candidate code. The names re-enter retrieval as queries,
+    so whatever concept they reach is subject to every downstream check — snapshot
+    membership, TTY terminality, closure-only membership and structured
+    compatibility — exactly as a directly-typed ingredient name would be.
     """
-    if not LEGACY_INN_BRIDGE_RUNTIME_ENABLED:
+    if not GOVERNED_INN_BRIDGE_RETRIEVAL_ENABLED:
         return ()
     key = normalize_surface(surface)
     target = INN_TO_RXNORM_NAME.get(key)
@@ -435,6 +453,9 @@ __all__ = [
     "ROLE_SALT",
     "ROLE_STRENGTH_UNIT",
     "ROLE_STRENGTH_VALUE",
+    "GOVERNED_INN_BRIDGE_RETRIEVAL_ENABLED",
+    "INN_BRIDGE_STATUS",
+    "INN_TO_RXNORM_NAME",
     "STRUCTURED_MEDICATION_VERSION",
     "STRUCTURED_ROLES",
     "StructuredField",

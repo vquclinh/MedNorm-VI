@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "competition-icd10-view-schema-v1",
+  "title": "MedNorm-VI Competition ICD-10 Concept or Advisory Hierarchy Row v1",
+  "description": "The competition reading of the frozen ICD-10 tables. Searchability follows structural code validity, not name quality; suspect names stay retrievable and carry a ranking penalty instead of an exclusion. Hierarchy edges derived from code prefixes are advisory and may never introduce a candidate on their own.",
+  "type": "object",
+  "required": ["schema_version", "ontology", "snapshot_id"],
+  "oneOf": [
+    {
+      "required": [
+        "code",
+        "source_name",
+        "normalized_name",
+        "name_quality",
+        "structurally_valid",
+        "searchable",
+        "runtime_role"
+      ]
+    },
+    {
+      "required": [
+        "parent_code",
+        "child_code",
+        "evidence_class",
+        "source_authoritative",
+        "may_offer_candidate",
+        "ranking_weight"
+      ]
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "competition-icd10-view-schema-v1" },
+    "ontology": { "const": "icd10_vi" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "code": { "type": "string" },
+    "display_code": { "type": "string" },
+    "lookup_code": { "type": "string" },
+    "source_name": {
+      "type": "string",
+      "description": "Preserved verbatim from source. No canonical name is ever invented or repaired."
+    },
+    "normalized_name": { "type": "string" },
+    "name_quality": { "enum": ["clean", "suspect", "missing"] },
+    "quality_flags": { "type": "string" },
+    "structurally_valid": { "enum": ["true", "false"] },
+    "searchable": { "enum": ["true", "false"] },
+    "runtime_role": {
+      "enum": ["COMPETITION_RUNTIME_ELIGIBLE", "RETRIEVAL_ONLY", "EXCLUDED"]
+    },
+    "provenance_id": { "type": "string" },
+    "source_file": { "type": "string" },
+    "source_record_id": { "type": "string" },
+    "exclusion_reason": { "type": "string" },
+    "parent_code": { "type": "string" },
+    "child_code": { "type": "string" },
+    "relation_label": { "type": "string" },
+    "direction": { "enum": ["parent_to_child", "child_to_parent"] },
+    "evidence_class": { "enum": ["source_supported", "advisory_prefix_inference"] },
+    "source_authoritative": { "enum": ["true", "false"] },
+    "may_offer_candidate": {
+      "enum": ["true", "false"],
+      "description": "Always 'false' for an advisory edge. Advisory hierarchy may re-rank a code lexical retrieval already reached; it may not put a new code on the table."
+    },
+    "ranking_weight": { "type": "string" }
+  },
+  "additionalProperties": false
+}

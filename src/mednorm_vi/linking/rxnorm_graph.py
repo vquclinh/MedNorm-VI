@@ -103,6 +103,33 @@ def aliases_of(index: LocalIndex, concept_id: str) -> tuple[str, ...]:
     return tuple(str(a) for a in aliases) if isinstance(aliases, list) else ()
 
 
+def membership_of(index: LocalIndex, concept_id: str) -> str:
+    """Membership class for a concept, or ``""`` when the index does not state one.
+
+    The competition v3 index carries ``searchable`` or ``closure_only`` here. The
+    legacy index carries nothing, and an absent value must mean "this index draws no
+    such distinction" rather than "closure-only" — treating silence as exclusion would
+    empty the candidate list on the legacy snapshot.
+    """
+    record = index.records.get(concept_id)
+    if not isinstance(record, dict):
+        return ""
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("membership", ""))
+
+
+def is_closure_only(index: LocalIndex, concept_id: str) -> bool:
+    """Whether traversal may reach this concept but the runtime may not emit it.
+
+    Closure-only concepts exist so the ingredient/product walk has somewhere to land
+    (see ``kb/competition/rxnorm_view.py``). They are not prescribable candidates, and
+    the walk reaches them by construction, so this check is what stops the leak.
+    """
+    return membership_of(index, concept_id) == "closure_only"
+
+
 def is_suppressed(index: LocalIndex, concept_id: str) -> bool:
     """True when the snapshot marks the concept suppressed or obsoleted.
 
@@ -324,7 +351,9 @@ __all__ = [
     "attached_dose_forms",
     "attached_ingredients",
     "graph_health",
+    "is_closure_only",
     "is_suppressed",
+    "membership_of",
     "name_of",
     "neighbours",
     "step_to_role",

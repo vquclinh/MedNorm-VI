@@ -57,6 +57,7 @@ from .rxnorm_graph import (
     aliases_of,
     attached_brand_names,
     attached_ingredients,
+    is_closure_only,
     is_suppressed,
     name_of,
     traverse_ingredient_chain,
@@ -98,6 +99,10 @@ DROP_RELEASE_CONFLICT = "DROP_RELEASE_CONFLICT"
 DROP_ROUTE_CONFLICT = "DROP_ROUTE_CONFLICT"
 DROP_SUPPRESSED_CONCEPT = "DROP_SUPPRESSED_CONCEPT"
 DROP_NOT_IN_SNAPSHOT = "DROP_NOT_IN_SNAPSHOT"
+# Audit 0058: a v3 closure-only endpoint. Traversal may stand on it; nothing may
+# emit it. Distinct from DROP_NOT_IN_SNAPSHOT because the concept *is* in the
+# snapshot — it simply is not a searchable candidate.
+DROP_CLOSURE_ONLY = "DROP_CLOSURE_ONLY"
 DROP_NON_TERMINAL_TTY = "DROP_NON_TERMINAL_TTY"
 DROP_INGREDIENT_MISMATCH = "DROP_INGREDIENT_MISMATCH"
 DROP_BUDGET = "DROP_BUDGET"
@@ -693,6 +698,19 @@ def link_rxnorm_structured(
                 )
             )
             continue
+        if is_closure_only(index, concept_id):
+            # Reached by traversal, which is exactly what the closure is for. Emitting
+            # it would defeat the point of building the closure separately.
+            decisions.append(
+                RxNormCandidateDecision(
+                    retained=False,
+                    reason=DROP_CLOSURE_ONLY,
+                    tier=TIER_LEXICAL,
+                    score=0.0,
+                    **base,
+                )
+            )
+            continue
         if tty not in TTY_TERMINAL:
             # Groupers and synonyms are evidence, never emitted codes.
             note = (
@@ -857,6 +875,7 @@ __all__ = [
     "CANDIDATE_BOUND",
     "CONFLICT",
     "DROP_BUDGET",
+    "DROP_CLOSURE_ONLY",
     "DROP_CONCENTRATION_CONFLICT",
     "DROP_DOSE_FORM_CONFLICT",
     "DROP_INGREDIENT_MISMATCH",

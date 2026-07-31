@@ -37,6 +37,12 @@ from typing import Any
 from ..confidence_cascade.cascade import CascadeDecision
 from ..confidence_cascade.escalation import REJECT, CascadeReport
 from ..evidence_graph.consistency import GraphConsistencyReport
+from ..kb.competition.topk import (
+    COMPETITION_TOPK_VERSION,
+    MAX_CANDIDATES,
+    RankedCandidate,
+    apply_competition_topk,
+)
 from ..linking.models import LinkedCandidate, LinkerResult
 from ..resolution.models import EntityHypothesis
 from ..specialists.assertion import AssertionDecision
@@ -77,6 +83,9 @@ DROP_GRAPH_CONTRADICTION = "dropped_l6_fatal_contradiction"
 DROP_UNSUPPORTED_CANDIDATE = "dropped_candidate_without_graph_support"
 KEEP_CONSISTENCY_SUPPORTED = "l6_consistency_no_issues"
 WITHHELD_FATAL_CONTRADICTION = "withheld_l6_fatal_contradiction"
+# Competition top-k narrowing (Audit 0058 §7). Prefixed so a reader can tell the
+# Jaccard-driven cut apart from the evidence-band cut above it.
+DROP_COMPETITION_TOPK = "dropped_by_competition_topk_policy"
 
 
 class CalibratedDecoderUnavailable(RuntimeError):
@@ -240,11 +249,19 @@ def decode_entities(
     candidate_safety_bound: int = CANDIDATE_SAFETY_BOUND,
     consistency: GraphConsistencyReport | None = None,
     escalation: CascadeReport | None = None,
+    competition_topk: bool = True,
 ) -> tuple[DecodedEntity, ...]:
     """**The L8 entry point.** Deterministic, evidence-ranked final set selection.
 
     Truthfully named: it ranks by available evidence and records why. It does not
     estimate expected Jaccard or WER, and it uses no calibrated probability.
+
+    ``competition_topk`` (Audit 0058 §7) applies the Jaccard-aware narrowing on top of
+    the evidence-band selection: top-1 per entity, plus a second candidate only on a
+    deterministic close tie or a supported ICD specific/unspecified pair. It runs
+    **after** :func:`_select_candidates` and can only remove, so it cannot introduce a
+    code the L5 offered set does not contain. Passing ``False`` reproduces the
+    Audit-0054 behaviour exactly.
 
     ``consistency`` and ``escalation`` are L6's and L7's typed public contracts
     (Audit 0054). When supplied:
@@ -298,6 +315,25 @@ def decode_entities(
                 blocked_codes=blocked)
             if link is not None else ((), ()))
 
+        if competition_topk and codes:
+            # Narrow, never widen. The input is the list _select_candidates already
+            # returned, so every surviving code was offered by L5 and the L8/L9
+            # offered-set invariant holds structurally rather than by later check.
+            kept_by_code = {d.code: d for d in candidate_decisions if d.kept}
+            selection = apply_competition_topk(
+                hypothesis.entity_type,
+                tuple(
+                    RankedCandidate(
+                        code, kept_by_code[code].score, kept_by_code[code].tier)
+                    for code in codes if code in kept_by_code),
+            )
+            cut = set(codes) - set(selection.codes)
+            candidate_decisions = tuple(
+                CandidateDecision(d.code, d.tier, d.score, False, DROP_COMPETITION_TOPK)
+                if (d.kept and d.code in cut) else d
+                for d in candidate_decisions)
+            codes = selection.codes
+
         reasons = list(decision.reasons) or ["cascade_accepted"]
         if consistency is not None:
             issues = consistency.issues_for(hypothesis.hypothesis_id)
@@ -349,9 +385,13 @@ def decoder_status() -> Mapping[str, Any]:
         "performs_expected_jaccard_decoding": False,
         "performs_expected_wer_boundary_utility": False,
         "uses_calibrated_probabilities": False,
-        "candidate_selection_rule": "evidence tier + relative score band",
+        "candidate_selection_rule": (
+            "evidence tier + relative score band, then the competition top-k narrowing"
+        ),
         "candidate_safety_bound": CANDIDATE_SAFETY_BOUND,
         "fixed_top_k_used": False,
+        "competition_topk_policy": COMPETITION_TOPK_VERSION,
+        "competition_topk_max_candidates": MAX_CANDIDATES,
         "calibrated_decoder_available": False,
         "spec_section": "13",
     }
@@ -361,6 +401,7 @@ __all__ = [
     "CANDIDATE_SAFETY_BOUND",
     "DECODER_VERSION",
     "DROP_BELOW_BAND",
+    "DROP_COMPETITION_TOPK",
     "DROP_DUPLICATE",
     "DROP_SAFETY_BOUND",
     "DROP_TYPE_MISMATCH",

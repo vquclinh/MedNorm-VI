@@ -76,5 +76,37 @@ as review evidence rather than hidden.
 
 Do not switch runtime configs to the 3A candidate RxNorm freeze until relation
 endpoint policy and INN crosswalk review are owner-approved. The existing runtime
-index remains the verified framework-freeze artifact, with the unapproved INN
-bridge disabled for candidate retrieval.
+index remains the verified framework-freeze artifact.
+
+## Milestone 3B Update (Audit 0058)
+
+Both 3A preconditions above have now been **answered by measurement**, and two of the
+3A counts on this page are superseded.
+
+**The 2,010,514 "missing endpoints" were not missing.** They are `AUI`-level relation
+rows, which leave `RXCUI1`/`RXCUI2` empty by RRF design and identify their endpoints in
+`RXAUI1`/`RXAUI2`. The 3A builder read only the RXCUI columns. Resolving atoms through
+`RXNCONSO.RRF` shows all 2,010,514 resolve, 0 atoms are unresolvable, and the
+prescribable relation set has **0** missing endpoints. See Audit 0058 §6.
+
+**The 46 crosswalk rows are 12 mappings.** They are atom-level evidence rows: 12 unique
+normalized surfaces, 11 unique RxCUIs, 12 canonical `(surface, rxcui)` bridges. All 12
+are `RETRIEVAL_ONLY`; none is clinically approved. See Audit 0058 §3.
+
+The 3B competition snapshot supersedes this one for runtime purposes:
+
+| Field | Value |
+| --- | --- |
+| Snapshot ID | `competition-kb-v3-candidate-4d206538e7d24c32` |
+| Path | `data/derived/kb_freeze/0058_competition_candidate_v3/` |
+| Searchable concepts | 82,429 |
+| Closure-only concepts | 129,520 |
+| Retained directed labelled relations | 960,086 |
+| Missing endpoints after closure | 0 |
+| Validation status | `VALID_COMPETITION_CANDIDATE` |
+| Runtime activation | Staged; see `docs/kb/KB_COMPETITION_0058.md` |
+
+The INN bridge is now governed rather than disabled: `RETRIEVAL_ONLY` permits query
+expansion (`paracetamol` -> `acetaminophen`), which took that surface from **0**
+candidates to a correct top concept, while candidacy is still decided by the searchable
+index and the mention's own evidence. A bridge never emits a code.

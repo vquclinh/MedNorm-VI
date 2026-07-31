@@ -402,12 +402,19 @@ def test_retrieval_queries_the_ingredient_not_only_the_surface() -> None:
     assert terms[-1] == "testosterol 500 mg po daily"
 
 
-def test_the_inn_bridge_is_review_inventory_not_runtime_authority() -> None:
+def test_the_inn_bridge_widens_lookup_without_conferring_authority() -> None:
     """`paracetamol` occurs in ZERO records of the locked snapshot; RxNorm says
-    `acetaminophen`. The legacy inventory is deliberately short, but 3A keeps
-    unapproved rows out of runtime candidate retrieval."""
-    assert bridged_ingredient_names("paracetamol") == ()
-    assert bridged_ingredient_names("aspirin") == ()
+    `acetaminophen`.
+
+    3A disabled the bridge outright, which meant the most common Vietnamese
+    medication surface linked to nothing at all. Audit 0058 governs it instead: the
+    bridge is ``RETRIEVAL_ONLY``, so it may widen *lookup* while candidacy is still
+    decided by the searchable index and the mention's own evidence. It returns names,
+    never codes, so it cannot confer authority even in principle.
+    """
+    assert bridged_ingredient_names("paracetamol") == ("acetaminophen",)
+    assert bridged_ingredient_names("aspirin") == (), "only governed surfaces expand"
+    assert not any(name.isdigit() for name in bridged_ingredient_names("paracetamol"))
     assert len(INN_TO_RXNORM_NAME) <= 20, (
         "a long hand-written drug-name table is a safety hazard, not a convenience"
     )

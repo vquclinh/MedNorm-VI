@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "competition-snapshot-manifest-schema-v1",
+  "title": "MedNorm-VI Competition KB Snapshot Manifest v1",
+  "description": "Manifest for a competition candidate snapshot. Carries both an artifact digest (did these bytes change?) and a canonical content digest (did the logical rows change?) per table, so rebuild determinism can be asserted independently of file layout.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "builder_version",
+    "policy_version",
+    "schema_versions",
+    "source_manifests",
+    "source_files",
+    "predecessor_snapshot_dir",
+    "artifacts",
+    "counts",
+    "validation_status",
+    "validation_report_sha256",
+    "known_limitations",
+    "creation_timestamp_utc",
+    "no_external_data_statement",
+    "build_command"
+  ],
+  "properties": {
+    "schema_version": { "const": "competition-snapshot-manifest-schema-v1" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "builder_version": { "const": "competition-kb-builder-v1" },
+    "policy_version": { "const": "competition-kb-policy-v1" },
+    "schema_versions": { "type": "object" },
+    "source_manifests": { "type": "array", "items": { "type": "string" } },
+    "source_files": { "type": "object", "additionalProperties": { "type": "string" } },
+    "predecessor_snapshot_dir": {
+      "type": "string",
+      "description": "The 3A candidate v2 directory this snapshot derives from. It is read-only input and is never modified."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "rows", "artifact_sha256", "canonical_content_sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "rows": { "type": "integer" },
+          "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "canonical_content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "counts": { "type": "object" },
+    "validation_status": {
+      "enum": ["VALID_COMPETITION_CANDIDATE", "INVALID"]
+    },
+    "validation_report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "known_limitations": { "type": "array", "items": { "type": "string" } },
+    "creation_timestamp_utc": { "type": "string" },
+    "no_external_data_statement": { "type": "string" },
+    "build_command": { "type": "string" }
+  },
+  "additionalProperties": false
+}

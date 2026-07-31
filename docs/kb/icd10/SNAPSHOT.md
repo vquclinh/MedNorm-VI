@@ -65,3 +65,34 @@ Do not switch `configs/pipeline/full_v1.yaml` or the runtime index paths to the
 3A candidate snapshot until human review resolves the truncated-name and
 source-supported hierarchy queues, or an owner-approved policy explicitly accepts
 the candidate limitations.
+
+## Milestone 3B Update (Audit 0058)
+
+Milestone 3B is the "owner-approved policy explicitly accepts the candidate
+limitations" branch above, for competition purposes only.
+
+Searchability now follows **structural code validity**, not name quality. All 15,308
+concepts are structurally valid and searchable, including the 3,470 with suspect names:
+a fragment label does not make its code wrong, and a concept the runtime refuses to
+index can never be retrieved. Suspect status became a negative ranking feature
+(`name_quality`) instead of an exclusion. No name is repaired and `source_name` is
+preserved verbatim.
+
+The 12,968 prefix-inferred hierarchy edges are retained as **advisory**. They may
+contribute a weak ranking feature but `may_offer_candidate` is `false` on every edge,
+so advisory hierarchy can never introduce a code that lexical evidence did not already
+reach. Exact lexical evidence outweighs it 1000:1.
+
+| Field | Value |
+| --- | --- |
+| Snapshot ID | `competition-kb-v3-candidate-4d206538e7d24c32` |
+| Path | `data/derived/kb_freeze/0058_competition_candidate_v3/` |
+| Searchable / excluded | 15,308 / 0 |
+| Suspect names (searchable, penalised) | 3,470 |
+| Advisory hierarchy edges | 12,968 |
+| Edges that may offer a candidate | 0 |
+| Runtime activation | Staged; see `docs/kb/KB_COMPETITION_0058.md` |
+
+No manual review of thousands of names or hierarchy edges is required before
+competition activation. This is a competition-scoring judgement, **not** a clinical
+one: no ICD record in this snapshot claims human adjudication.

@@ -113,6 +113,34 @@ class LockedSnapshots:
         }
 
 
+def _final_candidate_eligible(source: object, code: str) -> bool:
+    """Whether the snapshot permits this code as a final candidate.
+
+    Audit 0058's competition snapshot contains two populations: searchable concepts,
+    which may be emitted, and closure-only graph endpoints, which exist so traversal
+    has somewhere to land and may not. This gate reads the membership the snapshot
+    states, without importing a linker — the linker is the component whose bug this
+    check exists to catch.
+
+    A snapshot that states no membership permits everything. Silence must not mean
+    "closure-only": the legacy indices draw no such distinction, and reading their
+    silence as exclusion would empty every candidate list.
+    """
+    checker = getattr(source, "final_candidate_eligible", None)
+    if callable(checker):
+        return bool(checker(code))
+    records = getattr(source, "records", None)
+    if isinstance(records, Mapping):
+        record = records.get(code)
+        if isinstance(record, Mapping):
+            metadata = record.get("metadata")
+            if isinstance(metadata, Mapping):
+                membership = str(metadata.get("membership", ""))
+                if membership:
+                    return membership == "searchable"
+    return True
+
+
 def _issue(
     code: str, message: str, document_id: str | None, entity_index: int | None, **ctx: object
 ) -> ValidationIssue:
@@ -253,6 +281,21 @@ def validate_entity_candidates(
 
     allowed = set(str(code) for code in offered_codes) if offered_codes is not None else None
     for code in codes:
+        if not _final_candidate_eligible(source, code):
+            issues.append(
+                _issue(
+                    "kb.candidate_not_final_eligible",
+                    f"candidate {code!r} is in {expected_ontology} snapshot "
+                    f"{source.source_snapshot_id!r} but is not a final-candidate-eligible "
+                    "concept; a closure-only graph endpoint supports traversal and may "
+                    "never be emitted (Audit 0058)",
+                    document_id,
+                    entity_index,
+                    value=code,
+                    snapshot_id=source.source_snapshot_id,
+                )
+            )
+            continue
         if not source.exists(code):
             issues.append(
                 _issue(

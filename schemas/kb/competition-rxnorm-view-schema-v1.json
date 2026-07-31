@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "competition-rxnorm-view-schema-v1",
+  "title": "MedNorm-VI Competition RxNorm Concept, Relation or Synonym Row v1",
+  "description": "The competition RxNorm view. 'searchable' and 'graph_endpoint' are deliberately separate flags: a closure-only concept is traversable but can never be offered to the organizer. Every retained relation has both endpoints present in the concept table after closure.",
+  "type": "object",
+  "required": ["schema_version", "ontology", "snapshot_id"],
+  "oneOf": [
+    {
+      "required": [
+        "rxcui",
+        "preferred_name",
+        "tty_values",
+        "membership",
+        "searchable",
+        "graph_endpoint",
+        "runtime_role"
+      ]
+    },
+    {
+      "required": [
+        "source_rxcui",
+        "target_rxcui",
+        "rel",
+        "rela",
+        "direction",
+        "source_endpoint_class",
+        "target_endpoint_class",
+        "endpoint_status"
+      ]
+    },
+    {
+      "required": ["concept_id", "surface", "normalized_surface", "term_type"]
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "competition-rxnorm-view-schema-v1" },
+    "ontology": { "const": "rxnorm" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+
+    "rxcui": { "type": "string" },
+    "preferred_name": { "type": "string" },
+    "normalized_name": { "type": "string" },
+    "tty_values": {
+      "type": "string",
+      "description": "Pipe-joined collection of observed term types. IN, PIN, MIN, SCD and SBD semantics are preserved and never collapsed."
+    },
+    "source_vocabularies": { "type": "string" },
+    "suppress_values": { "type": "string" },
+    "atom_count": { "type": "string", "pattern": "^[0-9]+$" },
+    "membership": { "enum": ["searchable", "closure_only"] },
+    "searchable": { "enum": ["true", "false"] },
+    "graph_endpoint": { "enum": ["true", "false"] },
+    "runtime_role": { "enum": ["COMPETITION_RUNTIME_ELIGIBLE", "RETRIEVAL_ONLY", "EXCLUDED"] },
+    "source_file": { "type": "string" },
+    "provenance_id": { "type": "string" },
+
+    "source_rxcui": { "type": "string" },
+    "target_rxcui": { "type": "string" },
+    "rel": { "type": "string" },
+    "rela": { "type": "string" },
+    "direction": { "enum": ["source_to_target", "target_to_source"] },
+    "source_vocabulary": { "type": "string" },
+    "rui": { "type": "string" },
+    "source_level": {
+      "enum": ["CUI", "AUI"],
+      "description": "The level the source RRF row recorded the relation at. An AUI-level row is a relation between atoms, not a relation with missing endpoints."
+    },
+    "origin_snapshot": { "enum": ["prescribable", "full"] },
+    "source_endpoint_class": { "enum": ["searchable", "closure_only"] },
+    "target_endpoint_class": { "enum": ["searchable", "closure_only"] },
+    "endpoint_status": { "enum": ["ok", "missing"] },
+
+    "concept_id": { "type": "string" },
+    "surface": { "type": "string" },
+    "normalized_surface": { "type": "string" },
+    "term_type": { "type": "string" },
+    "language": { "type": "string" },
+    "suppress": { "type": "string" },
+    "source_record_id": { "type": "string" }
+  },
+  "additionalProperties": false
+}

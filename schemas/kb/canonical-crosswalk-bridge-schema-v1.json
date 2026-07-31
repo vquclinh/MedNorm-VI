@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "canonical-crosswalk-bridge-schema-v1",
+  "title": "MedNorm-VI Canonical INN to RxNorm Bridge v1",
+  "description": "Exactly one governed bridge per (normalized_local_surface, target_rxcui). Atom-level source rows differing only in casing or term type are supporting evidence for one bridge, never separate bridges. Two different local surfaces may legitimately target the same RxCUI and remain two bridges.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "local_surface",
+    "normalized_local_surface",
+    "target_rxcui",
+    "preferred_target_name",
+    "observed_tty",
+    "supporting_atom_count",
+    "supporting_provenance_ids",
+    "source_evidence",
+    "competing_rxcuis",
+    "ambiguity_flags",
+    "automated_decision",
+    "decision_reason",
+    "confidence",
+    "runtime_role"
+  ],
+  "properties": {
+    "schema_version": { "const": "canonical-crosswalk-bridge-schema-v1" },
+    "snapshot_id": { "type": "string", "minLength": 1 },
+    "local_surface": { "type": "string" },
+    "normalized_local_surface": { "type": "string", "minLength": 1 },
+    "target_rxcui": { "type": "string" },
+    "preferred_target_name": { "type": "string" },
+    "observed_tty": {
+      "type": "string",
+      "description": "Pipe-joined collection of the term types observed across supporting atoms. A storage encoding of a set, never a concept type: 'IN|SU|TMSY' denotes three observed term types, not a term type of that name."
+    },
+    "supporting_atom_count": { "type": "string", "pattern": "^[0-9]+$" },
+    "supporting_provenance_ids": { "type": "string" },
+    "source_evidence": { "type": "string" },
+    "competing_rxcuis": {
+      "type": "string",
+      "description": "Other RxCUIs the same normalized surface reaches. Preserved, never silently resolved."
+    },
+    "ambiguity_flags": { "type": "string" },
+    "automated_decision": {
+      "enum": ["RETRIEVAL_ONLY", "EXCLUDED", "UNMAPPED"],
+      "description": "CLINICALLY_APPROVED is deliberately absent: no automated builder may claim clinical adjudication."
+    },
+    "decision_reason": { "type": "string" },
+    "confidence": {
+      "enum": [
+        "source_exact_match",
+        "source_synonym_match",
+        "lexical_equivalence_unadjudicated",
+        "no_supporting_evidence"
+      ]
+    },
+    "runtime_role": {
+      "enum": ["RETRIEVAL_ONLY", "EXCLUDED", "UNMAPPED"],
+      "description": "A RETRIEVAL_ONLY bridge may normalize a surface or widen retrieval. It may never emit its target_rxcui as a final organizer candidate."
+    }
+  },
+  "additionalProperties": false
+}
