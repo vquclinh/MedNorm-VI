@@ -195,12 +195,37 @@ def test_audited_digests_are_in_the_audit_and_operator_digests_are_labelled() ->
 
 
 def test_no_e4_checkpoint_remains_on_disk() -> None:
+    """No PhoBERT-W2NER weights exist anywhere in the tree.
+
+    This asserted "the tree contains exactly one .pt, and it is the S1 checkpoint" until
+    Audit 0062 added governed refinement experiments under `checkpoint/experiments/`.
+    Counting files was always a proxy for the real claim — that E4 has no weights — and
+    the proxy broke on a legitimate change. The claim is now checked directly, and every
+    remaining `.pt` still has to be an E3/S1 artifact in a known governed location, so a
+    stray checkpoint appearing somewhere else is still a failure.
+    """
     weights = [
         path for path in REPO.rglob("*.pt")
         if ".venv" not in path.parts and path.is_file()]
-    # The only weight file in the tree is the E3/S1 checkpoint.
-    assert [path.name for path in weights] == ["best.pt"]
-    assert weights[0].parent.name == "s1_mention_full_training_v1"
+    assert weights, "the E3/S1 checkpoint should be present"
+
+    e4_markers = ("w2ner", "phobert", "e4")
+    for path in weights:
+        relative = path.relative_to(REPO).as_posix().lower()
+        offending = [marker for marker in e4_markers if marker in relative]
+        assert not offending, f"a retired-E4 weight file is present: {relative}"
+        assert path.name in ("best.pt", "latest.pt"), relative
+        governed = (
+            path.parent.name == "s1_mention_full_training_v1"
+            or "checkpoint/experiments/" in relative
+        )
+        assert governed, f"weight file outside a governed checkpoint location: {relative}"
+
+    # The validated S1 artifact itself is still exactly where it belongs.
+    validated = [
+        path for path in weights
+        if path.parent.name == "s1_mention_full_training_v1" and path.name == "best.pt"]
+    assert validated
 
 
 def test_the_evidence_audits_all_exist_and_are_tracked() -> None:

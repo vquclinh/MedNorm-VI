@@ -1,0 +1,65 @@
+version: e3-checkpoint-profiles-v1
+
+# Named, hash-pinned E3 span/type checkpoints (Audit 0062).
+#
+# Before this file the active E3 artifact was a bare default constant in
+# `mention_factory/experts/e3_vihealthbert.py`, and rolling back meant editing source.
+# A rollback that requires a code change is not a rollback you will make under pressure.
+# Every profile here carries its own digest, so selecting one is a config edit and
+# selecting a substituted file is impossible.
+#
+# CONTRACT: `active` names exactly one profile, and
+# `configs/pipeline/full_v1.yaml -> expert_settings.e3_checkpoint_path` /
+# `e3_expected_checkpoint_sha256` MUST equal that profile's `path` / `sha256`. The two
+# files are checked against each other by
+# `tests/unit/test_e3_checkpoint_profiles_0062.py`, so they cannot drift apart.
+
+active: boundary_refinement_0062
+
+profiles:
+  # ---------------------------------------------------------------- rollback ---
+  s1_full_training_v1:
+    status: ROLLBACK
+    path: checkpoint/s1_mention_full_training_v1/best.pt
+    sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+    base_model_id: demdecuong/vihealthbert-base-word
+    base_model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+    total_parameters: 135002117
+    trained_in: S1 full training (Audits 0025, 0031, 0032)
+    load_mode: TRUSTED_LEGACY_PICKLE
+    validation_micro_f1: 0.5770
+    validation_micro_precision: 0.6270
+    validation_micro_recall: 0.5344
+    validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
+    notes: >-
+      The scored baseline behind every leaderboard submission up to and including the
+      dotted ICD probe (9.5736). Retained unmodified as the deterministic rollback
+      target; it is the one artifact admitted to the legacy pickle path
+      (`neural/checkpoint_loading.TRUSTED_LEGACY_E3_SHA256`).
+
+  # ------------------------------------------------------------------ active ---
+  boundary_refinement_0062:
+    status: ACTIVE
+    path: checkpoint/experiments/0062_e3_boundary_refinement/R3_alpha050/best.pt
+    sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
+    base_model_id: demdecuong/vihealthbert-base-word
+    base_model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+    total_parameters: 135002117
+    trained_in: Audit 0062 recipe R3 (low-LR refinement + focal alpha 0.50)
+    source_checkpoint_sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+    # NOT the legacy allowance. This digest is unknown to
+    # `TRUSTED_LEGACY_E3_SHA256`, so `assert_load_is_permitted` routes it to
+    # weights_only=True - strictly safer than the artifact it replaces, and the legacy
+    # exception stays limited to the one file it was written for.
+    load_mode: WEIGHTS_ONLY
+    validation_micro_f1: 0.6799
+    validation_micro_precision: 0.6546
+    validation_micro_recall: 0.7072
+    validation_split_sha256: ed7cdd2d49799cef0a868b6c75a3df4ca1e93ed03223337a7d31afe40f68f103
+    notes: >-
+      Accepted against the Audit-0062 §8 gate on governed validation, passing every
+      criterion: F1 +10.29, precision +2.76, recall +17.28, DIAGNOSIS +14.04,
+      SYMPTOM +3.63, MEDICATION +4.35, boundary errors 364 -> 298, 0 offset violations.
+      Selected over R1 (alpha 0.25, F1 +8.53, also passing) and R2 (alpha 0.75, rejected:
+      precision -3.49 and SYMPTOM -3.04). The label vocabulary, encoder, alignment
+      contract and decoding rule are unchanged; only the weights differ.

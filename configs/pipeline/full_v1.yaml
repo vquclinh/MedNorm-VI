@@ -59,6 +59,26 @@ checkpoint_root: models/checkpoints/full_v1
 # If a profile explicitly sets e3_vncorenlp_dir, VnCoreNLP becomes mandatory for
 # that run: readiness checks the configured directory/JAR/runtime dependencies
 # and runtime fails closed instead of silently falling back to segmenter=None.
+#
+# ACTIVE E3 CHECKPOINT (Audit 0062). Selected from the governed profile registry
+# `configs/models/e3_checkpoint_profiles.yaml`, which declares both artifacts with
+# their digests. Before this milestone the active artifact was a default constant in
+# `mention_factory/experts/e3_vihealthbert.py`, so rolling back meant editing source;
+# a rollback that needs a code change is not one anybody performs under pressure.
+#
+# The digest is enforced twice before a byte is deserialized: `fingerprint_checkpoint`
+# refuses a mismatch, and `assert_load_is_permitted` refuses it again. This digest is
+# NOT the trusted-legacy one, so the refined checkpoint is loaded with
+# weights_only=True — the Audit-0056a pickle exception stays limited to the single
+# file it was written for.
+#
+# ROLLBACK: set both keys to the `s1_full_training_v1` profile
+#   e3_checkpoint_path: checkpoint/s1_mention_full_training_v1/best.pt
+#   e3_expected_checkpoint_sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
+# That artifact is unmodified and is what every scored submission to date ran on.
+expert_settings:
+  e3_checkpoint_path: checkpoint/experiments/0062_e3_boundary_refinement/R3_alpha050/best.pt
+  e3_expected_checkpoint_sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
 expected_documents: 100
 allow_specialist_fallback: true
 feature_flags:

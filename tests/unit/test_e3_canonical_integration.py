@@ -51,6 +51,17 @@ def _missing() -> str:
 requires_e3 = pytest.mark.skipif(bool(_missing()), reason=_missing() or "ok")
 
 
+def _configured_checkpoint_sha256() -> str:
+    """The digest the active profile selects, falling back to the module default.
+
+    Since Audit 0062 the active E3 checkpoint is chosen in `configs/pipeline/full_v1.yaml`
+    (`expert_settings.e3_expected_checkpoint_sha256`) rather than by the module constant,
+    which is now the ROLLBACK artifact.
+    """
+    settings = PipelineConfig.load(PROFILE).expert_settings
+    return str(settings.get("e3_expected_checkpoint_sha256") or E3_CHECKPOINT_SHA256)
+
+
 # ---------------------------------------------------------------------------
 # Contract-only: no model is loaded
 # ---------------------------------------------------------------------------
@@ -131,7 +142,12 @@ def test_e3_runs_through_the_canonical_runner() -> None:
     assert record.proposal_count > 0
     # Provenance the ledger and any future audit needs.
     assert record.model_revision == E3_PINNED_MODEL_REVISION
-    assert record.checkpoint_sha256 == E3_CHECKPOINT_SHA256
+    # The digest the run RECORDS must be the digest the profile SELECTED. Asserting
+    # `E3_CHECKPOINT_SHA256` here instead would pin the module default, which since
+    # Audit 0062 is the rollback artifact rather than the active one — the test would
+    # then fail whenever a governed checkpoint change is correctly applied, which is
+    # the opposite of what it exists to catch.
+    assert record.checkpoint_sha256 == _configured_checkpoint_sha256()
 
 
 @requires_e3
