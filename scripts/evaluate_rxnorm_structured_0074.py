@@ -267,6 +267,10 @@ def main(argv: list[str] | None = None) -> int:
         "public_leaderboard_signal_used": False,
     }
     args.out.mkdir(parents=True, exist_ok=True)
+    # Freeze the exact case set so the GPU complete-system A/B runs the SAME queries.
+    (args.out / "cases.json").write_text(
+        json.dumps(cases, ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8"
+    )
     (args.out / "ab_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
     )

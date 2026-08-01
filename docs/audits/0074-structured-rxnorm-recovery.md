@@ -269,7 +269,102 @@ index, both checkpoints, and the 0073 scored artifact.
 5. **The brand facet is unproven** — recovered for 40% of concepts but never benchmarked.
 6. **1 top-1 regression** out of 1,472; small but real.
 
-## 13. Verdict and Next Step
+## 13. GPU Handoff — Complete-System A/B
+
+### A correctness defect found while building the handoff
+
+The handoff hinges on the row-order contract between `documents.jsonl` and the cached
+vectors, and the two are **not the same order**:
+
+| | Order |
+| --- | --- |
+| `documents.jsonl` (file) | ICD `[0, 15308)`, RxNorm `[15308, 227257)` |
+| Frozen 0072 cache (`sorted(concept_id)`) | RxNorm `[0, 211949)`, ICD `[211949, 227257)` |
+
+Every RxCUI starts with a digit and every ICD code with a letter, so both orders are
+contiguous — and opposite. `runtime.py` built its row map from **file** order and indexed the
+**cache** with it, so ICD mentions retrieved RxNorm vectors and vice versa. The returned ids
+still looked valid, which is why the failure was silent.
+
+This affected the **scored 0073 run**. The 12.4757 result stands — it is what executed — but it
+was achieved with the dense stage contributing scrambled evidence; lexical retrieval and the
+reranker carried it. That implies unrealised headroom rather than an invalid score.
+
+Fixed by making the order an explicit contract (`ROW_ORDER_SORTED_CONCEPT_ID` /
+`ROW_ORDER_DOCUMENTS_FILE`), defaulting to the frozen cache's actual order, refusing unknown
+values, and asserting the 15,308 / 211,949 split at load. The 31 Audit-0073 tests still pass.
+
+### Historical reproducibility of the scored 0073 run
+
+Three points, recorded so the 12.4757 result is never quietly reinterpreted:
+
+1. **Audit 0073's score of 12.4757 remains a valid historical result.** It is what the
+   submitted system actually produced on the organizer's data, measured by the organizer. The
+   defect changes the *explanation* of that score — dense evidence was scrambled and lexical
+   plus the reranker carried it — not its validity.
+2. **Exact reproduction of the 0073 run now requires an explicit opt-in.** The corrected
+   runtime no longer reproduces it by default, because the default is correct. Reproducing it
+   requires setting, by hand:
+
+   ```yaml
+   semantic_linker:
+     row_order: legacy_0073_misaligned_file_positions
+   ```
+
+   That value is never a default, never inferred, and is refused if misspelled. Selecting it
+   prints a warning to stderr naming the defect it reproduces. It is distinct from
+   `documents_file_order`, which asserts a cache genuinely built in file order; the legacy
+   constant asserts the opposite — a sorted-order cache being read with file positions on
+   purpose.
+3. **All new experiments and every production submission use the corrected order**
+   (`sorted_concept_id`). The legacy mode exists for re-executing history, not for producing it.
+
+The scored ZIP, its run manifest and every 0073/0072 artifact are untouched.
+
+### Design
+
+    A = frozen documents  + frozen S1_doc_vectors.pt          + real reranker
+    B = structured docs   + frozen ICD rows, re-encoded RxNorm + real reranker + structured evidence
+
+Only the RxNorm slice is re-encoded. The ICD slice is copied from the frozen tensor and its
+SHA-256 is compared before and after; a change aborts the build. The frozen cache is opened
+read-only and never written.
+
+### Stages
+
+`scripts/run_0074_complete_system_colab.py --stage {preflight,build-docs,rebuild-rxnorm-vectors,ab,package,all}`
+
+Each stage is resume-safe: `build-docs` and `rebuild-rxnorm-vectors` write their own artifacts,
+and `ab` refuses to run against a cache whose manifest does not describe it.
+
+### Integrity contract
+
+The new cache is written to a temporary file and finalized with `Path.replace` only after the
+ICD-slice comparison passes, so a half-refreshed cache cannot exist. Its manifest records row
+order and the order contract in prose, document/ICD/RxNorm row counts, SHA-256 of the frozen
+corpus, structured corpus, frozen tensor, frozen ICD slice, rebuilt RxNorm slice and final
+tensor, the embedding model id and full revision, dimensions and dtype. `verify_cache` refuses
+a cache with no manifest, a version mismatch, changed corpora, a row-count disagreement or a
+tensor-hash disagreement.
+
+### Reported per arm
+
+RxNorm Recall@1/2/5/10, MRR, coverage, reranker fixes, reranker regressions,
+dense-added-correct, the wrong-strength and wrong-form hard-negative subsets, the
+exact-strength and form-stated subsets, runtime and peak VRAM.
+
+### Gate encoded in the script
+
+`COMPLETE_SYSTEM_ACCEPTED` only if all hold: no material overall regression (R@1 and MRR within
+0.005), R@1 **or** MRR improves, both hard-negative rates remain no worse, reranker regressions
+do not exceed fixes, and every emitted id is a governed RxCUI. ICD is invariant by construction
+— its documents and vector rows are untouched.
+
+### Status
+
+**BLOCKED on GPU execution only.** No model was run; NULL remains shadow; nothing was trained.
+
+## 14. Verdict and Next Step
 
 **`STRUCTURED_RXNORM_ACCEPTED_OFFLINE_COMPLETE_SYSTEM_AB_REQUIRED`** — **NOT_READY** for public
 submission.
@@ -280,7 +375,7 @@ improvement to the RxNorm path. It is not yet evidence that the *system* improve
 project's own history (0070 rejected, 0071 corrected, 0073 accepted) is that only
 complete-system evidence should reach the leaderboard.
 
-**Next step:** a Colab job that (a) rebuilds the RxNorm half of the dense index over the
+**Next step (now implemented as `scripts/run_0074_complete_system_colab.py`, §13):** a Colab job that (a) rebuilds the RxNorm half of the dense index over the
 structured document text, (b) re-runs the frozen S1 pipeline A/B with the real reranker on the
 same 1,472 cases plus the 0072 benchmark slice, and (c) reports complete-system RxNorm
 Recall@1/2/5/10, MRR and the hard-negative subsets. Only if that passes does a second public

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,52 @@ S1_RERANKER_MODEL = "Qwen/Qwen3-Reranker-4B"
 S1_RERANKER_REVISION = "22e683669bc0f0bd69640a1354a6d0aebcfeede5"
 S1_RERANKER_DIRNAME = "rr-4b"
 
+#: The document corpus the frozen S1 dense index was built over. A mismatch means the cache
+#: belongs to a different corpus and every retrieved row would be the wrong concept.
+EXPECTED_DOCUMENT_COUNT = 227_257
+EXPECTED_ICD_ROWS = 15_308
+EXPECTED_RXNORM_ROWS = 211_949
+
+#: How a dense cache's rows map onto documents. This is a CONTRACT, not a detail.
+#:
+#: `documents.jsonl` is written ICD-first (rows 0-15,307) then RxNorm; the Audit-0072
+#: orchestrator encoded `sorted(documents)`, which puts every numeric RxCUI before every
+#: letter-prefixed ICD code and therefore yields RxNorm-first. Reading the frozen cache with
+#: file-order positions - which this runtime did until Audit 0074 - indexes ICD mentions
+#: against RxNorm vectors and vice versa. The candidate ids still come back looking valid,
+#: so the failure is silent.
+#: CORRECT and the only default. The cache's row i is `sorted(concept_id)[i]`.
+ROW_ORDER_SORTED_CONCEPT_ID = "sorted_concept_id"
+
+#: A coherent contract for a cache genuinely BUILT in `documents.jsonl` order. Nothing ships
+#: such a cache today; it exists so a future builder can declare its order honestly.
+ROW_ORDER_DOCUMENTS_FILE = "documents_file_order"
+
+#: HISTORICAL REPRODUCTION ONLY - reproduces the Audit-0073 defect on purpose.
+#:
+#: The scored 12.4757 submission read the frozen `sorted(concept_id)` cache using
+#: `documents.jsonl` file positions. That is not an ordering choice, it is a *mismatch*: ICD
+#: mentions were scored against RxNorm vectors and vice versa, while the returned ids still
+#: looked valid. This mode exists so that run can be re-executed exactly, and for no other
+#: reason. It is never a default, never inferred, and selecting it logs a warning.
+#:
+#: It shares a position mapping with `ROW_ORDER_DOCUMENTS_FILE` but means something different:
+#: that constant asserts "the cache really is in file order", this one asserts "the cache is in
+#: sorted order and we are deliberately misreading it".
+ROW_ORDER_LEGACY_0073_MISALIGNED = "legacy_0073_misaligned_file_positions"
+
+ROW_ORDERS: tuple[str, ...] = (
+    ROW_ORDER_SORTED_CONCEPT_ID,
+    ROW_ORDER_DOCUMENTS_FILE,
+    ROW_ORDER_LEGACY_0073_MISALIGNED,
+)
+
+#: Orders that must never be chosen by accident.
+HISTORICAL_ROW_ORDERS: frozenset[str] = frozenset({ROW_ORDER_LEGACY_0073_MISALIGNED})
+
+#: The frozen Audit-0072 cache carries no manifest, so its order is recorded here.
+FROZEN_0072_ROW_ORDER = ROW_ORDER_SORTED_CONCEPT_ID
+
 #: Measured, not estimated. E3 from its state dict, the Qwen models from the HF API.
 E3_PARAMETERS = 135_002_117
 S1_EMBEDDING_PARAMETERS = 4_021_774_336
@@ -98,6 +145,8 @@ class SemanticLinkerSettings:
     icd_v41_index: str = ""
     rxnorm_index: str = ""
     rxnorm_topk: int = 20
+    #: Row-order contract of `dense_index`. Defaults to the frozen 0072 cache's order.
+    row_order: str = FROZEN_0072_ROW_ORDER
 
     @staticmethod
     def from_mapping(doc: dict[str, Any] | None) -> SemanticLinkerSettings:
@@ -118,6 +167,7 @@ class SemanticLinkerSettings:
             icd_v41_index=str(doc.get("icd_v41_index", "")),
             rxnorm_index=str(doc.get("rxnorm_index", "")),
             rxnorm_topk=int(doc.get("rxnorm_topk", 20)),
+            row_order=str(doc.get("row_order", FROZEN_0072_ROW_ORDER)),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -136,6 +186,7 @@ class SemanticLinkerSettings:
             "icd_v41_index": self.icd_v41_index,
             "rxnorm_index": self.rxnorm_index,
             "rxnorm_topk": self.rxnorm_topk,
+            "row_order": self.row_order,
         }
 
 
@@ -214,17 +265,17 @@ def missing_requirements(settings: SemanticLinkerSettings) -> list[str]:
         problems.append("semantic_linker.rxnorm_index is unset (governed RxNorm KB)")
     elif not Path(settings.rxnorm_index).is_file():
         problems.append(f"RxNorm competition index not found: {settings.rxnorm_index}")
+    if settings.row_order not in ROW_ORDERS:
+        problems.append(
+            f"semantic_linker.row_order must be one of {list(ROW_ORDERS)}, got "
+            f"{settings.row_order!r}"
+        )
     if settings.null_mode != NULL_MODE_SHADOW:
         problems.append(
             f"null_mode must be {NULL_MODE_SHADOW!r} in this milestone, got "
             f"{settings.null_mode!r} (Audit 0073 forbids activating the NULL gate)"
         )
     return problems
-
-
-#: The document corpus the frozen S1 dense index was built over. A mismatch means the cache
-#: belongs to a different corpus and every retrieved row would be the wrong concept.
-EXPECTED_DOCUMENT_COUNT = 227_257
 
 
 @dataclass
@@ -275,14 +326,40 @@ class SemanticLinkerRuntime:
                 f"{len(rows):,} rows; the cached index does not belong to this corpus"
             )
 
-        # Row order IS the contract between documents.jsonl and the cached vectors.
+        # Row order IS the contract between documents.jsonl and the cached vectors, and the
+        # two are NOT the same order. Positions must be derived the way the cache was built.
         self._documents = {r["concept_id"]: r["text"] for r in rows}
+        ontology_of = {r["concept_id"]: r.get("ontology", "") for r in rows}
+        if self.settings.row_order == ROW_ORDER_SORTED_CONCEPT_ID:
+            ordered_ids = sorted(ontology_of)
+        elif self.settings.row_order == ROW_ORDER_LEGACY_0073_MISALIGNED:
+            # Deliberate reproduction of the Audit-0073 defect. Loud, because a silent
+            # misalignment is exactly what made the original failure hard to see.
+            print(
+                "[semantic] WARNING: row_order="
+                f"{ROW_ORDER_LEGACY_0073_MISALIGNED!r} reproduces the Audit-0073 dense "
+                "misalignment on purpose (ICD mentions score against RxNorm vectors). "
+                "Use only to re-execute that historical run; never for new experiments.",
+                file=sys.stderr,
+                flush=True,
+            )
+            ordered_ids = [r["concept_id"] for r in rows]
+        else:
+            ordered_ids = [r["concept_id"] for r in rows]
+
         self._rows_by_ontology = {}
         self._ids_by_ontology = {}
-        for position, row in enumerate(rows):
-            ontology = row.get("ontology", "")
+        for position, concept_id in enumerate(ordered_ids):
+            ontology = ontology_of[concept_id]
             self._rows_by_ontology.setdefault(ontology, []).append(position)
-            self._ids_by_ontology.setdefault(ontology, []).append(row["concept_id"])
+            self._ids_by_ontology.setdefault(ontology, []).append(concept_id)
+        icd_rows = len(self._rows_by_ontology.get("ICD10", []))
+        rx_rows = len(self._rows_by_ontology.get("RXNORM", []))
+        if icd_rows != EXPECTED_ICD_ROWS or rx_rows != EXPECTED_RXNORM_ROWS:
+            raise SemanticLinkerNotReady(
+                f"corpus has {icd_rows:,} ICD and {rx_rows:,} RxNorm rows, expected "
+                f"{EXPECTED_ICD_ROWS:,} and {EXPECTED_RXNORM_ROWS:,}"
+            )
         self._vectors = vectors
 
         root = Path(self.settings.model_root)
@@ -426,6 +503,12 @@ class SemanticLinkerRuntime:
 
 __all__ = [
     "BACKEND_LEXICAL_V3",
+    "FROZEN_0072_ROW_ORDER",
+    "HISTORICAL_ROW_ORDERS",
+    "ROW_ORDERS",
+    "ROW_ORDER_DOCUMENTS_FILE",
+    "ROW_ORDER_LEGACY_0073_MISALIGNED",
+    "ROW_ORDER_SORTED_CONCEPT_ID",
     "BACKEND_SEMANTIC_S1",
     "E3_PARAMETERS",
     "LINKER_BACKENDS",
