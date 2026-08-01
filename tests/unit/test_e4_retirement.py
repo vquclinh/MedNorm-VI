@@ -203,7 +203,22 @@ def test_no_e4_checkpoint_remains_on_disk() -> None:
     the proxy broke on a legitimate change. The claim is now checked directly, and every
     remaining `.pt` still has to be an E3/S1 artifact in a known governed location, so a
     stray checkpoint appearing somewhere else is still a failure.
+
+    Audit 0063 then froze the active checkpoint into a new canonical directory, and this
+    test caught it — correctly, because a weight file in an undeclared location is exactly
+    what it exists to notice. Rather than bless a third hardcoded path, the governed
+    locations are now DERIVED from the checkpoint-profile registry, so declaring a
+    checkpoint in config is what makes it legitimate, and an undeclared one still fails.
     """
+    import yaml
+
+    profiles = yaml.safe_load(
+        (REPO / "configs" / "models" / "e3_checkpoint_profiles.yaml").read_text(encoding="utf-8")
+    )["profiles"]
+    declared = {str(Path(entry["path"]).parent).lower() for entry in profiles.values()}
+    # Experiment scratch space is governed by convention rather than by declaration.
+    allowed_prefixes = tuple(declared) + ("checkpoint/experiments",)
+
     weights = [
         path for path in REPO.rglob("*.pt")
         if ".venv" not in path.parts and path.is_file()]
@@ -215,11 +230,11 @@ def test_no_e4_checkpoint_remains_on_disk() -> None:
         offending = [marker for marker in e4_markers if marker in relative]
         assert not offending, f"a retired-E4 weight file is present: {relative}"
         assert path.name in ("best.pt", "latest.pt"), relative
-        governed = (
-            path.parent.name == "s1_mention_full_training_v1"
-            or "checkpoint/experiments/" in relative
+        governed = relative.startswith(allowed_prefixes)
+        assert governed, (
+            f"weight file outside a governed checkpoint location: {relative}; "
+            f"declared locations are {sorted(allowed_prefixes)}"
         )
-        assert governed, f"weight file outside a governed checkpoint location: {relative}"
 
     # The validated S1 artifact itself is still exactly where it belongs.
     validated = [

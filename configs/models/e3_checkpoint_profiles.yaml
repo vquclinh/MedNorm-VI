@@ -40,12 +40,17 @@ profiles:
   # ------------------------------------------------------------------ active ---
   boundary_refinement_0062:
     status: ACTIVE
-    path: checkpoint/experiments/0062_e3_boundary_refinement/R3_alpha050/best.pt
+    path: checkpoint/e3_boundary_refinement_0062/best.pt
     sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
     base_model_id: demdecuong/vihealthbert-base-word
     base_model_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
     total_parameters: 135002117
     trained_in: Audit 0062 recipe R3 (low-LR refinement + focal alpha 0.50)
+    # Frozen into a permanent production location in Audit 0063. The experiment
+    # directory it was produced in is a scratch location whose name encodes a
+    # comparison that is now finished; the canonical path does not.
+    experiment_origin: checkpoint/experiments/0062_e3_boundary_refinement/R3_alpha050/best.pt
+    scored_leaderboard_score: 11.9188
     source_checkpoint_sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
     # NOT the legacy allowance. This digest is unknown to
     # `TRUSTED_LEGACY_E3_SHA256`, so `assert_load_is_permitted` routes it to
@@ -63,3 +68,8 @@ profiles:
       Selected over R1 (alpha 0.25, F1 +8.53, also passing) and R2 (alpha 0.75, rejected:
       precision -3.49 and SYMPTOM -3.04). The label vocabulary, encoder, alignment
       contract and decoding rule are unchanged; only the weights differ.
+      SCORED on the public leaderboard at 11.9188 (WER 82.7090, J_assertion 18.6187,
+      J_candidates 2.8646), up from 9.5736 - the largest single gain the project has
+      recorded. Frozen in Audit 0063; the directory carries best.pt plus its full
+      reproducibility contract (training/checkpoint manifests, resolved config,
+      validation metrics, per-epoch history).

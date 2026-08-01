@@ -77,7 +77,7 @@ checkpoint_root: models/checkpoints/full_v1
 #   e3_expected_checkpoint_sha256: a64cc173a284e42ff4bc21b6e0914314d6ff2c6c13efd7fc04d7be0f9be1017c
 # That artifact is unmodified and is what every scored submission to date ran on.
 expert_settings:
-  e3_checkpoint_path: checkpoint/experiments/0062_e3_boundary_refinement/R3_alpha050/best.pt
+  e3_checkpoint_path: checkpoint/e3_boundary_refinement_0062/best.pt
   e3_expected_checkpoint_sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
 expected_documents: 100
 allow_specialist_fallback: true

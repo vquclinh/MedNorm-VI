@@ -20,6 +20,8 @@ components:
   # `configs/models/e3_checkpoint_profiles.yaml` and selected in
   # `configs/pipeline/full_v1.yaml`.
   active_checkpoint_profile: boundary_refinement_0062
+  active_checkpoint_path: checkpoint/e3_boundary_refinement_0062/best.pt
+  active_checkpoint_sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
   rollback_checkpoint_profile: s1_full_training_v1
   notes: Exact character-offset F1 0.7103 on governed internal_test (Audit 0033). Spec §17 lists "approximately
     0.135B"; the verified count is 134,998,272. That figure is the BASE MODEL and
