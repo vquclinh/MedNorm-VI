@@ -1,0 +1,89 @@
+version: 1
+stage_id: S1
+mode: FULL_TRAINING
+
+# E3 source-balanced / boundary-weighted refinement (Audit 0064, Milestone 4E).
+#
+# Continues the ACTIVE Audit-0062 checkpoint (scored 11.9188 on the public leaderboard).
+# `initialize_from: refinement_checkpoint` for the same reason as 0062: the from-scratch
+# S1 contract deliberately refuses a checkpoint initializer, and refinement is the case
+# that rule was not written for.
+#
+# EVIDENCE (Audit 0064 §3, reproduced exactly from the active checkpoint):
+#   micro span+type P=0.6546 R=0.7072 F1=0.6799 on 1,045 governed validation examples
+#   boundary errors 298 (right 192, left 91, both 15); missed 236; offset violations 0
+#   per-source F1: vimedner 0.6765 (worst, 86.7% of validation), vimq 0.7241
+#   exact rate by length: 1w 63.6% | 2-3w 74.5% | 4-7w 69.3% | 8+w 23.8%
+#
+# The two levers this config supports are supplied on the command line so R4, R5 and R6
+# differ by exactly one switch each:
+#
+#   --boundary-weight W   upweight the FIRST/LAST token of every gold run. 298 boundary
+#                         errors remain and right-boundary still outnumbers left 2:1, so
+#                         the tokens that decide where a mention STOPS are underweighted.
+#   --source-balanced     draw each epoch uniformly across governed sources. The sources
+#                         are TYPE-DISJOINT here: vimedner supplies all DIAGNOSIS/SYMPTOM
+#                         at 24.4% of training while vietmed_ner+vimq supply only
+#                         MEDICATION at 75.6% - yet DIAGNOSIS+SYMPTOM are 92.2% of
+#                         validation entities. Uniform-by-source is therefore also type
+#                         rebalancing. It is uniform, NOT matched to the validation
+#                         mixture: matching validation would be fitting the evaluation
+#                         set, which Audit 0062 §4.6 declined to do.
+#
+# focal_alpha stays at 0.50, the value Audit 0062 selected and the leaderboard scored.
+# Changing it here would confound every 4E result with a 4C decision that is already paid
+# for.
+
+model:
+  registry_model_id: vihealthbert_span_type
+  hf_model_id: demdecuong/vihealthbert-base-word
+  pinned_revision: f89e80b461e86f9cfc1c84019bd819830c24b6c5
+  initialize_from: refinement_checkpoint
+  source_checkpoint: checkpoint/e3_boundary_refinement_0062/best.pt
+  source_checkpoint_sha256: 524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a
+
+data:
+  corpus_dir_relative: data/derived/training_corpora/mednorm_vi_training_v1
+  max_sequence_length: 256
+  # Unchanged from the original run: phoner_covid19 declares boundary=false and
+  # entity_type=false, so its label_mask is entirely zero and it produces no
+  # gradient. The governed corpus files are never modified.
+  filter_unsupervised_examples: true
+  expected_train_sha256: 892dc22d7e051e05f9c96d90f42dfde7f38083a74bba6fe65b5c1d9dd05e2a4a
+  expected_train_examples: 33826
+  expected_validation_examples: 1045
+
+optimization:
+  # Refinement, not training: 2 epochs with early stopping, not 4.
+  num_epochs: 2
+  per_device_batch_size: 8
+  gradient_accumulation_steps: 4      # effective batch 32, identical to the original
+  # The original run used 3e-5 / 1e-4. Continued fine-tuning from a converged
+  # checkpoint uses strictly lower rates so the run refines rather than restarts.
+  learning_rate: 0.00001
+  head_learning_rate: 0.00003
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  max_grad_norm: 1.0
+  mixed_precision: auto
+
+loss:
+  type: focal
+  focal_gamma: 2.0
+  # R1 keeps 0.25; R2 overrides this to 0.75 on the command line. Nothing else
+  # differs between the two recipes, so the comparison attributes cleanly.
+  focal_alpha: 0.50
+  decision_threshold: 0.5
+
+evaluation:
+  # Spec §18.1 and brief §7: selection uses the EXACT character-span + type
+  # evaluator, never token-level accuracy. This is a deliberate change from the
+  # original run, which selected on `validation_span_micro_f1` - a token-run
+  # proxy that can improve while exact character spans get worse.
+  best_metric_key: exact_span_type_micro_f1
+  best_metric_mode: max
+  evaluate_at_epoch_end: true
+  early_stopping_patience: 1
+
+seed: 20260801
+confirmation_phrase: "RUN E3 BOUNDARY REFINEMENT"
