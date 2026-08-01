@@ -16,7 +16,12 @@ from .models import RxnormAtom, RxnormAttribute, RxnormRelation, RxnormSemanticT
 _CONSO = {"RXCUI": 0, "LAT": 1, "TS": 2, "ISPREF": 6, "RXAUI": 7,
           "SAB": 11, "TTY": 12, "CODE": 13, "STR": 14, "SUPPRESS": 16}
 _REL = {"RXCUI1": 0, "REL": 3, "RXCUI2": 4, "RELA": 7, "RUI": 8, "SAB": 10, "SUPPRESS": 14}
-_SAT = {"RXCUI": 0, "ATN": 8, "ATV": 9, "SAB": 10, "SUPPRESS": 11}
+# Audit 0074 corrected ATV/SAB, which were transposed. The official RXNSAT layout is
+# RXCUI|LUI|SUI|RXAUI|STYPE|CODE|ATUI|SATUI|ATN|SAB|ATV|SUPPRESS|CVF, and the governed
+# 2026-07-06 file agrees: column 9 holds `RXNORM`/`MTHSPL` (a source vocabulary) and column 10
+# holds the value. Reading them swapped made every attribute value a source abbreviation and
+# every source abbreviation a value, so no attribute filter on SAB could ever match.
+_SAT = {"RXCUI": 0, "ATN": 8, "SAB": 9, "ATV": 10, "SUPPRESS": 11}
 _STY = {"RXCUI": 0, "TUI": 1, "STY": 3}
 
 
