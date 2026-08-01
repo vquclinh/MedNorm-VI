@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mednorm-vi.local/schemas/annotation/linker_gold_v1.schema.json",
+  "title": "MedNorm-VI linker gold annotation, v1",
+  "description": "One human-adjudicated linking decision for one mention. Audit 0065 created this because the governed corpora carry NO ICD or RxNorm gold codes (Audit 0063 §7.1): annotation_coverage.json declares icd_candidates=false and rxnorm_candidates=false for all four sources, so retrieval Recall@k and MRR were undefined rather than merely unmeasured. A record here is EVIDENCE OF A HUMAN DECISION, not a model output. Silver labels live in a separate directory and carry a distinct adjudication_status; a fuzzy top-1 or an LLM prediction is never gold. Records contain a bounded window of clinical text and MUST stay in ignored private paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "annotation_id",
+    "source_dataset",
+    "source_document_hash",
+    "mention_start",
+    "mention_end",
+    "mention_text",
+    "context_before",
+    "context_after",
+    "entity_type",
+    "ontology",
+    "candidate_snapshot_id",
+    "offered_candidates",
+    "selected_codes",
+    "rejected_codes",
+    "no_valid_candidate",
+    "adjudication_status",
+    "reviewer_id",
+    "reviewer_confidence",
+    "adjudication_notes",
+    "provenance",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "annotation_id": {
+      "type": "string",
+      "pattern": "^lg1-[0-9a-f]{16}$",
+      "description": "Deterministic id derived from source document hash plus mention offsets, so re-sampling the same mention yields the same id."
+    },
+    "source_dataset": {
+      "type": "string",
+      "enum": ["vimedner", "vimq", "vietmed_ner", "phoner_covid19"]
+    },
+    "source_document_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the source document text. Identifies the document without reproducing it."
+    },
+    "mention_start": { "type": "integer", "minimum": 0 },
+    "mention_end": { "type": "integer", "minimum": 1 },
+    "mention_text": { "type": "string", "minLength": 1 },
+    "context_before": { "type": "string" },
+    "context_after": { "type": "string" },
+    "entity_type": {
+      "type": "string",
+      "enum": ["CHẨN_ĐOÁN", "THUỐC"],
+      "description": "Organizer label. Only these two types carry candidates (spec §7.3 forbids the cross-links)."
+    },
+    "ontology": { "type": "string", "enum": ["ICD10", "RXNORM"] },
+    "candidate_snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The frozen KB snapshot the offered candidates came from. A selected code is only meaningful against a named snapshot."
+    },
+    "offered_candidates": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/offered_candidate" },
+      "description": "What the reviewer was actually shown, capped at ten. May be empty: an empty offered set is a real and important observation, not a missing value."
+    },
+    "selected_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Codes the reviewer judged correct. More than one is allowed. ICD entries are DOTLESS internal identities; the dotted form is display metadata only."
+    },
+    "rejected_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Offered codes the reviewer explicitly ruled out. Distinct from 'not selected', which may simply mean 'not reviewed'."
+    },
+    "no_valid_candidate": {
+      "type": "boolean",
+      "description": "True when no offered candidate is correct. Explicit, never inferred from an empty selected_codes."
+    },
+    "adjudication_status": {
+      "type": "string",
+      "enum": [
+        "UNLABELLED",
+        "HUMAN_GOLD",
+        "HUMAN_UNCERTAIN",
+        "SILVER_UNIQUE_EXACT",
+        "SECOND_REVIEW_PENDING",
+        "SECOND_REVIEW_AGREED",
+        "SECOND_REVIEW_DISAGREED"
+      ]
+    },
+    "reviewer_id": { "type": "string" },
+    "reviewer_confidence": {
+      "type": ["string", "null"],
+      "enum": ["high", "medium", "low", null]
+    },
+    "adjudication_notes": { "type": "string" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sampling_seed", "stratum", "pack_id", "linker_version"],
+      "properties": {
+        "sampling_seed": { "type": "integer" },
+        "stratum": { "type": "string", "minLength": 1 },
+        "pack_id": { "type": "string", "minLength": 1 },
+        "linker_version": { "type": "string" },
+        "validation_split_sha256": { "type": "string" },
+        "display_order_seed": {
+          "type": "integer",
+          "description": "Candidates are shown in a deterministically randomized order to blunt anchoring bias; the original linker rank survives in offered_candidates[].linker_rank."
+        }
+      }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "second_review": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "reviewer_id": { "type": "string" },
+        "selected_codes": { "type": "array", "items": { "type": "string" } },
+        "no_valid_candidate": { "type": "boolean" },
+        "agrees_with_first": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "reviewed_at": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "offered_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "canonical_name",
+        "aliases",
+        "linker_rank",
+        "score",
+        "retrieval_channels",
+        "structure"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ICD: the DOTLESS internal identity. RxNorm: the RxCUI."
+        },
+        "display_code": {
+          "type": "string",
+          "description": "ICD dotted form for display and submission only; never the KB key."
+        },
+        "canonical_name": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "linker_rank": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Rank the production linker gave this candidate. Retained even though the reviewer sees a shuffled order."
+        },
+        "score": { "type": "number" },
+        "retrieval_channels": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["exact", "exact_ascii", "char_ngram", "sparse", "graph"] }
+        },
+        "structure": {
+          "oneOf": [
+            { "$ref": "#/$defs/icd_structure" },
+            { "$ref": "#/$defs/rxnorm_structure" }
+          ]
+        }
+      }
+    },
+    "icd_structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ontology", "specificity_class"],
+      "properties": {
+        "ontology": { "const": "ICD10" },
+        "parent_code": { "type": ["string", "null"] },
+        "child_codes": { "type": "array", "items": { "type": "string" } },
+        "hierarchy_depth": { "type": ["integer", "null"] },
+        "specificity_tier": { "type": ["string", "null"] },
+        "specificity_class": {
+          "type": "string",
+          "enum": ["category", "specific", "other", "unspecified"],
+          "description": "3-char = category; 4-char ending .8 = other; ending .9 = unspecified; else specific. Audit 0063 §7.3 measured 45.9% of top-1 codes as category-or-unspecified."
+        }
+      }
+    },
+    "rxnorm_structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ontology", "tty"],
+      "properties": {
+        "ontology": { "const": "RXNORM" },
+        "tty": {
+          "type": ["string", "null"],
+          "description": "IN, PIN, MIN, SCD, SBD, ... Preserved because Audit 0063 §7.4 found 68.6% of top-1 concepts resolving to ingredient-only."
+        },
+        "ingredient": { "type": ["string", "null"] },
+        "precise_ingredient": { "type": ["string", "null"] },
+        "strength": { "type": ["string", "null"] },
+        "dose_form": { "type": ["string", "null"] },
+        "brand": { "type": ["string", "null"] },
+        "graph_relations": { "type": "array", "items": { "type": "string" } },
+        "structured_match": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "CHẨN_ĐOÁN links to ICD-10 only.",
+      "if": { "properties": { "entity_type": { "const": "CHẨN_ĐOÁN" } }, "required": ["entity_type"] },
+      "then": { "properties": { "ontology": { "const": "ICD10" } } }
+    },
+    {
+      "description": "THUỐC links to RxNorm only.",
+      "if": { "properties": { "entity_type": { "const": "THUỐC" } }, "required": ["entity_type"] },
+      "then": { "properties": { "ontology": { "const": "RXNORM" } } }
+    },
+    {
+      "description": "selected_codes and no_valid_candidate are mutually exclusive.",
+      "if": { "properties": { "no_valid_candidate": { "const": true } }, "required": ["no_valid_candidate"] },
+      "then": { "properties": { "selected_codes": { "maxItems": 0 } } }
+    },
+    {
+      "description": "A HUMAN_GOLD record must carry a decision: codes, or an explicit no-valid-candidate.",
+      "if": { "properties": { "adjudication_status": { "const": "HUMAN_GOLD" } }, "required": ["adjudication_status"] },
+      "then": {
+        "anyOf": [
+          { "properties": { "selected_codes": { "minItems": 1 } } },
+          { "properties": { "no_valid_candidate": { "const": true } } }
+        ]
+      }
+    },
+    {
+      "description": "An UNLABELLED record carries no decision at all.",
+      "if": { "properties": { "adjudication_status": { "const": "UNLABELLED" } }, "required": ["adjudication_status"] },
+      "then": {
+        "properties": {
+          "selected_codes": { "maxItems": 0 },
+          "rejected_codes": { "maxItems": 0 },
+          "no_valid_candidate": { "const": false }
+        }
+      }
+    }
+  ]
+}
