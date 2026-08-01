@@ -39,6 +39,7 @@ from ..governance.e4_retirement import (
     assert_no_e4_checkpoint_required,
 )
 from ..kb.competition.topk import DEFAULT_DECODING_PROFILE
+from ..linking.icd10_specificity import POLICIES, POLICY_NONE
 from ..mention_factory.expert_spec import (
     EXPERT_FEATURE_FLAGS,
     EXPERT_SPEC_BY_FLAG,
@@ -89,6 +90,19 @@ FEATURE_FLAG_BY_CHECKPOINT_ROLE: dict[str, str] = {
 }
 
 
+def _hierarchy_policy(doc: dict[str, Any]) -> str:
+    """Read and validate the ICD hierarchy policy. An unknown name is refused, not ignored.
+
+    A silently-ignored policy name would let a profile claim an arbitration it never got.
+    """
+    policy = str(doc.get("icd_hierarchy_policy", POLICY_NONE))
+    if policy not in POLICIES:
+        raise ValueError(
+            f"unknown icd_hierarchy_policy {policy!r}; known policies: {list(POLICIES)}"
+        )
+    return policy
+
+
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:
     l1_config: str
@@ -103,6 +117,9 @@ class PipelineConfig:
     # The learned-L4 declaration consulted only when the learned route is selected.
     learned_l4_config: str = "configs/resolution/learned_l4_v2.yaml"
     icd_index: str = ""
+    # Hierarchy-aware ICD specificity arbitration (Audit 0070 §5). Defaults to the
+    # Audit-0069 behaviour, so a profile that does not name a policy is unaffected.
+    icd_hierarchy_policy: str = POLICY_NONE
     rxnorm_index: str = ""
     # Governed decoding profile name (Audit 0060 §4). Resolved by
     # `kb.competition.topk.resolve_decoding_profile`; an unknown name is refused.
@@ -179,6 +196,7 @@ class PipelineConfig:
                 doc.get("learned_l4_config", "configs/resolution/learned_l4_v2.yaml")
             ),
             icd_index=str(doc.get("icd_index", "")),
+            icd_hierarchy_policy=_hierarchy_policy(doc),
             rxnorm_index=str(doc.get("rxnorm_index", "")),
             decoding_profile=str(doc.get("decoding_profile", DEFAULT_DECODING_PROFILE)),
             checkpoint_root=str(doc.get("checkpoint_root", "models/checkpoints/full_v1")),

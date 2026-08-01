@@ -46,6 +46,7 @@ from ..kb.indexing.retrieval import LocalIndex, load_index
 from ..lattice.builder import build_span_lattice, lattice_config_hash
 from ..lattice.models import SpanLattice
 from ..linking.icd10 import link_icd10
+from ..linking.icd10_specificity import POLICY_NONE
 from ..linking.models import LinkerResult
 from ..linking.rxnorm import governed_bridge_notes, link_rxnorm
 from ..mention_factory import experts as _registered_experts  # noqa: F401
@@ -196,11 +197,12 @@ def _link(
     *,
     icd_index: LocalIndex | None,
     rxnorm_index: LocalIndex | None,
+    hierarchy_policy: str = POLICY_NONE,
 ) -> tuple[LinkerResult, ...]:
     results: list[LinkerResult] = []
     for h in hypotheses:
         if h.entity_type == "CHẨN_ĐOÁN" and icd_index is not None:
-            results.append(link_icd10(h, icd_index))
+            results.append(link_icd10(h, icd_index, hierarchy_policy=hierarchy_policy))
         elif h.entity_type == "THUỐC" and rxnorm_index is not None:
             results.append(link_rxnorm(h, rxnorm_index))
     return tuple(results)
@@ -308,7 +310,12 @@ def run_document(
     # --- L5 - L9 (unchanged) -----------------------------------------------
     assertions = resolve_assertions(graph.original_text, accepted)
     icd_index, rxnorm_index = _indexes(config, prepared_indexes)
-    links = _link(accepted, icd_index=icd_index, rxnorm_index=rxnorm_index)
+    links = _link(
+        accepted,
+        icd_index=icd_index,
+        rxnorm_index=rxnorm_index,
+        hierarchy_policy=config.icd_hierarchy_policy,
+    )
     cascade = apply_confidence_cascade(accepted)
 
     # --- L6: graph + typed consistency ---------------------------------------

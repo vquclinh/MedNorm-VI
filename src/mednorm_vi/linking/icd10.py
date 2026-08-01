@@ -52,6 +52,11 @@ from .icd10_hierarchy import (
     expand_hierarchy,
     hierarchy_context,
 )
+from .icd10_specificity import (
+    POLICY_NONE,
+    arbitrate_order,
+    compute_features,
+)
 from .models import LinkedCandidate, LinkerResult
 
 ICD10_LINKER_VERSION = "icd10-hierarchy-linker-v1"
@@ -193,6 +198,8 @@ def link_icd10_hierarchical(
     index: LocalIndex,
     *,
     limit: int = CANDIDATE_BOUND,
+    hierarchy_policy: str = POLICY_NONE,
+    context_text: str = "",
 ) -> Icd10LinkReport:
     """Hierarchy-aware ICD-10 linking for one diagnosis hypothesis."""
     if index.index_type != "icd10_vi":
@@ -285,6 +292,29 @@ def link_icd10_hierarchical(
     retained = sorted(
         (d for d in decisions if d.retained),
         key=lambda d: (evidence_order(d), TIER_ORDER.index(d.tier), -d.score, d.code))
+
+    # Hierarchy-aware specificity arbitration (Audit 0070). Off by default and inert on an
+    # untiered index, so competition-v3 and RxNorm keep the ordering they already had.
+    if hierarchy_policy != POLICY_NONE and index.tiered and len(retained) > 1:
+        features = {
+            d.code: compute_features(
+                index, d.code,
+                channels=d.lexical_sources,
+                lexical_score=d.lexical_score,
+                mention_text=mention,
+                context_text=context_text,
+                sibling_competition=(
+                    d.hierarchy.sibling_count if d.hierarchy is not None else 0
+                ),
+            )
+            for d in retained
+        }
+        by_code = {d.code: d for d in retained}
+        order = arbitrate_order(
+            [d.code for d in retained], features, policy=hierarchy_policy
+        )
+        retained = [by_code[code] for code in order]
+
     final: list[Icd10CandidateDecision] = list(retained[:limit])
     final.extend(
         Icd10CandidateDecision(**{
@@ -312,9 +342,13 @@ def link_icd10(
     *,
     limit: int = CANDIDATE_BOUND,
     dotted_output: bool = False,
+    hierarchy_policy: str = POLICY_NONE,
+    context_text: str = "",
 ) -> LinkerResult:
     """Public L5 entry point. Same signature as before; hierarchy-aware underneath."""
-    report = link_icd10_hierarchical(hypothesis, index, limit=limit)
+    report = link_icd10_hierarchical(
+        hypothesis, index, limit=limit,
+        hierarchy_policy=hierarchy_policy, context_text=context_text)
     if "wrong_index_type" in report.expansion_notes:
         return LinkerResult(hypothesis.hypothesis_id, (), ("wrong_index_type",))
     candidates = tuple(
