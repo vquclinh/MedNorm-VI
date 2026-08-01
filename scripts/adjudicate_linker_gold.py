@@ -60,6 +60,30 @@ from mednorm_vi.annotation.linker_gold import (  # noqa: E402
 )
 
 DEFAULT_PACK = REPO / "data" / "private_linker_gold" / "0065" / "pack.jsonl"
+DEFAULT_DRAFTS = (
+    REPO / "data" / "private_linker_gold" / "0065" / "ai_drafts" / "claude_code_v1.jsonl"
+)
+QUEUE_DIR = REPO / "data" / "private_linker_gold" / "0065" / "ai_drafts" / "queues"
+
+
+def load_ai_drafts(path: Path) -> dict[str, dict[str, Any]]:
+    """AI drafts keyed by annotation id. Read-only: a draft never edits the pack."""
+    if not path.is_file():
+        return {}
+    return {d["annotation_id"]: d for d in load_records(path)}
+
+
+def render_ai_draft(draft: dict[str, Any]) -> str:
+    """Shown only AFTER a human decision is saved, never before (Audit 0066 §7)."""
+    lines = [
+        "  ── AI DRAFT (assistance only; your decision above is already saved) ──",
+        f"     decision   {draft['ai_decision']}  confidence {draft['ai_confidence']}",
+        f"     codes      {draft['selected_codes'] or '(none)'}",
+        f"     flag       {draft['ambiguity_reason']}",
+        f"     rationale  {draft['rationale']}",
+        f"     linker top-1 {draft['linker_top1']}  agrees={draft['agrees_with_linker_top1']}",
+    ]
+    return "\n".join(lines)
 
 
 def write_atomically(path: Path, records: list[dict[str, Any]]) -> None:
@@ -186,11 +210,17 @@ def review_loop(
     resume: bool,
     reveal_rank: bool,
     second_review: bool,
+    blind_ai: bool = False,
+    show_ai_after: bool = False,
+    ai_drafts: dict[str, Any] | None = None,
+    only_ids: set[str] | None = None,
 ) -> int:
+    ai_drafts = ai_drafts or {}
     queue = [
         index
         for index, record in enumerate(records)
-        if (ontology is None or record["ontology"] == ontology)
+        if (only_ids is None or record["annotation_id"] in only_ids)
+        and (ontology is None or record["ontology"] == ontology)
         and (
             is_human_gold(record)
             if second_review
@@ -306,8 +336,48 @@ def review_loop(
             print(f"REFUSED: {outcome.problems[:3]}\n  nothing was saved for this record.")
             continue
 
+        # Preserve the pre-reveal decision BEFORE any AI draft is shown, so the record
+        # always retains what the human concluded unaided.
+        if blind_ai and record["annotation_id"] in ai_drafts:
+            record["human_decision_pre_ai_reveal"] = {
+                "selected_codes": list(record["selected_codes"]),
+                "no_valid_candidate": record["no_valid_candidate"],
+                "adjudication_status": record["adjudication_status"],
+                "reviewer_confidence": record["reviewer_confidence"],
+            }
         history.append((index, snapshot))
         write_atomically(pack, records)
+
+        draft = ai_drafts.get(record["annotation_id"])
+        if draft is not None and (blind_ai or show_ai_after):
+            print(render_ai_draft(draft))
+            try:
+                revise = input("  revise? [enter=keep, or new selection / n / ?] > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                revise = ""
+            if revise:
+                candidates = record.get("offered_candidates") or []
+                if revise == "n":
+                    record["selected_codes"], record["no_valid_candidate"] = [], True
+                elif revise == "?":
+                    record["adjudication_status"] = STATUS_HUMAN_UNCERTAIN
+                else:
+                    try:
+                        picks = [int(t) for t in revise.split()]
+                        if picks and all(1 <= p <= len(candidates) for p in picks):
+                            record["selected_codes"] = [candidates[p - 1]["code"] for p in picks]
+                            record["no_valid_candidate"] = False
+                    except ValueError:
+                        print("  unrecognised; keeping the pre-reveal decision.")
+                record["adjudication_notes"] = (
+                    record["adjudication_notes"] + " [revised after AI reveal]"
+                ).strip()
+                record["updated_at"] = utc_now()
+                if validate_record(record).valid:
+                    write_atomically(pack, records)
+                else:
+                    records[index] = snapshot
+                    print("  revision refused by the schema; pre-reveal decision kept.")
         position += 1
     print("\nqueue complete.")
     return 0
@@ -322,6 +392,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--export-summary", type=Path, nargs="?", const=Path("-"), default=None)
     parser.add_argument("--second-review", action="store_true")
+    parser.add_argument(
+        "--blind-ai-review",
+        action="store_true",
+        help="decide first, then see the AI draft and optionally revise",
+    )
+    parser.add_argument(
+        "--show-ai-after-decision",
+        action="store_true",
+        help="reveal the AI draft after each saved decision",
+    )
+    parser.add_argument("--review-ai-disagreements", action="store_true")
+    parser.add_argument("--review-ai-low-confidence", action="store_true")
+    parser.add_argument(
+        "--queue",
+        type=Path,
+        default=None,
+        help="restrict the session to annotation ids listed in this file",
+    )
+    parser.add_argument("--ai-drafts", type=Path, default=DEFAULT_DRAFTS)
     parser.add_argument(
         "--reveal-rank",
         action="store_true",
@@ -351,6 +440,21 @@ def main(argv: list[str] | None = None) -> int:
     if not args.reviewer_id:
         print("--reviewer-id is required to record a decision", file=sys.stderr)
         return 2
+    drafts = load_ai_drafts(args.ai_drafts)
+    only_ids: set[str] | None = None
+    if args.queue and args.queue.is_file():
+        only_ids = {
+            line.strip()
+            for line in args.queue.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+    elif args.review_ai_disagreements:
+        only_ids = {
+            i for i, d in drafts.items() if d["linker_top1"] and not d["agrees_with_linker_top1"]
+        }
+    elif args.review_ai_low_confidence:
+        only_ids = {i for i, d in drafts.items() if d["ai_confidence"] == "LOW"}
+
     return review_loop(
         records,
         args.pack,
@@ -359,6 +463,10 @@ def main(argv: list[str] | None = None) -> int:
         resume=args.resume,
         reveal_rank=args.reveal_rank,
         second_review=args.second_review,
+        blind_ai=args.blind_ai_review,
+        show_ai_after=args.show_ai_after_decision,
+        ai_drafts=drafts,
+        only_ids=only_ids,
     )
 
 

@@ -43,6 +43,24 @@ STATUS_SECOND_REVIEW_PENDING = "SECOND_REVIEW_PENDING"
 STATUS_SECOND_REVIEW_AGREED = "SECOND_REVIEW_AGREED"
 STATUS_SECOND_REVIEW_DISAGREED = "SECOND_REVIEW_DISAGREED"
 
+#: AI-assisted pre-annotation (Audit 0066). Deliberately its own status rather than a
+#: reuse of HUMAN_UNCERTAIN or SILVER_*: a draft produced by a model is not a human
+#: decision and not an automatic exact-alias match, and conflating it with either would
+#: let it be counted as evidence it is not. `AI_WEAK_HIGH_CONFIDENCE` is the *most* a
+#: draft can ever be promoted to, and it is still outside HUMAN_GOLD_STATUSES.
+STATUS_AI_ASSISTED_DRAFT = "AI_ASSISTED_DRAFT"
+STATUS_AI_WEAK_HIGH_CONFIDENCE = "AI_WEAK_HIGH_CONFIDENCE"
+
+#: A second, independent model's adjudication (Audit 0067). Kept distinct from the first
+#: model's draft so agreement between two systems is measurable rather than assumed - if
+#: both wrote into one status, "consensus" would be unfalsifiable.
+STATUS_AI_SECOND_OPINION = "AI_SECOND_OPINION"
+
+#: Two independent AI systems agreeing under strict conditions. This is the strongest
+#: label this project produces WITHOUT a human, and it is still not human gold: two models
+#: sharing a blind spot agree just as readily as two models being right.
+STATUS_AI_CONSENSUS_HIGH = "AI_CONSENSUS_HIGH"
+
 ADJUDICATION_STATUSES: tuple[str, ...] = (
     STATUS_UNLABELLED,
     STATUS_HUMAN_GOLD,
@@ -51,7 +69,29 @@ ADJUDICATION_STATUSES: tuple[str, ...] = (
     STATUS_SECOND_REVIEW_PENDING,
     STATUS_SECOND_REVIEW_AGREED,
     STATUS_SECOND_REVIEW_DISAGREED,
+    STATUS_AI_ASSISTED_DRAFT,
+    STATUS_AI_WEAK_HIGH_CONFIDENCE,
+    STATUS_AI_SECOND_OPINION,
+    STATUS_AI_CONSENSUS_HIGH,
 )
+
+#: Statuses a model may produce. None of them is in HUMAN_GOLD_STATUSES, and
+#: `assert_not_ai_gold` exists so that invariant is checked, not merely intended.
+AI_DRAFT_STATUSES: frozenset[str] = frozenset(
+    {
+        STATUS_AI_ASSISTED_DRAFT,
+        STATUS_AI_WEAK_HIGH_CONFIDENCE,
+        STATUS_AI_SECOND_OPINION,
+        STATUS_AI_CONSENSUS_HIGH,
+    }
+)
+
+AI_DECISION_SELECTED = "SELECTED"
+AI_DECISION_NO_VALID = "NO_VALID_CANDIDATE"
+AI_DECISION_ABSTAIN = "ABSTAIN"
+AI_DECISIONS: tuple[str, ...] = (AI_DECISION_SELECTED, AI_DECISION_NO_VALID, AI_DECISION_ABSTAIN)
+
+AI_CONFIDENCES: tuple[str, ...] = ("HIGH", "MEDIUM", "LOW")
 
 #: The only statuses a benchmark may treat as ground truth. Silver is deliberately absent.
 HUMAN_GOLD_STATUSES: frozenset[str] = frozenset({STATUS_HUMAN_GOLD, STATUS_SECOND_REVIEW_AGREED})
@@ -340,6 +380,27 @@ def _validate_candidate(candidate: Any, ontology: str) -> list[str]:
     return problems
 
 
+def is_ai_draft(record: Any) -> bool:
+    """Whether this record was produced by a model rather than a person."""
+    return (
+        isinstance(record, dict) and str(record.get("adjudication_status", "")) in AI_DRAFT_STATUSES
+    )
+
+
+def assert_not_ai_gold() -> None:
+    """No AI status may ever be a human-gold status.
+
+    Called by tests and by the benchmark. Written as an assertion over the vocabularies
+    themselves rather than a comment, because the failure it prevents - a model's draft
+    silently counting as ground truth - is invisible in any single record.
+    """
+    overlap = AI_DRAFT_STATUSES & HUMAN_GOLD_STATUSES
+    if overlap:
+        raise LinkerGoldError(
+            f"AI draft statuses must never be human gold; overlap: {sorted(overlap)}"
+        )
+
+
 def is_human_gold(record: Any) -> bool:
     """Whether a benchmark may count this record as ground truth.
 
@@ -416,6 +477,18 @@ def blank_record(
 
 __all__ = [
     "ADJUDICATION_STATUSES",
+    "AI_CONFIDENCES",
+    "AI_DECISIONS",
+    "AI_DECISION_ABSTAIN",
+    "AI_DECISION_NO_VALID",
+    "AI_DECISION_SELECTED",
+    "AI_DRAFT_STATUSES",
+    "STATUS_AI_ASSISTED_DRAFT",
+    "STATUS_AI_CONSENSUS_HIGH",
+    "STATUS_AI_SECOND_OPINION",
+    "STATUS_AI_WEAK_HIGH_CONFIDENCE",
+    "assert_not_ai_gold",
+    "is_ai_draft",
     "CONFIDENCES",
     "HUMAN_GOLD_STATUSES",
     "LABEL_DIAGNOSIS",

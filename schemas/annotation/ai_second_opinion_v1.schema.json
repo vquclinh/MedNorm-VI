@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mednorm-vi.local/schemas/annotation/ai_second_opinion_v1.schema.json",
+  "title": "MedNorm-VI AI second-opinion adjudication, v1",
+  "description": "One independent adjudication returned by a SECOND AI system over the blind packet (Audit 0067). This is deliberately a separate schema and a separate status from the first model's draft: if both wrote into one representation, agreement between them would be unmeasurable and 'consensus' unfalsifiable. A record conforming to this schema is NEVER human gold. The schema is tracked; the returned decisions are private and gitignored because they reference clinical records.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "annotation_id",
+    "ontology",
+    "decision",
+    "selected_codes",
+    "confidence",
+    "rationale",
+    "evidence_used",
+    "competing_codes",
+    "ambiguity_flags"
+  ],
+  "properties": {
+    "annotation_id": {
+      "type": "string",
+      "pattern": "^lg1-[0-9a-f]{16}$",
+      "description": "Must match a record in the blind packet exactly."
+    },
+    "ontology": { "type": "string", "enum": ["ICD10", "RXNORM"] },
+    "decision": {
+      "type": "string",
+      "enum": ["SELECTED", "NO_VALID_CANDIDATE", "ABSTAIN"]
+    },
+    "selected_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Only codes present in that record's offered_candidates. ICD entries MUST be dotless internal identities; the dotted form is display only."
+    },
+    "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+    "rationale": { "type": "string", "minLength": 1 },
+    "evidence_used": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Which evidence fields drove the decision, e.g. context_after, specificity_class, tty, strength."
+    },
+    "competing_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Candidates that stayed plausible. For ABSTAIN this is where the unresolved alternatives belong."
+    },
+    "ambiguity_flags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-vocabulary reason codes, e.g. drug_class, brand_not_in_kb, lexical_false_friend, parent_child_ambiguity, tty_ambiguity, strength_mismatch."
+    }
+  },
+  "allOf": [
+    {
+      "description": "NO_VALID_CANDIDATE asserts that none is correct, so it may not also name one.",
+      "if": {
+        "properties": { "decision": { "const": "NO_VALID_CANDIDATE" } },
+        "required": ["decision"]
+      },
+      "then": { "properties": { "selected_codes": { "maxItems": 0 } } }
+    },
+    {
+      "description": "ABSTAIN means unresolved; alternatives belong in competing_codes, not selected_codes.",
+      "if": { "properties": { "decision": { "const": "ABSTAIN" } }, "required": ["decision"] },
+      "then": { "properties": { "selected_codes": { "maxItems": 0 } } }
+    },
+    {
+      "description": "SELECTED must name at least one code.",
+      "if": { "properties": { "decision": { "const": "SELECTED" } }, "required": ["decision"] },
+      "then": { "properties": { "selected_codes": { "minItems": 1 } } }
+    }
+  ]
+}
