@@ -49,6 +49,11 @@ from ..linking.icd10 import link_icd10
 from ..linking.icd10_specificity import POLICY_NONE
 from ..linking.models import LinkerResult
 from ..linking.rxnorm import governed_bridge_notes, link_rxnorm
+from ..linking.semantic.runtime import (
+    BACKEND_SEMANTIC_S1,
+    SemanticLinkerRuntime,
+    SemanticLinkerSettings,
+)
 from ..mention_factory import experts as _registered_experts  # noqa: F401
 from ..mention_factory.registry import (
     ExpertRegistry,
@@ -198,14 +203,56 @@ def _link(
     icd_index: LocalIndex | None,
     rxnorm_index: LocalIndex | None,
     hierarchy_policy: str = POLICY_NONE,
+    semantic: SemanticLinkerRuntime | None = None,
 ) -> tuple[LinkerResult, ...]:
+    """L5 dispatch.
+
+    The frozen Audit-0072 S1 system is a TWO-ontology semantic linker - its benchmark was
+    ~197 ICD10 and ~1,803 RXNORM queries - so selecting it routes both ontologies. Routing
+    only ICD would reproduce neither the selected system nor the evidence that selected it.
+    """
     results: list[LinkerResult] = []
     for h in hypotheses:
-        if h.entity_type == "CHẨN_ĐOÁN" and icd_index is not None:
+        if h.entity_type == "CHẨN_ĐOÁN" and semantic is not None:
+            results.append(semantic.link_icd10(h))
+        elif h.entity_type == "CHẨN_ĐOÁN" and icd_index is not None:
             results.append(link_icd10(h, icd_index, hierarchy_policy=hierarchy_policy))
+        elif h.entity_type == "THUỐC" and semantic is not None:
+            results.append(semantic.link_rxnorm(h))
         elif h.entity_type == "THUỐC" and rxnorm_index is not None:
             results.append(link_rxnorm(h, rxnorm_index))
     return tuple(results)
+
+
+#: Built once per process: loading a 4B reranker and a 227k-vector index for every document
+#: would dominate runtime. `evaluate_readiness` has already refused the run if anything is
+#: missing, so construction here cannot silently degrade.
+_SEMANTIC_RUNTIME: dict[str, SemanticLinkerRuntime] = {}
+
+
+def semantic_linker_runtime(
+    config: PipelineConfig,
+    icd_index: LocalIndex | None,
+    rxnorm_index: LocalIndex | None,
+) -> SemanticLinkerRuntime | None:
+    """The frozen S1 two-ontology linker when selected, else None (baseline path)."""
+    if config.linker_backend != BACKEND_SEMANTIC_S1:
+        return None
+    if icd_index is None or rxnorm_index is None:
+        return None
+    settings = SemanticLinkerSettings.from_mapping(config.semantic_linker)
+    key = f"{settings.model_root}|{settings.dense_index}|{settings.icd_v41_index}"
+    cached = _SEMANTIC_RUNTIME.get(key)
+    if cached is None:
+        cached = SemanticLinkerRuntime(
+            settings=settings,
+            icd_v3_index=icd_index,
+            icd_v41_index=load_index(settings.icd_v41_index),
+            rxnorm_index=rxnorm_index,
+        )
+        cached.ensure_ready()
+        _SEMANTIC_RUNTIME[key] = cached
+    return cached
 
 
 def resolve_l4_backend(
@@ -315,6 +362,7 @@ def run_document(
         icd_index=icd_index,
         rxnorm_index=rxnorm_index,
         hierarchy_policy=config.icd_hierarchy_policy,
+        semantic=semantic_linker_runtime(config, icd_index, rxnorm_index),
     )
     cascade = apply_confidence_cascade(accepted)
 

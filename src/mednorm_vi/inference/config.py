@@ -40,6 +40,13 @@ from ..governance.e4_retirement import (
 )
 from ..kb.competition.topk import DEFAULT_DECODING_PROFILE
 from ..linking.icd10_specificity import POLICIES, POLICY_NONE
+from ..linking.semantic.runtime import (
+    BACKEND_LEXICAL_V3,
+    BACKEND_SEMANTIC_S1,
+    LINKER_BACKENDS,
+    SemanticLinkerSettings,
+    missing_requirements,
+)
 from ..mention_factory.expert_spec import (
     EXPERT_FEATURE_FLAGS,
     EXPERT_SPEC_BY_FLAG,
@@ -90,6 +97,20 @@ FEATURE_FLAG_BY_CHECKPOINT_ROLE: dict[str, str] = {
 }
 
 
+def _linker_backend(doc: dict[str, Any]) -> str:
+    """Read and validate the linker backend. An unknown value is refused, not defaulted.
+
+    Defaulting an unrecognised backend to lexical would make a profile silently run something
+    other than what it declares, which is exactly how an ablation stops being one.
+    """
+    backend = str(doc.get("linker_backend", BACKEND_LEXICAL_V3))
+    if backend not in LINKER_BACKENDS:
+        raise ValueError(
+            f"unknown linker_backend {backend!r}; known backends: {list(LINKER_BACKENDS)}"
+        )
+    return backend
+
+
 def _hierarchy_policy(doc: dict[str, Any]) -> str:
     """Read and validate the ICD hierarchy policy. An unknown name is refused, not ignored.
 
@@ -120,6 +141,10 @@ class PipelineConfig:
     # Hierarchy-aware ICD specificity arbitration (Audit 0070 §5). Defaults to the
     # Audit-0069 behaviour, so a profile that does not name a policy is unaffected.
     icd_hierarchy_policy: str = POLICY_NONE
+    # Which L5 ICD linker runs (Audit 0073). Defaults to the scored baseline's lexical
+    # linker, so a profile that says nothing keeps the 11.9188 behaviour exactly.
+    linker_backend: str = BACKEND_LEXICAL_V3
+    semantic_linker: dict[str, Any] = field(default_factory=dict)
     rxnorm_index: str = ""
     # Governed decoding profile name (Audit 0060 §4). Resolved by
     # `kb.competition.topk.resolve_decoding_profile`; an unknown name is refused.
@@ -197,6 +222,8 @@ class PipelineConfig:
             ),
             icd_index=str(doc.get("icd_index", "")),
             icd_hierarchy_policy=_hierarchy_policy(doc),
+            linker_backend=_linker_backend(doc),
+            semantic_linker=dict(doc.get("semantic_linker") or {}),
             rxnorm_index=str(doc.get("rxnorm_index", "")),
             decoding_profile=str(doc.get("decoding_profile", DEFAULT_DECODING_PROFILE)),
             checkpoint_root=str(doc.get("checkpoint_root", "models/checkpoints/full_v1")),
@@ -484,6 +511,14 @@ def evaluate_readiness(config: PipelineConfig, *, mode: str) -> ReadinessReport:
     ):
         if index_path and not Path(index_path).is_file():
             errors.append(f"missing_{index_name}:{index_path}")
+
+    # The semantic backend must never silently degrade to lexical: a run that claims
+    # semantic_s1_0072 and quietly used v3 would invalidate the whole ablation.
+    if config.linker_backend == BACKEND_SEMANTIC_S1:
+        settings = SemanticLinkerSettings.from_mapping(config.semantic_linker)
+        errors.extend(
+            f"semantic_linker_not_ready:{problem}" for problem in missing_requirements(settings)
+        )
 
     # L4 is mandatory in every mode, so its route is validated in every mode.
     route, route_errors = _l4_route_errors(config)
