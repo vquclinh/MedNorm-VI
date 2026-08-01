@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..kb.indexing import evidence as ev
+from ..kb.indexing.evidence import EXACT_CHANNELS
 from ..kb.indexing.retrieval import LocalIndex, search_index
 from ..resolution.models import EntityHypothesis
 from .icd10_hierarchy import (
@@ -200,7 +202,9 @@ def link_icd10_hierarchical(
 
     mention = hypothesis.text
     hits = {h.concept_id: h for h in search_index(index, mention, limit=RETRIEVAL_LIMIT)}
-    anchors = tuple(sorted(hits, key=lambda c: (-hits[c].score, c)))
+    # Order by the evidence rank tuple, not by the additive score. On an untiered index
+    # (competition-v3) the tuple reduces to `(-score, code)`, so this is the previous order.
+    anchors = tuple(sorted(hits, key=lambda c: hits[c].rank))
     reached, notes = expand_hierarchy(index, anchors, mention)
     anchor = anchors[0] if anchors else ""
 
@@ -223,7 +227,7 @@ def link_icd10_hierarchical(
             continue
 
         channels: tuple[str, ...] = tuple(hit.channels) if hit else ()
-        exact = "exact" in channels or "exact_ascii" in channels
+        exact = any(c in EXACT_CHANNELS for c in channels)
 
         # A code reached only by expansion needs its own textual support. Without
         # this, expanding one anchor would drag in every descendant of its block.
@@ -266,9 +270,21 @@ def link_icd10_hierarchical(
             retained=True, reason=reason, tier=tier,
             score=_score(tier, base["lexical_score"], overlap, context.depth), **base))
 
+    def evidence_order(decision: Icd10CandidateDecision) -> int:
+        """Evidence-tier position within a linker tier (Audit 0069 §4).
+
+        Constant on an untiered index, so competition-v3 keeps its exact previous ordering;
+        on a tiered index it is what stops accumulated fuzzy score from promoting a
+        one-diacritic false friend above an accent-exact match.
+        """
+        if not index.tiered:
+            return 0
+        tier = ev.tier_of(decision.lexical_sources)
+        return ev.TIER_ORDER.index(tier) if tier else ev.UNTIERED_RANK
+
     retained = sorted(
         (d for d in decisions if d.retained),
-        key=lambda d: (TIER_ORDER.index(d.tier), -d.score, d.code))
+        key=lambda d: (evidence_order(d), TIER_ORDER.index(d.tier), -d.score, d.code))
     final: list[Icd10CandidateDecision] = list(retained[:limit])
     final.extend(
         Icd10CandidateDecision(**{

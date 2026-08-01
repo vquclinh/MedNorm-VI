@@ -30,6 +30,29 @@ ALIAS_UNACCENTED = "unaccented_variant"
 CONFIDENCE_SOURCE = "source_exact"
 CONFIDENCE_DERIVED = "rule_derived"
 
+#: Evidence classes (Audit 0069 §6). These decide how much *ranking* weight an alias carries,
+#: which is separate from whether it may generate a candidate at all.
+#:
+#: * ``strong``      - a governed accented form of the source title; ranks at tiers A/B.
+#: * ``medium``      - a reviewed semantic synonym; ranks at tier C.
+#: * ``recall_only`` - an accent-stripped variant. It still retrieves, so someone typing
+#:   without diacritics finds the concept, but it ranks at tier E and can never outrank an
+#:   accent-preserving match. This is the containment for the `sởi`/`sỏi` collision.
+EVIDENCE_STRONG = "strong"
+EVIDENCE_MEDIUM = "medium"
+EVIDENCE_RECALL_ONLY = "recall_only"
+
+EVIDENCE_BY_TYPE: dict[str, str] = {
+    ALIAS_CANONICAL: EVIDENCE_STRONG,
+    ALIAS_PUNCTUATION: EVIDENCE_STRONG,
+    ALIAS_SYNONYM_RULE: EVIDENCE_MEDIUM,
+    ALIAS_UNACCENTED: EVIDENCE_RECALL_ONLY,
+}
+
+
+def evidence_class(alias_type: str) -> str:
+    return EVIDENCE_BY_TYPE.get(alias_type, EVIDENCE_RECALL_ONLY)
+
 #: Reviewed Vietnamese clinical register variants. Each pair names the same concept in
 #: Vietnamese medical usage; none encodes site, laterality, acuity or severity, so applying
 #: one cannot change which ICD concept a title denotes.
@@ -74,6 +97,10 @@ class Alias:
     rule: str
     confidence: str
 
+    @property
+    def evidence_class(self) -> str:
+        return evidence_class(self.alias_type)
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "code": self.code,
@@ -82,6 +109,7 @@ class Alias:
             "source": self.source,
             "transformation_rule": self.rule,
             "confidence": self.confidence,
+            "evidence_class": self.evidence_class,
         }
 
 
@@ -129,6 +157,11 @@ def aliases_for(code: str, title: str, *, source: str) -> list[Alias]:
 
 __all__ = [
     "ALIAS_CANONICAL",
+    "EVIDENCE_BY_TYPE",
+    "EVIDENCE_MEDIUM",
+    "EVIDENCE_RECALL_ONLY",
+    "EVIDENCE_STRONG",
+    "evidence_class",
     "ALIAS_PUNCTUATION",
     "ALIAS_SYNONYM_RULE",
     "ALIAS_UNACCENTED",

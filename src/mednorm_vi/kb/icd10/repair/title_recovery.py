@@ -44,7 +44,39 @@ NOTE_MARKERS: tuple[str, ...] = (
 )
 
 _LEADING_GLYPHS = re.compile(r"^[\s\-+*†‡•·\[\]()]+")
-_CODE_TOKEN = re.compile(r"^[A-Z]\d{2}(\.\d+)?[†*]?$")
+#: Dotted (`C15.0`), undotted (`C150`) and category (`C15`) code tokens. The undotted branch
+#: matters: without it a specific code is never anchored, so only 3-character categories
+#: could ever be repaired - which is why Audit 0068 recovered no 4-character code at all.
+_CODE_TOKEN = re.compile(r"^[A-Z]\d{2}(\.\d+|\d+)?[†*‡]?$")
+
+#: Instruction phrasing that appears mid-row rather than at the start, so `is_note` (which
+#: anchors at the start) cannot see it. A join that swallows one has crossed into the
+#: tabular apparatus and is not a concept title.
+INSTRUCTION_PHRASES: tuple[str, ...] = (
+    "các phân loại",
+    "phân loại ký tự",
+    "sau đây được sử dụng",
+    "được sử dụng với",
+    "the following",
+    "subclassification",
+)
+
+#: Longest wrap accepted. Titles wrap over a handful of narrow columns; a run this long is
+#: the layout walking into a note block, as B18 did by joining 14 lines of instructions.
+MAX_JOINED_LINES = 6
+
+#: Vietnamese function words that cannot end a concept name. A title stopping on one is a
+#: wrap the reconstruction failed to complete, so it is refused rather than stored truncated.
+DANGLING_TAIL_WORDS: frozenset[str] = frozenset(
+    {"và", "hoặc", "và/hoặc", "của", "ở", "do", "theo", "với", "trong", "khi", "hay", "các"}
+)
+
+#: Embedded note openers. The layout sometimes glues a note column onto the title column
+#: (`Nhiễm trùng đường ruột Loại trừ: do vi khuẩn khác`); the title is the part before it.
+_EMBEDDED_NOTE = re.compile(
+    r"\s+(?=(?:-\s*)?(?:Bao gồm|Loại trừ|Lưu ý|Tham khảo|Ghi chú|Chú ý|Incl\.|Excl\.|Note:))",
+    re.IGNORECASE,
+)
 _SEQ_TOKEN = re.compile(r"^\d+(\s+[IVXLC]+)?$")
 _COLUMN_SPLIT = re.compile(r"\s{2,}")
 _ROW_START = re.compile(r"^\s*(\d+)\s+([IVXLC]+)\s")
@@ -233,9 +265,250 @@ def recover_titles(
     return recovered, unrecovered
 
 
+#: Confidence classes for a recovered title, strongest first. Both require the concept's own
+#: dotted/undotted anchor pair; they differ only in whether the title needed rejoining.
+CONFIDENCE_SINGLE_LINE = "exact_anchor_single_line"
+CONFIDENCE_WRAPPED = "exact_anchor_wrapped_x_aligned"
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveredTitleV2:
+    """A recovered title carrying every fact needed to re-derive and challenge it."""
+
+    code: str
+    previous_title: str
+    recovered_title: str
+    english_title: str
+    anchor_line: int
+    source_lines: tuple[int, ...]
+    column_x: int
+    joined_line_count: int
+    method: str
+    confidence: str
+    source_sha256: str
+    reason: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "previous_canonical_name": self.previous_title,
+            "repaired_canonical_name": self.recovered_title,
+            "english_title": self.english_title,
+            "anchor_line": self.anchor_line,
+            "source_lines": list(self.source_lines),
+            "column_x": self.column_x,
+            "joined_line_count": self.joined_line_count,
+            "recovery_method": self.method,
+            "confidence_class": self.confidence,
+            "source_sha256": self.source_sha256,
+            "reason": self.reason,
+        }
+
+
+def trim_embedded_note(value: str) -> str:
+    """Drop a note column that the layout glued onto the end of a title column."""
+    return _EMBEDDED_NOTE.split(value or "", maxsplit=1)[0].strip()
+
+
+def looks_like_instruction(value: str) -> bool:
+    """True when a rejoined string has wandered into the ICD tabular apparatus."""
+    lowered = (value or "").casefold()
+    return any(phrase in lowered for phrase in INSTRUCTION_PHRASES)
+
+
+def is_title_start(value: str) -> bool:
+    """True when the string starts the way a source title does: with a capital.
+
+    A recovered string beginning in lower case is the *middle* of a wrapped phrase, so the
+    row was joined from the wrong origin and the title is not trustworthy.
+    """
+    bare = strip_glyphs(value)
+    if not bare:
+        return False
+    first = bare[0]
+    return not first.isalpha() or first.isupper()
+
+
+#: Cross-reference apparatus (`†`, `*`, `+ sub-item`, `(N51.2 *)`). These belong to ICD's
+#: dagger/asterisk notation, never to a concept name, so their presence means the join
+#: crossed out of the title column. Square brackets are NOT here: `Gút [thống phong]` is a
+#: genuine title.
+_APPARATUS = re.compile(r"[†‡]|\s\+\s|\([A-Z]\d{2}(\.\d+)?\s*\*?\s*\)")
+
+
+def has_repeated_phrase(value: str, *, window: int = 3) -> bool:
+    """True when a 3-word sequence repeats - the signature of interleaved columns.
+
+    When two columns are joined in the wrong order the source phrase reappears mid-string,
+    as in `Bệnh lao phổi, được khẳng - Bệnh lao phổi, định bằng…`. No ICD title repeats a
+    three-word run, so this catches the bleed without needing to know which columns merged.
+    """
+    words = (value or "").split()
+    if len(words) < window * 2:
+        return False
+    seen: set[tuple[str, ...]] = set()
+    for start in range(len(words) - window + 1):
+        gram = tuple(w.casefold() for w in words[start : start + window])
+        if gram in seen:
+            return True
+        seen.add(gram)
+    return False
+
+
+def accept_recovered_title(value: str, *, joined_lines: int) -> str:
+    """Return a title fit to replace a damaged one, or `""` to keep the record damaged.
+
+    Every rejection here costs recall. That trade is deliberate: a wrong title makes a
+    concept confidently reachable by the wrong name, which is worse than leaving it
+    unreachable, so anything that cannot be justified is refused.
+    """
+    title = trim_embedded_note(_strip_english_prefix(value or "").strip())
+    if not title or joined_lines > MAX_JOINED_LINES:
+        return ""
+    if is_damaged_title(title) or looks_like_instruction(title) or not is_title_start(title):
+        return ""
+    if _APPARATUS.search(title) or has_repeated_phrase(title):
+        return ""
+    if title.split()[-1].casefold().strip(",;") in DANGLING_TAIL_WORDS:
+        return ""
+    # The column qualified as Vietnamese before trimming; if the diacritics lived only in the
+    # note that was trimmed away, what remains is the English title (J81 `Pulmonary oedema`).
+    if not has_vietnamese_diacritic(title):
+        return ""
+    return title
+
+
+def paired_codes(column_texts: list[str]) -> list[str]:
+    """Every code whose own `<dotted> <undotted>` anchor pair appears in this row.
+
+    A well-formed row carries exactly one. A row carrying two has been merged by the layout
+    and is rejected rather than guessed at, because either title could belong to either code.
+    """
+    found: list[str] = []
+    for index in range(1, len(column_texts)):
+        token = column_texts[index].strip()
+        if not token or not _CODE_TOKEN.match(token) or "." in token:
+            continue
+        previous = normalize_code(column_texts[index - 1])
+        if (previous == token or previous.endswith(token)) and token not in found:
+            found.append(token)
+    return found
+
+
+def titles_from_columns(
+    columns: list[Any], code: str, *, anchor: int = -1
+) -> tuple[Any | None, str]:
+    """``(vietnamese_column, english_title)`` for ``code`` from its reconstructed row.
+
+    ``anchor`` is the code column's index **as measured on the unmerged anchor line**. It has
+    to be measured there: pdftotext sometimes glues the code onto the end of a title column
+    (``U ác tính ở trực C20``), and once that column is rejoined with its wrapped remainder
+    the trailing code is no longer at the end, so re-deriving the anchor after merging would
+    silently lose exactly the rows the merge was meant to repair.
+
+    Returns the Vietnamese *column* rather than its text so the caller keeps the x origin and
+    the source lines that were joined to produce it.
+    """
+    if anchor < 0:
+        anchor = concept_anchor([c.text for c in columns], code)
+    if anchor < 0:
+        return None, ""
+
+    vietnamese = None
+    english = ""
+    for column in columns[anchor + 1 :]:
+        text = column.text.strip()
+        if not text or _CODE_TOKEN.match(text) or _SEQ_TOKEN.match(text) or is_note(text):
+            continue
+        if has_vietnamese_diacritic(text):
+            vietnamese = column
+        elif not english:
+            english = text
+    return vietnamese, english.strip()
+
+
+def recover_titles_v2(
+    text_lines: list[str], targets: dict[str, str], *, source_sha256: str = ""
+) -> tuple[dict[str, RecoveredTitleV2], dict[str, str]]:
+    """Recover damaged titles with wrapped-row reconstruction (Audit 0069 §3).
+
+    Row reconstruction happens BEFORE column extraction, so a title split across physical
+    lines is rejoined from its own column before any title/note decision is made.
+    """
+    from .row_reconstruction import is_row_start, reconstruct_row, segments
+
+    by_code: dict[str, list[tuple[int, list[Any], int]]] = {}
+    for index, line in enumerate(text_lines):
+        if not is_row_start(line):
+            continue
+        # Identity is decided on the unmerged line, before any rejoining can disturb it.
+        raw = [text for _, text in segments(line)]
+        codes = paired_codes(raw)
+        # A row carrying two anchor pairs has been merged by the layout: either title could
+        # belong to either code, so it is rejected rather than guessed at.
+        if len(codes) != 1 or codes[0] not in targets:
+            continue
+        anchor = concept_anchor(raw, codes[0])
+        if anchor < 0:
+            continue
+        columns = reconstruct_row(text_lines, index)
+        if len(columns) != len(raw):
+            continue
+        by_code.setdefault(codes[0], []).append((index + 1, columns, anchor))
+
+    recovered: dict[str, RecoveredTitleV2] = {}
+    unrecovered: dict[str, str] = {}
+    for code, previous in targets.items():
+        best: tuple[Any, str, str, int] | None = None
+        for anchor_line, columns, anchor in by_code.get(code, []):
+            column, english = titles_from_columns(columns, code, anchor=anchor)
+            if column is None:
+                continue
+            title = accept_recovered_title(
+                column.text, joined_lines=len(column.source_lines)
+            )
+            if not title:
+                continue
+            if best is None or len(title) > len(best[1]):
+                best = (column, title, english, anchor_line)
+        if best is None:
+            unrecovered[code] = previous
+            continue
+        column, title, english, anchor_line = best
+        recovered[code] = RecoveredTitleV2(
+            code=code,
+            previous_title=previous,
+            recovered_title=title,
+            english_title=english,
+            anchor_line=anchor_line,
+            source_lines=column.source_lines,
+            column_x=column.x,
+            joined_line_count=len(column.source_lines),
+            method="x_aligned_row_reconstruction_then_column_extraction",
+            confidence=CONFIDENCE_WRAPPED if column.wrapped else CONFIDENCE_SINGLE_LINE,
+            source_sha256=source_sha256,
+            reason="previous name was an ICD tabular note or a truncated fragment",
+        )
+    return recovered, unrecovered
+
+
 __all__ = [
+    "CONFIDENCE_SINGLE_LINE",
+    "CONFIDENCE_WRAPPED",
     "NOTE_MARKERS",
+    "RecoveredTitleV2",
+    "INSTRUCTION_PHRASES",
+    "DANGLING_TAIL_WORDS",
+    "MAX_JOINED_LINES",
+    "accept_recovered_title",
     "concept_anchor",
+    "has_repeated_phrase",
+    "is_title_start",
+    "looks_like_instruction",
+    "paired_codes",
+    "trim_embedded_note",
+    "recover_titles_v2",
+    "titles_from_columns",
     "normalize_code",
     "RecoveredTitle",
     "has_vietnamese_diacritic",
