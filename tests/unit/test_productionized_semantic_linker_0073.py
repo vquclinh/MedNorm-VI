@@ -113,9 +113,17 @@ def test_baseline_readiness_is_unaffected() -> None:
     assert not [e for e in readiness.errors if "semantic" in e]
 
 
-def test_null_mode_other_than_shadow_is_refused() -> None:
-    settings = rt.SemanticLinkerSettings(null_mode="conservative")
-    assert any("null_mode must be" in p for p in rt.missing_requirements(settings))
+def test_null_mode_accepts_shadow_and_conservative_and_refuses_anything_else() -> None:
+    """Audit 0073 pinned this to shadow; the 0075 sprint enables the conservative gate.
+
+    Both are governed modes. An unrecognised value is still refused, so a profile can never
+    silently run a policy it does not name.
+    """
+    for mode in ("shadow", "conservative"):
+        settings = rt.SemanticLinkerSettings(null_mode=mode)
+        assert not [p for p in rt.missing_requirements(settings) if "null_mode" in p], mode
+    bogus = rt.SemanticLinkerSettings(null_mode="aggressive")
+    assert [p for p in rt.missing_requirements(bogus) if "null_mode" in p]
 
 
 def test_model_root_env_override_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -118,11 +118,13 @@ def load_seed(path: Path) -> list[dict[str, Any]]:
         flags = row.get("assertions")
         if isinstance(flags, list):
             flags = {key: key in flags for key in ASSERTION_KEYS}
-        out.append({
-            "text": row.get("text", ""),
-            "type": row.get("type", ""),
-            "assertions": flags or {},
-        })
+        out.append(
+            {
+                "text": row.get("text", ""),
+                "type": row.get("type", ""),
+                "assertions": flags or {},
+            }
+        )
     return out
 
 
@@ -168,7 +170,15 @@ def main(argv: list[str] | None = None) -> int:
         "--seed-entities",
         type=Path,
         default=None,
-        help="optional directory of existing per-document entity JSON",
+        help="directory of existing per-document organizer JSON (variant D)",
+    )
+    parser.add_argument(
+        "--seed-run-config",
+        type=Path,
+        default=None,
+        help="the pipeline YAML that produced --seed-entities. Required for cand_8b: the "
+        "seed must come from an E3-only run, because the 9B cap sums ALL models in the "
+        "reproducible system, not peak VRAM.",
     )
     parser.add_argument("--pool-limit", type=int, default=25)
     parser.add_argument("--max-new-tokens", type=int, default=1024)
@@ -176,11 +186,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-documents", type=int, default=100)
     args = parser.parse_args(argv)
 
-    if args.config == "cand_8b" and not args.seed_entities:
-        print("BLOCKED: --config cand_8b needs --seed-entities pointing at a prior run's "
-              "organizer JSON (variant D keeps the historical E3 entities/assertions).",
-              file=sys.stderr)
-        return 2
+    if args.config == "cand_8b":
+        if not args.seed_entities:
+            print(
+                "BLOCKED: --config cand_8b needs --seed-entities pointing at a prior run's "
+                "organizer JSON (variant D keeps the E3 entities/assertions).",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.seed_run_config:
+            print(
+                "BLOCKED: --config cand_8b needs --seed-run-config so the seed's parameter "
+                "cost can be verified. The 9B cap sums every model in the reproducible "
+                "system, not peak VRAM.",
+                file=sys.stderr,
+            )
+            return 2
+        seed_text = (
+            args.seed_run_config.read_text(encoding="utf-8")
+            if (args.seed_run_config.is_file())
+            else ""
+        )
+        if "semantic_s1_0072" in seed_text:
+            print(
+                "BLOCKED: the seed run uses linker_backend=semantic_s1_0072, which deploys "
+                "Embedding-4B + Reranker-4B. Adding Qwen3-8B would make the reproducible "
+                "system 16,369,296,389 parameters against a 9,000,000,000 cap. Seed variant "
+                "D from an E3-only profile such as configs/pipeline/full_v1.yaml.",
+                file=sys.stderr,
+            )
+            return 2
+        log(f"seed provenance OK: {args.seed_run_config} is E3-only")
 
     total_parameters = budget.assert_within_cap(with_semantic_s1=False)
     log(f"deployed parameters {total_parameters:,} (cap {budget.PARAMETER_CAP:,})")

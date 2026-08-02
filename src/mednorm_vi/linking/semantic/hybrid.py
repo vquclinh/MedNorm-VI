@@ -238,6 +238,7 @@ def run_hybrid(
     null_mode: str = NULL_MODE_SHADOW,
     apply_hierarchy: bool = True,
     limit: int = 20,
+    structured_rxnorm: dict[str, Any] | None = None,
 ) -> HybridResult:
     """Rerank, then arbitrate hierarchy, then consult the null gate."""
     if null_mode not in NULL_MODES:
@@ -285,6 +286,16 @@ def run_hybrid(
         order = arbitrated
 
     top = next((c for c in reranked if c.concept_id == order[0]), reranked[0])
+    # Structured contradiction is refusal evidence only (Audit 0074 recovered these fields;
+    # its reordering variant was rejected, so nothing here changes candidate order).
+    unsupported_detail = 0
+    if ontology == "RXNORM" and structured_rxnorm:
+        from . import rxnorm_structured as rs
+
+        verdict = rs.assess(rs.parse_mention(mention), structured_rxnorm.get(top.concept_id))
+        if verdict.contradicted:
+            unsupported_detail = 1
+
     evidence = ng.NullGateEvidence(
         top_tier=top.evidence_tier,
         top_score=top.reranker_score,
@@ -293,6 +304,7 @@ def run_hybrid(
         reranker_score=top.reranker_score,
         source_count=len(top.sources),
         has_exact_evidence=top.evidence_tier in ng.PROTECTED_TIERS,
+        unsupported_extra_tokens=unsupported_detail,
         mention_text=mention,
         ontology=ontology,
         candidate_count=len(order),

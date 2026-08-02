@@ -42,6 +42,7 @@ from .hybrid import (
     DEFAULT_V3_TOPK,
     DEFAULT_V41_TOPK,
     NULL_MODE_SHADOW,
+    NULL_MODES,
     build_pool,
     run_hybrid,
 )
@@ -145,6 +146,10 @@ class SemanticLinkerSettings:
     icd_v41_index: str = ""
     rxnorm_index: str = ""
     rxnorm_topk: int = 20
+    #: Structured RxNorm records (Audit 0074) used ONLY as refusal evidence by the
+    #: conservative gate: a candidate whose recorded strength or dose form contradicts the
+    #: mention is refused. Never used to reorder, so ranking stays the 0073 behaviour.
+    structured_rxnorm: str = ""
     #: Row-order contract of `dense_index`. Defaults to the frozen 0072 cache's order.
     row_order: str = FROZEN_0072_ROW_ORDER
 
@@ -167,6 +172,7 @@ class SemanticLinkerSettings:
             icd_v41_index=str(doc.get("icd_v41_index", "")),
             rxnorm_index=str(doc.get("rxnorm_index", "")),
             rxnorm_topk=int(doc.get("rxnorm_topk", 20)),
+            structured_rxnorm=str(doc.get("structured_rxnorm", "")),
             row_order=str(doc.get("row_order", FROZEN_0072_ROW_ORDER)),
         )
 
@@ -186,6 +192,7 @@ class SemanticLinkerSettings:
             "icd_v41_index": self.icd_v41_index,
             "rxnorm_index": self.rxnorm_index,
             "rxnorm_topk": self.rxnorm_topk,
+            "structured_rxnorm": self.structured_rxnorm,
             "row_order": self.row_order,
         }
 
@@ -270,11 +277,8 @@ def missing_requirements(settings: SemanticLinkerSettings) -> list[str]:
             f"semantic_linker.row_order must be one of {list(ROW_ORDERS)}, got "
             f"{settings.row_order!r}"
         )
-    if settings.null_mode != NULL_MODE_SHADOW:
-        problems.append(
-            f"null_mode must be {NULL_MODE_SHADOW!r} in this milestone, got "
-            f"{settings.null_mode!r} (Audit 0073 forbids activating the NULL gate)"
-        )
+    if settings.null_mode not in NULL_MODES:
+        problems.append(f"null_mode must be one of {list(NULL_MODES)}, got {settings.null_mode!r}")
     return problems
 
 
@@ -293,6 +297,7 @@ class SemanticLinkerRuntime:
     _backend: Any = None
     _encoder: Any = None
     _shadow: list[dict[str, Any]] = field(default_factory=list)
+    _structured: dict[str, Any] = field(default_factory=dict)
 
     def ensure_ready(self) -> None:
         problems = missing_requirements(self.settings)
@@ -361,6 +366,15 @@ class SemanticLinkerRuntime:
                 f"{EXPECTED_ICD_ROWS:,} and {EXPECTED_RXNORM_ROWS:,}"
             )
         self._vectors = vectors
+
+        if self.settings.structured_rxnorm and Path(self.settings.structured_rxnorm).is_file():
+            from ...kb.rxnorm.structured import StructuredDrug
+
+            with Path(self.settings.structured_rxnorm).open(encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip():
+                        drug = StructuredDrug.from_dict(json.loads(line))
+                        self._structured[drug.rxcui] = drug
 
         root = Path(self.settings.model_root)
         self._backend = Qwen3Reranker(
@@ -459,6 +473,7 @@ class SemanticLinkerRuntime:
             governed_index=governed,
             null_mode=self.settings.null_mode,
             limit=self.settings.candidate_limit,
+            structured_rxnorm=self._structured if ontology == "RXNORM" else None,
         )
         self._shadow.append(
             {
