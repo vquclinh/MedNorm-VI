@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from .models import POOLING_CLS, POOLING_MEAN, RetrieverSpec
 
@@ -27,6 +27,10 @@ DEFAULT_BATCH_SIZE = 256
 @dataclass
 class _TransformerEncoder:
     """Shared plumbing. Subclasses supply the pooling, which is the part that differs."""
+
+    #: Declared by every concrete adapter and checked against the registry in
+    #: `build_encoder`. An adapter that does not declare its pooling cannot be built.
+    POOLING: ClassVar[str] = ""
 
     spec: RetrieverSpec
     model_root: Path
@@ -123,6 +127,8 @@ class _TransformerEncoder:
 class SapBertEncoder(_TransformerEncoder):
     """Cross-lingual SapBERT: CLS of the last hidden state, before the pooler."""
 
+    POOLING: ClassVar[str] = POOLING_CLS
+
     def _pool(self, hidden_state: Any, attention_mask: Any) -> Any:
         return hidden_state[:, 0, :]
 
@@ -130,12 +136,16 @@ class SapBertEncoder(_TransformerEncoder):
 class ClinLinkerEncoder(_TransformerEncoder):
     """ClinLinker-KB-GP: CLS representation, per the model card."""
 
+    POOLING: ClassVar[str] = POOLING_CLS
+
     def _pool(self, hidden_state: Any, attention_mask: Any) -> Any:
         return hidden_state[:, 0, :]
 
 
 class SentenceMeanEncoder(_TransformerEncoder):
     """SentenceTransformer-compatible: attention-masked mean over tokens."""
+
+    POOLING: ClassVar[str] = POOLING_MEAN
 
     def _pool(self, hidden_state: Any, attention_mask: Any) -> Any:
         mask = attention_mask.unsqueeze(-1).to(hidden_state.dtype)
@@ -161,7 +171,7 @@ def build_encoder(
             "add an explicit adapter rather than reusing another model's."
         )
     encoder = encoder_type(spec=spec, model_root=model_root, device=device, **kwargs)
-    declared = POOLING_CLS if encoder_type is not SentenceMeanEncoder else POOLING_MEAN
+    declared = getattr(encoder_type, "POOLING", "")
     if declared != spec.pooling:
         raise ValueError(
             f"{spec.key}: registry declares pooling {spec.pooling!r} but the adapter "

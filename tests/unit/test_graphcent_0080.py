@@ -842,3 +842,244 @@ def test_qwen_parameter_count_is_read_from_headers_not_by_loading(tmp_path: Path
     qwen = gr.QwenDisambiguator(root, device="cpu")
     assert qwen.parameter_count() == 30      # never loaded; no weights exist to load
     assert gr.parameters_from_safetensors(tmp_path / "missing") == 0
+
+
+# ==================== real config resolution (regression: the Colab TypeError) ================
+
+DEFAULT_PROFILE = ROOT / "configs/pipeline/graphcent_0080.yaml"
+RESEARCH_PROFILE = ROOT / "configs/pipeline/graphcent_0080_full_research.yaml"
+
+#: Provenance a profile must never be able to change. Comparing these field by field after
+#: resolution is what catches a constructor that silently drops a newly required field.
+PROVENANCE_FIELDS = (
+    "key", "repo_id", "licence", "licence_source", "pooling", "intended_domain",
+    "expected_disk_gib",
+)
+
+
+def test_default_profile_resolves_through_the_real_cli_path() -> None:
+    specs = cli.resolve_specs(cli.load_config(DEFAULT_PROFILE))
+    by_key = {s.key: s for s in specs}
+    assert set(by_key) == {"sapbert_xlmr", "biobert_mnli", "clinlinker_kb_gp"}
+    assert by_key["sapbert_xlmr"].enabled
+    assert by_key["clinlinker_kb_gp"].enabled
+    assert not by_key["biobert_mnli"].enabled
+    for spec in specs:
+        assert spec.licence_source, f"{spec.key} lost its licence_source"
+        assert spec.licence_source.startswith("https://huggingface.co/")
+
+    # the disabled model is not an enabled downloadable model, and needs no override
+    enabled = [s for s in specs if s.enabled]
+    assert "biobert_mnli" not in {s.key for s in enabled}
+    manifest = gm.ModelManifest(
+        retrievers=specs,
+        licence_overrides_accepted=tuple(
+            cli.load_config(DEFAULT_PROFILE).get("licence_overrides_accepted") or ()
+        ),
+    )
+    manifest.assert_licences_cleared()
+
+
+def test_research_profile_resolves_with_its_recorded_override() -> None:
+    config = cli.load_config(RESEARCH_PROFILE)
+    specs = cli.resolve_specs(config)
+    by_key = {s.key: s for s in specs}
+    assert by_key["biobert_mnli"].enabled
+    assert by_key["biobert_mnli"].licence_needs_review
+    for spec in specs:
+        assert spec.licence_source
+    overrides = tuple(config.get("licence_overrides_accepted") or ())
+    assert overrides == ("biobert_mnli",)
+    gm.ModelManifest(
+        retrievers=specs, licence_overrides_accepted=overrides
+    ).assert_licences_cleared()
+
+
+def test_enabling_biobert_without_the_override_still_fails_closed() -> None:
+    config = cli.load_config(RESEARCH_PROFILE)
+    config["licence_overrides_accepted"] = []          # the profile's override removed
+    specs = cli.resolve_specs(config)
+    assert {s.key for s in specs if s.enabled} == {
+        "sapbert_xlmr", "biobert_mnli", "clinlinker_kb_gp"
+    }
+    with pytest.raises(gm.LicenceReviewRequired):
+        gm.ModelManifest(retrievers=specs, licence_overrides_accepted=()).assert_licences_cleared()
+
+
+def test_resolution_preserves_every_registry_field_it_does_not_own() -> None:
+    """Generic guard: a profile may change `enabled` and `roles`, nothing else.
+
+    This is the shape of the bug that broke the first Colab run - a resolver that rebuilt
+    the spec field by field and dropped whatever it had not been taught about.
+    """
+    registry = {s.key: s for s in gm.DEFAULT_RETRIEVERS}
+    for profile in (DEFAULT_PROFILE, RESEARCH_PROFILE):
+        for spec in cli.resolve_specs(cli.load_config(profile)):
+            source = registry[spec.key]
+            for name in PROVENANCE_FIELDS:
+                assert getattr(spec, name) == getattr(source, name), f"{spec.key}.{name}"
+
+
+def test_every_required_spec_field_is_populated_after_resolution() -> None:
+    """No required field may come back empty, whatever the registry grows next."""
+    for profile in (DEFAULT_PROFILE, RESEARCH_PROFILE):
+        for spec in cli.resolve_specs(cli.load_config(profile)):
+            for f in dataclasses.fields(spec):
+                if f.default is not dataclasses.MISSING:
+                    continue                       # optional / resolved-at-runtime
+                value = getattr(spec, f.name)
+                assert value not in ("", None, ()), f"{spec.key}.{f.name} is empty"
+
+
+def test_profile_may_not_override_provenance() -> None:
+    config = {"retrievers": {"sapbert_xlmr": {"licence": "mit", "enabled": True}}}
+    with pytest.raises(SystemExit, match="may not override"):
+        cli.resolve_specs(config)
+
+
+def test_profile_roles_override_is_still_honoured() -> None:
+    specs = {s.key: s for s in cli.resolve_specs(cli.load_config(DEFAULT_PROFILE))}
+    assert specs["clinlinker_kb_gp"].role == ("diagnosis",)
+
+
+# ==================== CPU-safe preflight of the real download-models command ==================
+
+
+class PreflightEncoder(FakeRetrieverEncoder):
+    """Adapter-shaped fake: declares pooling, counts parameters without weights."""
+
+    POOLING = ""
+
+    def __init__(self, spec: gm.RetrieverSpec, model_root: Path, device: str = "cuda",
+                 **kwargs: Any) -> None:
+        super().__init__(spec, model_root, device, **kwargs)
+
+
+def _preflight_adapters() -> dict[str, Any]:
+    """One fake class per registry key, each declaring that key's registry pooling."""
+    adapters: dict[str, Any] = {}
+    for spec in gm.DEFAULT_RETRIEVERS:
+        adapters[spec.key] = type(
+            f"Preflight_{spec.key}", (PreflightEncoder,), {"POOLING": spec.pooling}
+        )
+    return adapters
+
+
+def _run_download_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: Path
+) -> dict[str, Any]:
+    """Execute the real `download-models` body up to the download/GPU boundary."""
+    fetched: list[str] = []
+
+    def fake_snapshot_download(repo_id: str, revision: str | None = None,
+                               local_dir: str = "", **kwargs: Any) -> str:
+        fetched.append(repo_id)
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return local_dir
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(cli, "require_host", lambda *a, **k: 24.0)
+    monkeypatch.setattr(ge, "ENCODER_BY_KEY", _preflight_adapters())
+
+    model_root = tmp_path / "models"
+    code = cli.main([
+        "--config", str(profile), "download-models", "--allow-download",
+        "--model-root", str(model_root),
+    ])
+    assert code == 0
+    manifest = json.loads((model_root / "model-manifest.json").read_text(encoding="utf-8"))
+    manifest["_fetched"] = fetched
+    return manifest
+
+
+def test_preflight_download_models_default_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = _run_download_models(monkeypatch, tmp_path, DEFAULT_PROFILE)
+
+    # exactly the enabled models were fetched; the non-commercial one was never touched
+    assert manifest["_fetched"] == [
+        "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR",
+        "ICB-UMA/ClinLinker-KB-GP",
+    ]
+    keys = {r["key"]: r for r in manifest["retrievers"]}
+    assert all(r["licence_source"] for r in keys.values())
+    assert keys["biobert_mnli"]["enabled"] is False
+    assert keys["biobert_mnli"]["parameter_count"] is None      # never measured, never loaded
+    assert manifest["total_deployed_parameters"] == 222_000_000
+    assert manifest["under_cap"] is True
+    assert manifest["parameter_cap"] == gm.PARAMETER_CAP
+    assert manifest["training_performed"] is False
+    assert {m["name"] for m in manifest["deployed"]} == {
+        "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR", "ICB-UMA/ClinLinker-KB-GP"
+    }
+
+
+def test_preflight_download_models_research_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = _run_download_models(monkeypatch, tmp_path, RESEARCH_PROFILE)
+    assert len(manifest["_fetched"]) == 3
+    assert manifest["licence_overrides_accepted"] == ["biobert_mnli"]
+    assert all(r["licence_source"] for r in manifest["retrievers"])
+
+
+def test_preflight_download_models_fails_closed_without_the_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    profile = tmp_path / "no_override.yaml"
+    import yaml
+
+    config = yaml.safe_load(RESEARCH_PROFILE.read_text(encoding="utf-8"))
+    config["licence_overrides_accepted"] = []
+    profile.write_text(yaml.safe_dump(config), encoding="utf-8")
+    with pytest.raises(gm.LicenceReviewRequired):
+        _run_download_models(monkeypatch, tmp_path, profile)
+
+
+#: The exact command line that failed on the first real Colab run.
+COLAB_DOWNLOAD_ARGV = [
+    "download-models", "--allow-download",
+    "--model-root", "/content/graphcent_models",
+    "--e3-checkpoint", "checkpoint/e3_boundary_refinement_0062/best.pt",
+    "--qwen-root", "/content/qwen3-8b-local",
+]
+
+
+def test_the_exact_colab_command_line_reaches_the_download_boundary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Everything before the first network/GPU call must work on a laptop."""
+    args = cli.build_parser().parse_args(["--config", str(DEFAULT_PROFILE), *COLAB_DOWNLOAD_ARGV])
+    config = cli.load_config(args.config)
+    specs = cli.resolve_specs(config)                 # this is where the TypeError was raised
+    assert [s.key for s in specs if s.enabled] == ["sapbert_xlmr", "clinlinker_kb_gp"]
+    runtime = cli._runtime_config(config, args)
+    assert runtime.model_root == Path("/content/graphcent_models")
+    assert args.func is cli.cmd_download_models
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        COLAB_DOWNLOAD_ARGV,
+        ["build-index", "--cache-root", "/content/graphcent_cache"],
+        ["smoke", "--input-dir", "data/organizer_test/input", "--run-dir", "runs/x",
+         "--documents", "1,10,100"],
+        ["run", "--input-dir", "data/organizer_test/input", "--run-dir", "runs/x"],
+        ["package", "--run-dir", "runs/x", "--expected-documents", "100"],
+    ],
+)
+def test_every_subcommand_resolves_its_prologue_on_cpu(argv: list[str]) -> None:
+    """The shared prologue - parse, load profile, resolve specs, build runtime config -
+    is what broke in Colab. Exercise it for every subcommand and both profiles."""
+    for profile in (DEFAULT_PROFILE, RESEARCH_PROFILE):
+        args = cli.build_parser().parse_args(["--config", str(profile), *argv])
+        config = cli.load_config(args.config)
+        specs = cli.resolve_specs(config)
+        assert all(s.licence_source for s in specs)
+        runtime = cli._runtime_config(config, args)
+        assert runtime.top_k_per_retriever > 0
+        assert runtime.max_candidate_context >= runtime.top_k_per_retriever

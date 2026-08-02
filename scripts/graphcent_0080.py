@@ -16,6 +16,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import re
@@ -36,6 +37,10 @@ from mednorm_vi.graphcent.models import (  # noqa: E402
 
 DEFAULT_CONFIG = REPO / "configs/pipeline/graphcent_0080.yaml"
 
+#: The only retriever fields a profile may set. Everything else - repo id, licence, licence
+#: source, pooling, expected size - is provenance and belongs to the registry alone.
+PROFILE_OVERRIDABLE: frozenset[str] = frozenset({"enabled", "roles"})
+
 
 def log(message: str) -> None:
     print(f"[0080] {message}", flush=True)
@@ -48,21 +53,29 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def resolve_specs(config: dict[str, Any]) -> list[RetrieverSpec]:
-    """Apply profile overrides to the registry without editing code."""
+    """Apply profile overrides to the registry without editing code.
+
+    `dataclasses.replace` and not a fresh `RetrieverSpec(...)`: the registry in
+    `graphcent/models.py` is the single authority for provenance (repo id, licence, licence
+    source URL, pooling, expected size). Rebuilding a spec field by field silently drops
+    whatever the profile has no opinion about, which is exactly how `licence_source` went
+    missing. A profile may only change what a profile is allowed to change.
+    """
     overrides = config.get("retrievers") or {}
     out: list[RetrieverSpec] = []
     for spec in DEFAULT_RETRIEVERS:
         row = overrides.get(spec.key) or {}
+        unknown = set(row) - PROFILE_OVERRIDABLE
+        if unknown:
+            raise SystemExit(
+                f"{spec.key}: profile may not override {sorted(unknown)}; provenance and "
+                "pooling come from the registry only."
+            )
         roles = row.get("roles")
         out.append(
-            RetrieverSpec(
-                key=spec.key,
-                repo_id=spec.repo_id,
-                licence=spec.licence,
-                pooling=spec.pooling,
+            dataclasses.replace(
+                spec,
                 role=tuple(roles) if roles else spec.role,
-                intended_domain=spec.intended_domain,
-                expected_disk_gib=spec.expected_disk_gib,
                 enabled=bool(row.get("enabled", spec.enabled)),
             )
         )
@@ -470,7 +483,8 @@ def cmd_package(args: argparse.Namespace) -> int:
     return 0 if produced else 2
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Built separately from `main` so tests can preflight a real command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -515,8 +529,11 @@ def main(argv: list[str] | None = None) -> int:
     package.add_argument("--input-dir", default="",
                          help="organizer input, so source offsets are verified exactly")
     package.set_defaults(func=cmd_package)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     _ = TierPolicy()
     return int(args.func(args))
 
