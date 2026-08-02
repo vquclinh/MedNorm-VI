@@ -116,44 +116,58 @@ def candidate_prompt(note: str, mention: str, entity_type: str, candidates: list
 
 
 VERIFY_POLICY = (
-    "PRECISION-FIRST POLICY - the public leaderboard shows over-prediction is heavily "
-    "penalised (a free-form run produced 1,644 entities against this extractor's 1,147 and "
-    "scored far worse):\n"
-    "* If you are uncertain whether something is a clinical entity, DROP it.\n"
-    "* Generic medical-sounding language is not automatically an entity.\n"
-    "* Section headers, administrative phrases and vague generic words -> DROP.\n"
-    "* Keep only explicit clinical concepts belonging to one of the five allowed types.\n"
-    "* PRESERVE the proposed type unless the context gives strong evidence for a different "
-    "allowed type.\n"
-    "* Never keep something merely to increase recall.\n"
-    "* Set an assertion flag true ONLY with affirmative contextual evidence; when unsure, "
-    "false."
+    "KEEP-FIRST POLICY - this is a CORRECTION layer, not a pruning layer:\n"
+    "* The DEFAULT for every proposal is KEEP, unchanged.\n"
+    "* If you are uncertain about a proposal, KEEP it. Uncertainty means keep.\n"
+    "* DROP only when there is strong affirmative evidence that the exact proposed phrase is "
+    "NOT a valid instance of ANY of the five organizer types.\n"
+    "* Do NOT drop a proposal merely because it is broad, uncommon, incomplete, abbreviated, "
+    "or hard to interpret. Those are normal in clinical notes and are still entities.\n"
+    "* PRESERVE the proposed type unless the context gives strong, unambiguous evidence for a "
+    "different allowed type.\n"
+    "* Change an assertion only on explicit evidence: clear negation, explicit family "
+    "attribution, or explicit historical framing. Otherwise leave assertions alone.\n"
+    "* You are not being scored on how much you remove. Removing a correct entity is a real "
+    "loss."
 )
 
 
 def verify_prompt(note: str, proposals: list[dict[str, Any]]) -> str:
-    """One prompt per document. The model returns decisions keyed by proposal id only.
+    """One prompt per document. Decisions are keyed by proposal id only.
 
-    It is never asked for text or offsets - those come from the proposal - so it cannot
-    invent a span.
+    The schema is **omission-based**: the model returns entries only for proposals it wants to
+    change, and anything it does not mention is kept exactly as extracted. That makes the
+    keep-first policy structural rather than merely instructed - a truncated, partial or
+    unparseable reply degrades toward keeping the original extraction instead of deleting it.
+    It also shortens the output enough that truncation stops being a common failure.
+
+    The model is never asked for text or offsets, so it cannot invent a span.
     """
     listed = "\n".join(
-        f'{i}. "{p.get("text", "")}" [{p.get("type", "")}]' for i, p in enumerate(proposals)
+        f'{i}. "{p.get("text", "")}" [{p.get("type", "")}]'
+        + (f" assertions={p.get('assertions')}" if p.get("assertions") else "")
+        for i, p in enumerate(proposals)
     )
     return (
-        "Verify each numbered proposal extracted from the Vietnamese clinical note.\n\n"
+        "Review each numbered proposal extracted from the Vietnamese clinical note.\n\n"
         f"{VERIFY_POLICY}\n\n"
         f"Allowed types ONLY: {', '.join(ORGANIZER_TYPES)}.\n{TYPE_GUIDE}\n\n"
         "Assertions apply ONLY to TRIỆU_CHỨNG, CHẨN_ĐOÁN, THUỐC:\n"
         "- isNegated: the note states it is absent/denied/ruled out.\n"
         "- isFamily: it belongs to a family member, not the patient.\n"
         "- isHistorical: past history, not the current episode.\n\n"
-        "RULES:\n"
-        "1. Answer for EVERY id exactly once.\n"
-        "2. Do NOT output entity text or character positions - only the id.\n"
-        "3. Do NOT add new entities. You may only keep or drop what is listed.\n\n"
-        'Return JSON: {"decisions":[{"id":0,"keep":true,"type":"TRIỆU_CHỨNG",'
-        '"assertions":{"isNegated":false,"isFamily":false,"isHistorical":false}}]}\n\n'
+        "OUTPUT RULES:\n"
+        "1. Return an entry ONLY for a proposal you want to CHANGE.\n"
+        "2. Any id you do not mention is KEPT UNCHANGED. Returning an empty list is correct "
+        "and common.\n"
+        "3. Do NOT output entity text or character positions - only the id.\n"
+        "4. Do NOT add new entities. You may only correct or drop what is listed.\n\n"
+        "Return JSON, nothing else. Examples:\n"
+        '  no changes:   {"decisions":[]}\n'
+        '  drop id 4:    {"decisions":[{"id":4,"keep":false}]}\n'
+        '  retype id 2:  {"decisions":[{"id":2,"type":"CHẨN_ĐOÁN"}]}\n'
+        '  negate id 7:  {"decisions":[{"id":7,"assertions":'
+        '{"isNegated":true,"isFamily":false,"isHistorical":false}}]}\n\n'
         f"NOTE:\n{note}\n\nPROPOSALS:\n{listed}\n"
     )
 

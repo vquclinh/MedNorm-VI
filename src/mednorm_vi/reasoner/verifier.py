@@ -33,6 +33,10 @@ INVALID_MALFORMED = "malformed_decision"
 #: Deterministic fallback when the model's reply cannot be parsed at all. Keeping the E3
 #: proposals unchanged reproduces the configuration that currently scores best (14.3749); it
 #: is the one behaviour we know the leaderboard rewards, and it invents nothing.
+#:
+#: The omission-based schema makes every partial failure degrade the same way: an id the model
+#: never mentions is kept, so truncation and malformed entries lose corrections rather than
+#: entities.
 FALLBACK_KEEP_E3 = "keep_e3_unchanged"
 
 
@@ -71,11 +75,16 @@ class VerifierDiagnostics:
 
 
 def _assertion_list(flags: Any, entity_type: str) -> tuple[list[str] | None, str | None]:
-    """(serialized assertions, invalid reason). Lab types serialize nothing."""
+    """(serialized assertions, invalid reason). Lab types serialize nothing.
+
+    ``flags is None`` means the model did not speak about this proposal's assertions, which
+    under the keep-first policy must PRESERVE the E3 values - returning `[]` here silently
+    cleared every flag the extractor had set.
+    """
     if entity_type not in ASSERTION_TYPES:
         return None, None
     if flags is None:
-        return [], None
+        return None, None
     if not isinstance(flags, dict):
         return None, INVALID_ASSERTION_VALUE
     out: list[str] = []
@@ -142,7 +151,7 @@ def apply_decisions(
         assertions, invalid = _assertion_list(flags, entity_type)
         if invalid:
             diagnostics.invalid_decisions[invalid] += 1
-            assertions, _ = _assertion_list(None, entity_type)
+            assertions = None  # fall back to the E3 values
 
         if not keep:
             diagnostics.dropped += 1
@@ -157,7 +166,8 @@ def apply_decisions(
         }
         if entity_type in ASSERTION_TYPES:
             before = list(proposal.get("assertions") or [])
-            row["assertions"] = assertions if assertions is not None else before
+            # None means "model said nothing" -> keep what E3 produced.
+            row["assertions"] = before if assertions is None else assertions
             if sorted(row["assertions"]) != sorted(before):
                 diagnostics.assertion_changes += 1
         if entity_type in CANDIDATE_TYPES:

@@ -158,14 +158,26 @@ def test_diagnostics_capture_everything_needed_to_interpret_the_result() -> None
     assert report["candidate_policy"] == "forced_all_null"
 
 
-def test_prompt_forbids_text_offsets_and_new_entities() -> None:
+def test_prompt_is_keep_first_and_forbids_new_spans() -> None:
     text = verify_prompt("note", E3)
     assert VERIFY_POLICY in text
+    lowered = text.lower()
+    assert "the default for every proposal is keep" in lowered
+    assert "uncertainty means keep" in lowered
+    assert "correction layer, not a pruning layer" in lowered
+    assert "removing a correct entity is a real loss" in lowered
+    assert "drop only when there is strong affirmative evidence" in lowered
     assert "Do NOT output entity text or character positions" in text
     assert "Do NOT add new entities" in text
-    assert "uncertain" in text.lower()
     for organizer_type in ORGANIZER_TYPES:
         assert organizer_type in text
+
+
+def test_prompt_schema_is_omission_based_to_reduce_fallbacks() -> None:
+    text = verify_prompt("note", E3)
+    assert "Return an entry ONLY for a proposal you want to CHANGE" in text
+    assert "is KEPT UNCHANGED" in text
+    assert '{"decisions":[]}' in text
 
 
 @pytest.mark.parametrize("reply", ["", "no json here", '{"decisions": "nope"}', "{bad"])
