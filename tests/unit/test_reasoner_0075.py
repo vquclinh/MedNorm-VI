@@ -128,7 +128,9 @@ def test_prompts_state_the_constraints_the_validator_enforces() -> None:
         assert organizer_type in text
     selection = candidate_prompt(NOTE, "sốt", "CHẨN_ĐOÁN", [Candidate("A", "A", "n")])
     assert "Never write a code that is not listed" in selection
-    assert "Return [] if none of them is correct" in selection
+    # Null-first (sprint 0075 #5): abstention is the documented default, not a fallback.
+    assert "Your DEFAULT answer is []" in selection
+    assert "Uncertainty means []" in selection
 
 
 def test_validation_report_counts_every_rejection_reason() -> None:

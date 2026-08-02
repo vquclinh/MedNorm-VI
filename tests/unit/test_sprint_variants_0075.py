@@ -153,3 +153,46 @@ def test_no_free_form_entity_discovery_in_variant_d() -> None:
     """cand_8b must consume the seed entities, never re-discover them."""
     text = REASONER.read_text(encoding="utf-8")
     assert 'if args.config == "cand_8b":\n            proposals = [dict(e) for e in seed]' in text
+
+
+# ------------------------------------------------- #5 null-first candidate selector policy
+
+
+def test_candidate_prompt_defaults_to_abstention() -> None:
+    """All-null scored 14.3749; the selector must beat it, so [] is the default answer."""
+    from mednorm_vi.reasoner.pool import Candidate
+    from mednorm_vi.reasoner.prompt import NULL_FIRST_POLICY, candidate_prompt
+
+    text = candidate_prompt("note", "viêm phổi", "CHẨN_ĐOÁN", [Candidate("J189", "J18.9", "x")])
+    assert NULL_FIRST_POLICY in text
+    lowered = text.lower()
+    assert "your default answer is []" in lowered
+    assert "uncertainty means []" in lowered
+    assert "you are not obliged to choose" in lowered
+    assert "superficial lexical similarity" in lowered
+    assert "false-positive code is substantially more damaging" in lowered
+    # The empty answer is shown as the example schema, not a filled list.
+    assert '{"selected":[]}' in text
+
+
+def test_candidate_prompt_still_forbids_inventing_codes() -> None:
+    from mednorm_vi.reasoner.pool import Candidate
+    from mednorm_vi.reasoner.prompt import candidate_prompt
+
+    text = candidate_prompt("n", "m", "THUỐC", [Candidate("1191", "1191", "aspirin")])
+    assert "Never write a code that is not listed" in text
+    assert "Do NOT infer" in text
+
+
+def test_null_first_policy_is_derived_from_aggregate_scores_only() -> None:
+    """Policy change from leaderboard aggregates - never from inspected labels."""
+    source = (ROOT / "src/mednorm_vi/reasoner/prompt.py").read_text(encoding="utf-8")
+    assert "No leaderboard label was inspected" in source
+    assert "9.0153" in source and "4.2570" in source and "6.4005" in source
+
+
+def test_smoke_mode_can_never_be_mistaken_for_a_submission() -> None:
+    source = REASONER.read_text(encoding="utf-8")
+    assert "--limit-documents" in source
+    assert "SMOKE TEST" in source
+    assert "NOT a submission" in source

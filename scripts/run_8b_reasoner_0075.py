@@ -184,6 +184,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--expected-documents", type=int, default=100)
+    parser.add_argument(
+        "--limit-documents",
+        type=int,
+        default=0,
+        help="smoke test only: process the first N documents. The final "
+        "document-count check is skipped, so a limited run can never "
+        "be mistaken for a submission.",
+    )
     args = parser.parse_args(argv)
 
     if args.config == "cand_8b":
@@ -255,6 +263,10 @@ def main(argv: list[str] | None = None) -> int:
     reasoner = Reasoner(args.model_root, args.device, args.max_new_tokens)
     notes = sorted(args.input_dir.glob("*"))
     notes = [p for p in notes if p.is_file()]
+    smoke = args.limit_documents > 0
+    if smoke:
+        notes = notes[: args.limit_documents]
+        log(f"SMOKE TEST: {len(notes)} documents only - NOT a submission")
     log(f"documents {len(notes)} | config {args.config}")
 
     out_dir = args.run_dir / "output_raw_dotless"
@@ -337,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     produced = sorted(out_dir.glob("*.json"))
+    if smoke:
+        log(f"smoke complete: {len(produced)} documents, {aggregate['accepted']} entities accepted")
+        return 0
     if len(produced) != args.expected_documents:
         print(
             f"BLOCKED: produced {len(produced)} documents, expected {args.expected_documents}",
