@@ -456,6 +456,7 @@ class SemanticLinkerRuntime:
             self._backend,
             ontology=ontology,
             icd_index=self.icd_v41_index if ontology == "ICD10" else None,
+            governed_index=governed,
             null_mode=self.settings.null_mode,
             limit=self.settings.candidate_limit,
         )

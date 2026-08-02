@@ -137,7 +137,10 @@ def _rx_index(names: dict[str, str], **postings: Any) -> LocalIndex:
     payload: dict[str, Any] = {
         "index_type": "rxnorm",
         "source_snapshot_id": "rx-snapshot",
-        "records": {c: {"concept_id": c, "canonical_name": n} for c, n in names.items()},
+        "records": {
+            c: {"concept_id": c, "canonical_name": n, "metadata": {"membership": "searchable"}}
+            for c, n in names.items()
+        },
         "exact": {},
         "exact_ascii": {},
         "ngrams": {},
@@ -359,6 +362,7 @@ def test_production_wrapper_matches_the_0072_hybrid_for_both_ontologies(
             ScriptedReranker(scores),
             ontology=ontology,
             icd_index=runtime.icd_v41_index if ontology == "ICD10" else None,
+            governed_index=governed,
             null_mode=hy.NULL_MODE_SHADOW,
             limit=runtime.settings.candidate_limit,
         )

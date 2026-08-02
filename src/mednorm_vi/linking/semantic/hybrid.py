@@ -36,6 +36,7 @@ from ..icd10_specificity import (
     arbitrate_order,
     compute_features,
 )
+from ..rxnorm_graph import is_closure_only
 from . import null_gate as ng
 from .reranker import RerankerBackend, rerank
 
@@ -163,6 +164,44 @@ def build_pool(
     return out
 
 
+def final_candidate_eligible(index: LocalIndex | None, concept_id: str) -> bool:
+    """May the runtime EMIT this concept, not merely reach it (Audit 0075 hotfix)?
+
+    `LocalIndex.exists` answers "is this in the snapshot", which is a weaker question. The
+    governed RxNorm KB holds 82,429 searchable concepts and 129,520 `closure_only` ones that
+    exist purely so the ingredient/product walk has somewhere to land. Lexical retrieval never
+    surfaces them - they are absent from the postings - but **dense retrieval scores every
+    document**, so the semantic path could rank one and `exists()` waved it through. L9 then
+    refused the whole submission with `kb.candidate_not_final_eligible`.
+
+    This reuses `linking.rxnorm_graph.is_closure_only`, the same predicate the lexical linker
+    applies as `DROP_CLOSURE_ONLY`, rather than defining a second notion of eligibility.
+    """
+    if index is None or not index.exists(concept_id):
+        return False
+    if index.index_type == "rxnorm" and is_closure_only(index, concept_id):
+        return False
+    return True
+
+
+def sanitize_final_candidates(
+    codes: tuple[str, ...] | list[str], index: LocalIndex | None
+) -> tuple[str, ...]:
+    """The single boundary every emitted candidate list passes through.
+
+    Order preserved, deduplicated deterministically, non-emittable ids dropped; an empty
+    result is a valid answer. This runs after reranking and hierarchy arbitration so nothing
+    downstream can reintroduce an ineligible id.
+    """
+    out: list[str] = []
+    for code in codes:
+        if code in out:
+            continue
+        if final_candidate_eligible(index, code):
+            out.append(code)
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class HybridResult:
     """A complete-system decision with every stage recoverable."""
@@ -194,6 +233,7 @@ def run_hybrid(
     *,
     ontology: str,
     icd_index: LocalIndex | None = None,
+    governed_index: LocalIndex | None = None,
     context_text: str = "",
     null_mode: str = NULL_MODE_SHADOW,
     apply_hierarchy: bool = True,
@@ -262,7 +302,8 @@ def run_hybrid(
     # SHADOW records the decision and changes nothing. That is the whole point: the first
     # zero-shot run collects reranker-aware NULL evidence so calibration can happen later,
     # locally, against the private engineering pack - without a public-tuned threshold.
-    codes = tuple(order[:limit])
+    governed = icd_index if ontology == "ICD10" else governed_index
+    codes = sanitize_final_candidates(order[:limit], governed)
     if null_mode == NULL_MODE_CONSERVATIVE and not decision.emits:
         codes = ()
 
@@ -280,6 +321,8 @@ def run_hybrid(
 
 __all__ = [
     "DEFAULT_DENSE_TOPK",
+    "final_candidate_eligible",
+    "sanitize_final_candidates",
     "DEFAULT_V3_TOPK",
     "DEFAULT_V41_TOPK",
     "HYBRID_VERSION",

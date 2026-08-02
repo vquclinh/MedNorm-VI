@@ -179,6 +179,23 @@ def test_v3_anchor_is_always_present_in_the_pool() -> None:
 # ------------------------------------------------------------- complete-system assembly
 
 
+def _rx_governed(ids: list[str]) -> LocalIndex:
+    """A minimal governed RxNorm index so the final-eligibility boundary can verify ids."""
+    return LocalIndex(
+        index_type="rxnorm",
+        source_snapshot_id="test",
+        records={
+            c: {"concept_id": c, "canonical_name": c, "metadata": {"membership": "searchable"}}
+            for c in ids
+        },
+        exact={},
+        exact_ascii={},
+        ngrams={},
+        sparse_terms={},
+        graph={},
+    )
+
+
 def _pool(ids: list[str], v3_top: str | None = None) -> list[hy.PooledCandidate]:
     return [
         hy.PooledCandidate(
@@ -268,6 +285,7 @@ def test_shadow_mode_records_but_never_changes_output() -> None:
         {"A": "A", "B": "B"},
         FixedReranker({"A": 0.9, "B": 0.1}),
         ontology="RXNORM",
+        governed_index=_rx_governed(["A", "B"]),
         null_mode=hy.NULL_MODE_SHADOW,
     )
     assert result.null_decision["decision"] == ng.DECISION_NO_VALID  # gate fired
@@ -284,6 +302,7 @@ def test_conservative_mode_applies_the_refusal() -> None:
         {"A": "A", "B": "B"},
         FixedReranker({"A": 0.9, "B": 0.1}),
         ontology="RXNORM",
+        governed_index=_rx_governed(["A", "B"]),
         null_mode=hy.NULL_MODE_CONSERVATIVE,
     )
     assert result.null_decision["decision"] == ng.DECISION_NO_VALID
@@ -301,6 +320,7 @@ def test_conservative_mode_still_protects_exact_governed_tiers() -> None:
         {"A": "A"},
         FixedReranker({"A": 0.001}),
         ontology="ICD10",
+        icd_index=_index({"A": "a"}),
         null_mode=hy.NULL_MODE_CONSERVATIVE,
         apply_hierarchy=False,
     )
