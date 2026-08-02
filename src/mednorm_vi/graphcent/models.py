@@ -13,10 +13,36 @@ on it is the same mistake in reverse. `RetrieverSpec.pooling` is what the encode
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 PARAMETER_CAP = 9_000_000_000
+
+#: A Hugging Face commit SHA. A branch name ("main") is not a revision: it moves, so a
+#: manifest recording one proves nothing about which weights ran.
+_COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+#: Local checkpoints have no Hugging Face revision. Their identity is the file digest, and
+#: it is labelled as such so nobody mistakes it for a hub commit.
+LOCAL_DIGEST_PREFIX = "sha256:"
+_LOCAL_SHA256 = re.compile(rf"^{LOCAL_DIGEST_PREFIX}[0-9a-f]{{64}}$")
+
+
+def is_hub_revision(value: str) -> bool:
+    """True only for an immutable Hugging Face commit SHA."""
+    return bool(_COMMIT_SHA.match((value or "").strip()))
+
+
+def is_local_checkpoint_revision(value: str) -> bool:
+    """True only for a labelled local checkpoint SHA256 digest."""
+    return bool(_LOCAL_SHA256.match((value or "").strip()))
+
+
+def is_pinned_revision(value: str) -> bool:
+    """True for an immutable identity: a 40-hex hub commit, or a labelled file digest."""
+    text = (value or "").strip()
+    return is_hub_revision(text) or is_local_checkpoint_revision(text)
 
 POOLING_CLS = "cls"
 POOLING_MEAN = "mean"
@@ -64,7 +90,7 @@ class RetrieverSpec:
         return {
             "key": self.key,
             "repo_id": self.repo_id,
-            "revision": self.revision or "UNRESOLVED",
+            "revision": self.revision,
             "licence": self.licence,
             "licence_source": self.licence_source,
             "licence_needs_review": self.licence_needs_review,
@@ -147,12 +173,22 @@ class LicenceReviewRequired(RuntimeError):
     """Raised when an enabled model's licence has not been explicitly cleared."""
 
 
+class RevisionNotPinned(RuntimeError):
+    """Raised when a deployed model cannot prove which exact weights it is.
+
+    Not a warning. A run whose provenance is a floating branch cannot be reproduced, and
+    a manifest that records `""` or `"main"` is worse than no manifest because it looks
+    like evidence.
+    """
+
+
 @dataclass
 class ModelManifest:
     """Resolved stack. Built at runtime; refuses to certify what it has not measured."""
 
     deployed: list[DeployedModel] = field(default_factory=list)
     retrievers: list[RetrieverSpec] = field(default_factory=list)
+    resolved_revisions: dict[str, str] = field(default_factory=dict)
     licence_overrides_accepted: tuple[str, ...] = ()
 
     @property
@@ -190,10 +226,56 @@ class ModelManifest:
                 "never silently ignored."
             )
 
+    def assert_revisions_pinned(self) -> None:
+        """Every enabled retriever and every deployed component names exact weights.
+
+        Called before the manifest is written, so a manifest that exists on disk is one
+        whose run can be reproduced. Disabled retrievers are exempt: they were never
+        acquired, and inventing a revision for them would be the opposite of provenance.
+        """
+        blocked = [
+            f"{spec.key} ({spec.revision or 'empty'})"
+            for spec in self.retrievers
+            if spec.enabled and not is_hub_revision(spec.revision)
+        ]
+        if self.resolved_revisions:
+            blocked += [
+                f"resolved_revisions.{spec.key} "
+                f"({self.resolved_revisions.get(spec.key) or 'missing'})"
+                for spec in self.retrievers
+                if spec.enabled and self.resolved_revisions.get(spec.key) != spec.revision
+            ]
+        deployed_by_name = {model.name: model for model in self.deployed}
+        blocked += [
+            f"deployed {spec.key} "
+            f"({deployed_by_name[spec.repo_id].revision or 'empty'})"
+            for spec in self.retrievers
+            if spec.enabled
+            and spec.repo_id in deployed_by_name
+            and deployed_by_name[spec.repo_id].revision != spec.revision
+        ]
+        blocked += [
+            f"{model.name} ({model.revision or 'empty'})"
+            for model in self.deployed
+            if (
+                not is_local_checkpoint_revision(model.revision)
+                if model.name == "ViHealthBERT E3"
+                else not is_hub_revision(model.revision)
+            )
+        ]
+        if blocked:
+            raise RevisionNotPinned(
+                f"these deployed models have no immutable revision: {blocked}. "
+                "Resolve the exact commit SHA before acquisition for hub models, and "
+                "record a labelled sha256 digest for local checkpoints. A branch name or "
+                "an empty string cannot identify the weights that produced a submission."
+            )
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "deployed": [m.as_dict() for m in self.deployed],
             "retrievers": [r.as_dict() for r in self.retrievers],
+            "resolved_revisions": dict(sorted(self.resolved_revisions.items())),
             "total_deployed_parameters": self.total_parameters,
             "parameter_cap": PARAMETER_CAP,
             "under_cap": self.total_parameters < PARAMETER_CAP,
@@ -210,6 +292,7 @@ def retrievers_for(specs: tuple[RetrieverSpec, ...], role: str) -> tuple[Retriev
 __all__ = [
     "DEFAULT_RETRIEVERS",
     "LICENCE_REVIEW_REQUIRED",
+    "LOCAL_DIGEST_PREFIX",
     "PARAMETER_CAP",
     "POOLINGS",
     "POOLING_CLS",
@@ -221,5 +304,9 @@ __all__ = [
     "ModelManifest",
     "ParameterBudgetExceeded",
     "RetrieverSpec",
+    "RevisionNotPinned",
+    "is_hub_revision",
+    "is_local_checkpoint_revision",
+    "is_pinned_revision",
     "retrievers_for",
 ]

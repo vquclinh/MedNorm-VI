@@ -18,7 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
-from .models import POOLING_CLS, POOLING_MEAN, RetrieverSpec
+from .models import (
+    POOLING_CLS,
+    POOLING_MEAN,
+    RetrieverSpec,
+    RevisionNotPinned,
+    is_hub_revision,
+)
 
 DEFAULT_MAX_LENGTH = 64
 DEFAULT_BATCH_SIZE = 256
@@ -62,17 +68,29 @@ class _TransformerEncoder:
     def load(self) -> None:
         if self._model is not None:
             return
+        if not is_hub_revision(self.spec.revision):
+            raise RevisionNotPinned(
+                f"{self.spec.key}: encoder load requires an immutable hub commit, got "
+                f"{self.spec.revision or 'empty'}"
+            )
         import torch
         from transformers import AutoConfig, AutoModel, AutoTokenizer
 
         source = self._source()
-        self._tokenizer = AutoTokenizer.from_pretrained(source)
+        # A pinned revision only means anything when loading from the hub; a local snapshot
+        # directory is already one exact revision and rejects the argument.
+        pin: dict[str, Any] = (
+            {"revision": self.spec.revision}
+            if self.spec.revision and source == self.spec.repo_id
+            else {}
+        )
+        self._tokenizer = AutoTokenizer.from_pretrained(source, **pin)
         dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
-        model = AutoModel.from_pretrained(source, torch_dtype=dtype)
+        model = AutoModel.from_pretrained(source, torch_dtype=dtype, **pin)
         self._model = model.to(self.device).eval()
-        config = AutoConfig.from_pretrained(source)
+        config = AutoConfig.from_pretrained(source, **pin)
         self._dim = int(config.hidden_size)
-        self._resolved_revision = str(getattr(config, "_commit_hash", "") or "")
+        self._resolved_revision = self.spec.revision
         self._meta = {"parameters": sum(p.numel() for p in model.parameters())}
 
     def parameter_count(self) -> int:

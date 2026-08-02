@@ -27,7 +27,9 @@ from typing import Any, Protocol
 from ..kb.indexing.normalization import normalize_text
 from ..kb.indexing.retrieval import LocalIndex, search_index
 from ..kb.rxnorm.structured import StructuredDrug, parse_strengths
+from ..reasoner.budget import QWEN3_8B_REVISION
 from ..reasoner.validator import CANDIDATE_TYPES
+from .acquisition import file_digest
 from .disambiguation import (
     NULL_DECISION,
     VARIANTS,
@@ -41,6 +43,8 @@ from .models import (
     DeployedModel,
     ModelManifest,
     RetrieverSpec,
+    RevisionNotPinned,
+    is_hub_revision,
 )
 from .ontology import (
     ONTOLOGY_ICD,
@@ -221,13 +225,20 @@ def build_index_for(
     encoder_factory: Any = build_encoder,
 ) -> CachedIndex:
     """Embed the governed corpus with one retriever, then release it."""
+    if not is_hub_revision(spec.revision):
+        raise RevisionNotPinned(
+            f"{spec.key}: refusing to build a cache against revision "
+            f"{spec.revision or 'empty'}. An index whose model identity is unknown "
+            "cannot be validated on reload; run download-models first so the pinned "
+            "revision is recorded."
+        )
     encoder = encoder_factory(spec, config.model_root, config.device)
     started = time.time()
     log(f"{spec.key}: embedding {len(documents):,} governed documents")
     vectors = encoder.encode(
         [d.text for d in documents], batch_size=config.embed_batch_size
     )
-    revision = getattr(encoder, "resolved_revision", "") or spec.revision
+    revision = spec.revision
     dim = int(vectors.shape[1]) if len(vectors) else 0
     encoder.unload()
     log(f"{spec.key}: done in {time.time() - started:.1f}s, dim {dim}")
@@ -399,9 +410,15 @@ def certify_budget(
         if not spec.enabled:
             resolved.append(spec)
             continue
+        if not is_hub_revision(spec.revision):
+            raise RevisionNotPinned(
+                f"{spec.key}: refusing to certify a retriever without an immutable hub "
+                f"commit ({spec.revision or 'empty'}). Run download-models first."
+            )
         encoder = encoder_factory(spec, config.model_root, config.device)
         count = encoder.parameter_count()
-        revision = getattr(encoder, "resolved_revision", "")
+        # The acquisition pin is authoritative: it is what the weights were downloaded at.
+        revision = spec.revision
         dim = getattr(encoder, "embedding_dim", 0)
         encoder.unload()
         import dataclasses
@@ -428,20 +445,35 @@ def certify_budget(
             DeployedModel(
                 "ViHealthBERT E3",
                 sum(v.numel() for v in state.values() if hasattr(v, "numel")),
+                # A local checkpoint has no hub commit. Its file digest is the only
+                # immutable identity it has, and it is labelled so it cannot be mistaken
+                # for one.
+                revision=file_digest(e3_checkpoint),
                 role="mention expert",
             )
         )
     if qwen is not None:
         manifest.deployed.append(
-            DeployedModel("Qwen/Qwen3-8B", qwen.parameter_count(), role="disambiguator")
+            DeployedModel(
+                "Qwen/Qwen3-8B",
+                qwen.parameter_count(),
+                # The pin the reasoner budget module already treats as authoritative for
+                # this repo, and the revision the runbook downloads.
+                revision=QWEN3_8B_REVISION,
+                role="disambiguator",
+            )
         )
 
     manifest.assert_licences_cleared()
+    manifest.resolved_revisions = {
+        spec.key: spec.revision for spec in manifest.retrievers if spec.enabled
+    }
+    manifest.assert_revisions_pinned()
     total = manifest.assert_within_cap()
     log("DEPLOYED PARAMETER TABLE")
     for model in manifest.deployed:
-        log(f"  {model.name:58s} {model.parameter_count:>15,}")
-    log(f"  {'TOTAL':58s} {total:>15,}  (cap 9,000,000,000)")
+        log(f"  {model.name:48s} {model.parameter_count:>15,}  {model.revision or '-'}")
+    log(f"  {'TOTAL':48s} {total:>15,}  (cap 9,000,000,000)")
     return manifest
 
 

@@ -73,9 +73,19 @@ python scripts/graphcent_0080.py download-models \
 cat /content/graphcent_models/model-manifest.json
 ```
 
-Prints per model: resolved revision (read from the downloaded snapshot, never assumed),
-licence, **measured** parameter count and embedding dim — then the summed total, hard-failing
-at ≥ 9,000,000,000. An unmeasured count is a failure, not a zero.
+The exact commit SHA is resolved from the hub **before** anything is fetched, and the download
+happens at that SHA — acquisition is pinned, not annotated afterwards. The SHA is then written
+to the retriever entry, `resolved_revisions`, and the deployed-model entry. A model that cannot
+produce an immutable SHA is refused; an empty revision or a branch name is never accepted.
+
+Re-running this cell reuses the SHA already recorded in `model-manifest.json` instead of
+resolving a new HEAD, so a second run reproduces the first. `snapshot_download` skips files
+already present, so nothing is re-downloaded.
+
+Prints per model: resolved revision, licence, **measured** parameter count and embedding dim —
+then the summed total, hard-failing at ≥ 9,000,000,000. An unmeasured count is a failure, not
+a zero. Local components are recorded too: the E3 checkpoint by `sha256:` file digest (it has
+no hub commit) and Qwen3-8B at the revision this repo pins.
 
 ### Licences, as recorded on the model cards
 
@@ -107,10 +117,15 @@ python scripts/graphcent_0080.py build-index --allow-download \
   --model-root /content/graphcent_models --cache-root /content/graphcent_cache
 ```
 
+`build-index`, `smoke` and `run` all read the pinned revision back from
+`model-manifest.json` and refuse to start without it, so every stage runs against the same
+snapshot `download-models` acquired. Run cell 3 first.
+
 One cache per retriever — pooling and tokenisation differ, so they are not interchangeable
 (SapBERT and ClinLinker are read at CLS; the BioBERT sentence model is mean-pooled). Each
-cache carries the document checksum, **row-order checksum**, pooling, dtype and shape, and
-retrieval refuses to start if any disagrees. Each encoder is unloaded before the next loads.
+cache carries the document checksum, **row-order checksum**, pooling, model repo, **model
+revision**, dtype and shape, and retrieval refuses to start if any disagrees — including a
+cache built by a different snapshot of the same model. Each encoder is unloaded before the next loads.
 
 ## Cell 5 — smoke on 3 documents
 

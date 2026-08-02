@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from mednorm_vi.graphcent import acquisition as ga  # noqa: E402
 from mednorm_vi.graphcent import models as gm  # noqa: E402
 from mednorm_vi.graphcent import ontology as go  # noqa: E402
 from mednorm_vi.graphcent import spans as gs  # noqa: E402
@@ -135,7 +138,7 @@ def _index(documents: list[KbDocument], vectors: Any, spec: gm.RetrieverSpec) ->
         vectors=vectors,
         manifest=CacheManifest(
             model_repo=spec.repo_id,
-            revision="r",
+            revision=spec.revision,
             pooling=spec.pooling,
             normalized=True,
             document_checksum=checksum([d.text for d in documents]),
@@ -153,7 +156,9 @@ DOCS = [
     KbDocument("1191", "RXNORM", "aspirin"),
 ]
 VECS = torch.eye(3)[:, :2]
-SPEC = gm.DEFAULT_RETRIEVERS[0]
+PIN_A = "a" * 40
+PIN_B = "b" * 40
+SPEC = dataclasses.replace(gm.DEFAULT_RETRIEVERS[0], revision=PIN_A)
 
 
 def test_valid_cache_passes_and_retrieval_is_ontology_scoped() -> None:
@@ -180,10 +185,53 @@ def test_changed_document_text_is_refused() -> None:
 
 def test_wrong_pooling_in_the_cache_is_refused() -> None:
     index = _index(DOCS, VECS, SPEC)
-    import dataclasses
 
     index.manifest = dataclasses.replace(index.manifest, pooling=gm.POOLING_MEAN)
     with pytest.raises(CacheMismatch, match="pooled with"):
+        index.validate()
+
+
+def test_wrong_model_repo_in_the_cache_is_refused() -> None:
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, model_repo="other/repo")
+    with pytest.raises(CacheMismatch, match="cache built from"):
+        index.validate()
+
+
+def test_wrong_cache_revision_is_refused() -> None:
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, revision=PIN_B)
+    with pytest.raises(CacheMismatch, match="cache built at revision"):
+        index.validate()
+
+
+def test_unpinned_cache_revision_is_refused() -> None:
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, revision="main")
+    with pytest.raises(CacheMismatch, match="cache revision"):
+        index.validate()
+
+
+def test_unpinned_spec_revision_is_refused() -> None:
+    index = _index(DOCS, VECS, dataclasses.replace(SPEC, revision=""))
+    with pytest.raises(CacheMismatch, match="spec revision"):
+        index.validate()
+
+
+def test_cache_shape_dtype_and_normalization_are_verified() -> None:
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, dim=3)
+    with pytest.raises(CacheMismatch, match="tensor has dim"):
+        index.validate()
+
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, dtype="torch.float16")
+    with pytest.raises(CacheMismatch, match="tensor dtype"):
+        index.validate()
+
+    index = _index(DOCS, VECS, SPEC)
+    index.manifest = dataclasses.replace(index.manifest, normalized=False)
+    with pytest.raises(CacheMismatch, match="normalized"):
         index.validate()
 
 
@@ -519,7 +567,6 @@ def test_config_declares_the_licence_gate_and_pooling_warning() -> None:
 
 # ============================ completed runtime (fakes, no weights) ============================
 
-import dataclasses  # noqa: E402
 import importlib.util  # noqa: E402
 
 from mednorm_vi.graphcent import encoders as ge  # noqa: E402
@@ -540,7 +587,7 @@ class FakeRetrieverEncoder:
 
     def __init__(self, spec: gm.RetrieverSpec, model_root: Path, device: str = "cuda",
                  **kwargs: Any) -> None:
-        self.spec, self.resolved_revision, self.embedding_dim = spec, f"rev-{spec.key}", 2
+        self.spec, self.resolved_revision, self.embedding_dim = spec, fake_sha(spec.key), 2
         self.loaded = False
 
     def encode(self, texts: Any, batch_size: int | None = None) -> Any:
@@ -557,6 +604,22 @@ class FakeRetrieverEncoder:
         FakeRetrieverEncoder.events.append(f"unload:{self.spec.key}")
 
 
+def fake_sha(key: str) -> str:
+    """A deterministic 40-hex stand-in for a hub commit, so fakes are pinned like the real
+    thing. Production refuses an unpinned spec, and tests must not be exempt from that."""
+    import hashlib
+
+    return hashlib.sha1(key.encode()).hexdigest()
+
+
+def pinned(specs: Sequence[gm.RetrieverSpec]) -> list[gm.RetrieverSpec]:
+    return [dataclasses.replace(s, revision=fake_sha(s.key)) for s in specs]
+
+
+def enabled_specs() -> list[gm.RetrieverSpec]:
+    return pinned([s for s in gm.DEFAULT_RETRIEVERS if s.enabled])
+
+
 class FakeQwen:
     def __init__(self, reply: str = '{"decision":"NULL"}') -> None:
         self.reply, self.prompts, self.unloads = reply, [], 0
@@ -564,6 +627,11 @@ class FakeQwen:
     def ask(self, prompt: str) -> str:
         self.prompts.append(prompt)
         return self.reply
+
+    def parameter_count(self) -> int:
+        from mednorm_vi.reasoner.budget import QWEN3_8B_PARAMETERS
+
+        return QWEN3_8B_PARAMETERS
 
     def unload(self) -> None:
         self.unloads += 1
@@ -606,7 +674,10 @@ def test_production_commands_are_implemented_not_stubs() -> None:
                     "cmd_package"):
         assert f"def {command}(" in source
     # each command body does real work, not logging
-    assert "snapshot_download(" in source
+    assert "acquire(" in source                    # resolves + downloads at a pinned SHA
+    assert "snapshot_download(" in (
+        ROOT / "src/mednorm_vi/graphcent/acquisition.py"
+    ).read_text(encoding="utf-8")
     assert "build_index_for(" in source
     assert "run_documents(" in source
     assert "write_variants(" in source
@@ -634,30 +705,30 @@ def test_index_build_writes_a_validated_cache_and_unloads(tmp_path: Path) -> Non
     _, _, documents = _tiny_kb()
     config = _config(tmp_path)
     index = gr.build_index_for(
-        gm.DEFAULT_RETRIEVERS[0], documents, config, encoder_factory=FakeRetrieverEncoder
+        pinned([gm.DEFAULT_RETRIEVERS[0]])[0], documents, config,
+        encoder_factory=FakeRetrieverEncoder,
     )
     index.validate()
     assert gr.cache_path(config.cache_root, "sapbert_xlmr").with_suffix(".pt").is_file()
     assert "unload:sapbert_xlmr" in FakeRetrieverEncoder.events
-    restored = gr.load_index(gm.DEFAULT_RETRIEVERS[0], documents, config)
+    restored = gr.load_index(pinned([gm.DEFAULT_RETRIEVERS[0]])[0], documents, config)
     assert restored.manifest.row_order_checksum == index.manifest.row_order_checksum
 
 
 def test_reordered_documents_break_cache_reload(tmp_path: Path) -> None:
     _, _, documents = _tiny_kb()
     config = _config(tmp_path)
-    gr.build_index_for(
-        gm.DEFAULT_RETRIEVERS[0], documents, config, encoder_factory=FakeRetrieverEncoder
-    )
+    spec = pinned([gm.DEFAULT_RETRIEVERS[0]])[0]
+    gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
     with pytest.raises(CacheMismatch):
-        gr.load_index(gm.DEFAULT_RETRIEVERS[0], list(reversed(documents)), config)
+        gr.load_index(spec, list(reversed(documents)), config)
 
 
 def test_disabled_retriever_is_never_loaded(tmp_path: Path) -> None:
     FakeRetrieverEncoder.events = []
     icd, rx, documents = _tiny_kb()
     config = _config(tmp_path)
-    specs = [s for s in gm.DEFAULT_RETRIEVERS if s.enabled]  # biobert disabled by default
+    specs = enabled_specs()  # biobert disabled by default
     for spec in specs:
         gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
     assert not any("biobert_mnli" in event for event in FakeRetrieverEncoder.events)
@@ -668,7 +739,7 @@ def test_retrieval_precompute_loads_each_model_once_then_unloads(tmp_path: Path)
     FakeRetrieverEncoder.events = []
     icd, rx, documents = _tiny_kb()
     config = _config(tmp_path)
-    specs = [s for s in gm.DEFAULT_RETRIEVERS if s.enabled]
+    specs = enabled_specs()
     for spec in specs:
         gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
     FakeRetrieverEncoder.events = []
@@ -684,7 +755,7 @@ def test_retrieval_precompute_loads_each_model_once_then_unloads(tmp_path: Path)
 def test_one_pass_derives_all_four_variants_without_rerunning_qwen(tmp_path: Path) -> None:
     icd, rx, documents = _tiny_kb()
     config = _config(tmp_path)
-    for spec in (s for s in gm.DEFAULT_RETRIEVERS if s.enabled):
+    for spec in enabled_specs():
         gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
 
     note = "Bệnh nhân viêm phổi, dùng aspirin."
@@ -697,7 +768,7 @@ def test_one_pass_derives_all_four_variants_without_rerunning_qwen(tmp_path: Pat
     ]}
     qwen = FakeQwen('{"decision":"SELECT","candidate_ids":["J189"]}')
     outcome = gr.run_documents(
-        {"1": note}, seeds, [s for s in gm.DEFAULT_RETRIEVERS if s.enabled],
+        {"1": note}, seeds, enabled_specs(),
         documents, config, icd_index=icd, rxnorm_index=rx, structured={},
         disambiguator=qwen, encoder_factory=FakeRetrieverEncoder,
     )
@@ -712,14 +783,14 @@ def test_one_pass_derives_all_four_variants_without_rerunning_qwen(tmp_path: Pat
 def test_qwen_only_ever_sees_governed_candidates(tmp_path: Path) -> None:
     icd, rx, documents = _tiny_kb()
     config = _config(tmp_path)
-    for spec in (s for s in gm.DEFAULT_RETRIEVERS if s.enabled):
+    for spec in enabled_specs():
         gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
     note = "viêm phổi"
     seeds = {"1": [{"text": "viêm phổi", "type": "CHẨN_ĐOÁN", "position": [0, 9],
                     "assertions": []}]}
     qwen = FakeQwen()
     gr.run_documents(
-        {"1": note}, seeds, [s for s in gm.DEFAULT_RETRIEVERS if s.enabled], documents,
+        {"1": note}, seeds, enabled_specs(), documents,
         config, icd_index=icd, rxnorm_index=rx, structured={}, disambiguator=qwen,
         encoder_factory=FakeRetrieverEncoder,
     )
@@ -743,7 +814,7 @@ def test_budget_counts_every_enabled_model_even_though_loading_is_sequential(
 ) -> None:
     config = _config(tmp_path)
     manifest = gr.certify_budget(
-        [s for s in gm.DEFAULT_RETRIEVERS if s.enabled], config,
+        enabled_specs(), config,
         e3_checkpoint=None, qwen=None, encoder_factory=FakeRetrieverEncoder,
     )
     assert len(manifest.deployed) == 2          # both enabled retrievers counted
@@ -751,14 +822,44 @@ def test_budget_counts_every_enabled_model_even_though_loading_is_sequential(
     assert manifest.assert_within_cap() < gm.PARAMETER_CAP
 
 
+def test_budget_refuses_an_unpinned_retriever(tmp_path: Path) -> None:
+    with pytest.raises(gm.RevisionNotPinned, match="without an immutable hub commit"):
+        gr.certify_budget(
+            [gm.DEFAULT_RETRIEVERS[0]], _config(tmp_path),
+            e3_checkpoint=None, qwen=None, encoder_factory=FakeRetrieverEncoder,
+        )
+
+
 def test_runtime_manifest_records_resolved_revisions(tmp_path: Path) -> None:
     config = _config(tmp_path)
     manifest = gr.certify_budget(
-        [gm.DEFAULT_RETRIEVERS[0]], config, e3_checkpoint=None, qwen=None,
+        pinned([gm.DEFAULT_RETRIEVERS[0]]), config, e3_checkpoint=None, qwen=None,
         encoder_factory=FakeRetrieverEncoder,
     )
-    assert manifest.retrievers[0].revision == "rev-sapbert_xlmr"
-    assert manifest.as_dict()["retrievers"][0]["revision"] == "rev-sapbert_xlmr"
+    sha = fake_sha("sapbert_xlmr")
+    assert manifest.retrievers[0].revision == sha
+    assert manifest.as_dict()["retrievers"][0]["revision"] == sha
+    assert manifest.as_dict()["resolved_revisions"] == {"sapbert_xlmr": sha}
+    assert manifest.deployed[0].revision == sha
+    manifest.assert_revisions_pinned()
+
+
+def test_manifest_records_e3_digest_and_qwen_revision(tmp_path: Path) -> None:
+    from mednorm_vi.reasoner.budget import QWEN3_8B_PARAMETERS, QWEN3_8B_REVISION
+
+    checkpoint = tmp_path / "best.pt"
+    torch.save({"model_state_dict": {"w": torch.ones(2, 3)}}, checkpoint)
+
+    manifest = gr.certify_budget(
+        [], _config(tmp_path), e3_checkpoint=checkpoint, qwen=FakeQwen(),
+        encoder_factory=FakeRetrieverEncoder,
+    )
+    by_name = {row["name"]: row for row in manifest.as_dict()["deployed"]}
+    assert by_name["ViHealthBERT E3"]["parameter_count"] == 6
+    assert by_name["ViHealthBERT E3"]["revision"] == ga.file_digest(checkpoint)
+    assert by_name["Qwen/Qwen3-8B"]["parameter_count"] == QWEN3_8B_PARAMETERS
+    assert by_name["Qwen/Qwen3-8B"]["revision"] == QWEN3_8B_REVISION
+    manifest.assert_revisions_pinned()
 
 
 def test_default_profile_disables_the_non_commercial_model() -> None:
@@ -968,18 +1069,23 @@ def _preflight_adapters() -> dict[str, Any]:
 def _run_download_models(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: Path
 ) -> dict[str, Any]:
-    """Execute the real `download-models` body up to the download/GPU boundary."""
-    fetched: list[str] = []
+    """Execute the real `download-models` body up to the download/GPU boundary.
 
-    def fake_snapshot_download(repo_id: str, revision: str | None = None,
+    The hub is mocked at both call sites - resolution and download - so no network is
+    touched and the SHA that acquisition resolves can be followed all the way to disk.
+    """
+    fetched: list[tuple[str, str]] = []
+
+    def fake_snapshot_download(repo_id: str, revision: str = "",
                                local_dir: str = "", **kwargs: Any) -> str:
-        fetched.append(repo_id)
+        fetched.append((repo_id, revision))
         Path(local_dir).mkdir(parents=True, exist_ok=True)
         return local_dir
 
     import huggingface_hub
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(huggingface_hub, "model_info", fake_model_info)
     monkeypatch.setattr(cli, "require_host", lambda *a, **k: 24.0)
     monkeypatch.setattr(ge, "ENCODER_BY_KEY", _preflight_adapters())
 
@@ -1001,10 +1107,17 @@ def test_preflight_download_models_default_profile(
 
     # exactly the enabled models were fetched; the non-commercial one was never touched
     assert manifest["_fetched"] == [
-        "cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR",
-        "ICB-UMA/ClinLinker-KB-GP",
+        ("cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR",
+         hub_sha("cambridgeltl/SapBERT-UMLS-2020AB-all-lang-from-XLMR")),
+        ("ICB-UMA/ClinLinker-KB-GP", hub_sha("ICB-UMA/ClinLinker-KB-GP")),
     ]
     keys = {r["key"]: r for r in manifest["retrievers"]}
+    deployed = {m["name"]: m for m in manifest["deployed"]}
+    for key in ("sapbert_xlmr", "clinlinker_kb_gp"):
+        sha = hub_sha(keys[key]["repo_id"])
+        assert keys[key]["revision"] == sha
+        assert manifest["resolved_revisions"][key] == sha
+        assert deployed[keys[key]["repo_id"]]["revision"] == sha
     assert all(r["licence_source"] for r in keys.values())
     assert keys["biobert_mnli"]["enabled"] is False
     assert keys["biobert_mnli"]["parameter_count"] is None      # never measured, never loaded
@@ -1022,6 +1135,7 @@ def test_preflight_download_models_research_profile(
 ) -> None:
     manifest = _run_download_models(monkeypatch, tmp_path, RESEARCH_PROFILE)
     assert len(manifest["_fetched"]) == 3
+    assert all(gm.is_pinned_revision(revision) for _, revision in manifest["_fetched"])
     assert manifest["licence_overrides_accepted"] == ["biobert_mnli"]
     assert all(r["licence_source"] for r in manifest["retrievers"])
 
@@ -1083,3 +1197,245 @@ def test_every_subcommand_resolves_its_prologue_on_cpu(argv: list[str]) -> None:
         runtime = cli._runtime_config(config, args)
         assert runtime.top_k_per_retriever > 0
         assert runtime.max_candidate_context >= runtime.top_k_per_retriever
+
+
+# ========================== revision pinning (regression: UNRESOLVED manifest) ================
+
+
+def hub_sha(repo_id: str) -> str:
+    """A deterministic stand-in for the SHA the hub would return for a repo."""
+    import hashlib
+
+    return hashlib.sha1(f"hub::{repo_id}".encode()).hexdigest()
+
+
+class FakeInfo:
+    def __init__(self, sha: str) -> None:
+        self.sha = sha
+
+
+def fake_model_info(repo_id: str, revision: str | None = None) -> FakeInfo:
+    return FakeInfo(hub_sha(repo_id))
+
+
+def test_revision_resolution_returns_an_immutable_commit_sha() -> None:
+    spec = gm.DEFAULT_RETRIEVERS[0]
+    sha = ga.resolve_revision(spec, info_fn=fake_model_info)
+    assert sha == hub_sha(spec.repo_id)
+    assert gm.is_pinned_revision(sha)
+    assert len(sha) == 40
+
+
+@pytest.mark.parametrize("returned", ["", "main", "refs/heads/main", "abc123", None])
+def test_a_floating_or_empty_revision_is_refused(returned: str | None) -> None:
+    def info(repo_id: str, revision: str | None = None) -> Any:
+        return FakeInfo(returned)  # type: ignore[arg-type]
+
+    with pytest.raises(gm.RevisionNotPinned, match="immutable commit SHA"):
+        ga.resolve_revision(gm.DEFAULT_RETRIEVERS[0], info_fn=info)
+
+
+def test_a_hub_failure_is_a_refusal_not_a_fallback() -> None:
+    def info(repo_id: str, revision: str | None = None) -> Any:
+        raise OSError("no network")
+
+    with pytest.raises(gm.RevisionNotPinned, match="could not resolve"):
+        ga.resolve_revision(gm.DEFAULT_RETRIEVERS[0], info_fn=info)
+
+
+def test_an_already_pinned_revision_is_reused_and_the_hub_is_not_asked() -> None:
+    asked: list[str] = []
+
+    def info(repo_id: str, revision: str | None = None) -> Any:
+        asked.append(repo_id)
+        return FakeInfo(hub_sha(repo_id))
+
+    existing = fake_sha("sapbert_xlmr")
+    assert ga.resolve_revision(
+        gm.DEFAULT_RETRIEVERS[0], cached=existing, info_fn=info
+    ) == existing
+    assert asked == []                      # no floating HEAD lookup on a repeat run
+
+
+def test_pinned_revisions_are_read_back_from_an_existing_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    root.mkdir()
+    (root / ga.MANIFEST_NAME).write_text(json.dumps({
+        "retrievers": [
+            {"key": "sapbert_xlmr", "revision": fake_sha("sapbert_xlmr")},
+            {"key": "biobert_mnli", "revision": ""},            # not pinned -> ignored
+            {"key": "clinlinker_kb_gp", "revision": "main"},    # floating -> ignored
+        ],
+        "resolved_revisions": {"clinlinker_kb_gp": fake_sha("clinlinker_kb_gp")},
+    }), encoding="utf-8")
+    recorded = ga.read_pinned_revisions(root)
+    assert recorded == {
+        "sapbert_xlmr": fake_sha("sapbert_xlmr"),
+        "clinlinker_kb_gp": fake_sha("clinlinker_kb_gp"),
+    }
+    assert ga.read_pinned_revisions(tmp_path / "absent") == {}
+
+
+def test_conflicting_existing_pins_are_refused(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    root.mkdir()
+    (root / ga.MANIFEST_NAME).write_text(json.dumps({
+        "retrievers": [{"key": "sapbert_xlmr", "revision": PIN_A}],
+        "resolved_revisions": {"sapbert_xlmr": PIN_B},
+    }), encoding="utf-8")
+    with pytest.raises(gm.RevisionNotPinned, match="conflicting pinned revisions"):
+        ga.read_pinned_revisions(root)
+
+
+def test_acquire_downloads_at_the_resolved_sha_and_skips_disabled_models(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, str]] = []
+
+    def download(repo_id: str, revision: str, local_dir: str) -> str:
+        calls.append({"repo_id": repo_id, "revision": revision, "local_dir": local_dir})
+        return local_dir
+
+    specs = ga.acquire(
+        list(gm.DEFAULT_RETRIEVERS), tmp_path / "models",
+        info_fn=fake_model_info, download_fn=download,
+    )
+    by_key = {s.key: s for s in specs}
+    assert by_key["sapbert_xlmr"].revision == hub_sha(by_key["sapbert_xlmr"].repo_id)
+    assert by_key["clinlinker_kb_gp"].revision == hub_sha(by_key["clinlinker_kb_gp"].repo_id)
+    assert by_key["biobert_mnli"].revision == ""        # disabled: never resolved or fetched
+    assert [c["repo_id"] for c in calls] == [
+        by_key["sapbert_xlmr"].repo_id, by_key["clinlinker_kb_gp"].repo_id
+    ]
+    for call in calls:
+        assert gm.is_pinned_revision(call["revision"])
+
+
+def test_acquire_reuses_the_recorded_pin_on_a_second_run(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    root.mkdir()
+    (root / ga.MANIFEST_NAME).write_text(json.dumps({
+        "resolved_revisions": {"sapbert_xlmr": fake_sha("sapbert_xlmr")},
+    }), encoding="utf-8")
+    asked: list[str] = []
+
+    def info(repo_id: str, revision: str | None = None) -> Any:
+        asked.append(repo_id)
+        return FakeInfo(hub_sha(repo_id))
+
+    specs = ga.acquire(
+        [gm.DEFAULT_RETRIEVERS[0]], root, info_fn=info, download_fn=lambda **k: "",
+    )
+    assert specs[0].revision == fake_sha("sapbert_xlmr")
+    assert asked == []
+
+
+def test_manifest_refuses_to_be_written_without_pinned_revisions() -> None:
+    unpinned = dataclasses.replace(gm.DEFAULT_RETRIEVERS[0], revision="")
+    with pytest.raises(gm.RevisionNotPinned, match="no immutable revision"):
+        gm.ModelManifest(retrievers=[unpinned]).assert_revisions_pinned()
+
+    floating = dataclasses.replace(gm.DEFAULT_RETRIEVERS[0], revision="main")
+    with pytest.raises(gm.RevisionNotPinned):
+        gm.ModelManifest(retrievers=[floating]).assert_revisions_pinned()
+
+    # a disabled retriever was never acquired, so it has nothing to pin
+    gm.ModelManifest(
+        retrievers=[dataclasses.replace(unpinned, enabled=False)]
+    ).assert_revisions_pinned()
+
+    with pytest.raises(gm.RevisionNotPinned):
+        gm.ModelManifest(
+            deployed=[gm.DeployedModel("Qwen/Qwen3-8B", 8_190_735_360)]
+        ).assert_revisions_pinned()
+
+
+def test_local_checkpoint_identity_is_a_labelled_digest(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"weights")
+    digest = ga.file_digest(checkpoint)
+    assert digest.startswith(gm.LOCAL_DIGEST_PREFIX)
+    assert gm.is_pinned_revision(digest)
+    assert gm.is_local_checkpoint_revision(digest)
+    assert not gm.is_pinned_revision(gm.LOCAL_DIGEST_PREFIX)      # prefix alone proves nothing
+    assert not gm.is_pinned_revision(f"{gm.LOCAL_DIGEST_PREFIX}{'g' * 64}")
+    assert not gm.is_pinned_revision(f"{gm.LOCAL_DIGEST_PREFIX}{'a' * 63}")
+    assert not gm.is_local_checkpoint_revision(PIN_A)             # hub SHA != local digest
+
+
+def test_cache_manifest_records_the_same_sha_as_the_deployed_model(tmp_path: Path) -> None:
+    _, _, documents = _tiny_kb()
+    config = _config(tmp_path)
+    spec = pinned([gm.DEFAULT_RETRIEVERS[0]])[0]
+    index = gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
+    assert index.manifest.revision == spec.revision
+    assert index.manifest.model_repo == spec.repo_id
+
+    written = json.loads(
+        gr.cache_path(config.cache_root, spec.key)
+        .with_suffix(".manifest.json").read_text(encoding="utf-8")
+    )
+    assert written["revision"] == spec.revision
+
+
+def test_an_index_built_by_other_weights_is_refused(tmp_path: Path) -> None:
+    _, _, documents = _tiny_kb()
+    config = _config(tmp_path)
+    spec = pinned([gm.DEFAULT_RETRIEVERS[0]])[0]
+    gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
+    moved = dataclasses.replace(spec, revision=fake_sha("some other snapshot"))
+    with pytest.raises(CacheMismatch, match="cache built at revision"):
+        gr.load_index(moved, documents, config)
+
+
+class UnpinnedEncoder(FakeRetrieverEncoder):
+    """Reports no revision, exactly like a real encoder loaded from a local snapshot dir."""
+
+    def __init__(self, spec: gm.RetrieverSpec, model_root: Path, device: str = "cuda",
+                 **kwargs: Any) -> None:
+        super().__init__(spec, model_root, device, **kwargs)
+        self.resolved_revision = ""
+
+
+def test_an_unpinned_spec_cannot_build_an_index(tmp_path: Path) -> None:
+    """The exact Colab situation: weights on disk, no revision anyone can name."""
+    _, _, documents = _tiny_kb()
+    with pytest.raises(gm.RevisionNotPinned, match="refusing to build a cache"):
+        gr.build_index_for(
+            gm.DEFAULT_RETRIEVERS[0], documents, _config(tmp_path),
+            encoder_factory=UnpinnedEncoder,
+        )
+
+
+def test_downstream_stages_refuse_to_run_before_download_models(tmp_path: Path) -> None:
+    with pytest.raises(gm.RevisionNotPinned, match="Run download-models first"):
+        cli.pin_specs(cli.resolve_specs(cli.load_config(DEFAULT_PROFILE)), tmp_path)
+
+
+def test_downstream_stages_adopt_the_recorded_pin(tmp_path: Path) -> None:
+    root = tmp_path / "models"
+    root.mkdir()
+    (root / ga.MANIFEST_NAME).write_text(json.dumps({
+        "resolved_revisions": {
+            "sapbert_xlmr": fake_sha("sapbert_xlmr"),
+            "clinlinker_kb_gp": fake_sha("clinlinker_kb_gp"),
+        },
+    }), encoding="utf-8")
+    specs = {s.key: s for s in cli.pin_specs(
+        cli.resolve_specs(cli.load_config(DEFAULT_PROFILE)), root
+    )}
+    assert specs["sapbert_xlmr"].revision == fake_sha("sapbert_xlmr")
+    assert specs["clinlinker_kb_gp"].revision == fake_sha("clinlinker_kb_gp")
+    assert specs["biobert_mnli"].revision == ""       # disabled, nothing to pin
+
+
+def test_no_unresolved_placeholder_survives_anywhere_in_graphcent() -> None:
+    paths = [
+        *sorted((ROOT / "src/mednorm_vi/graphcent").glob("*.py")),
+        ROOT / "scripts/graphcent_0080.py",
+    ]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "UNRESOLVED" not in text, path.name
+        assert 'revision="main"' not in text, path.name
+        assert "revision='main'" not in text, path.name

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .models import POOLING_CLS, POOLING_MEAN, RetrieverSpec
+from .models import POOLING_CLS, POOLING_MEAN, RetrieverSpec, is_hub_revision
 
 CACHE_MANIFEST_VERSION = "graphcent-cache-v1"
 
@@ -149,6 +149,17 @@ class CachedIndex:
                 f"tensor has {int(self.vectors.shape[0])} rows, documents have "
                 f"{len(self.documents)}"
             )
+        if int(self.vectors.shape[1]) != self.manifest.dim:
+            problems.append(
+                f"tensor has dim {int(self.vectors.shape[1])}, manifest says "
+                f"{self.manifest.dim}"
+            )
+        if str(self.vectors.dtype) != self.manifest.dtype:
+            problems.append(
+                f"tensor dtype is {self.vectors.dtype}, manifest says {self.manifest.dtype}"
+            )
+        if not self.manifest.normalized:
+            problems.append("cache manifest does not declare normalized vectors")
         if self.manifest.document_checksum != checksum([d.text for d in self.documents]):
             problems.append("document text changed since the cache was built")
         if self.manifest.row_order_checksum != checksum([d.concept_id for d in self.documents]):
@@ -159,6 +170,27 @@ class CachedIndex:
         if self.manifest.pooling != self.spec.pooling:
             problems.append(
                 f"cache pooled with {self.manifest.pooling!r}, spec declares {self.spec.pooling!r}"
+            )
+        if self.manifest.model_repo != self.spec.repo_id:
+            problems.append(
+                f"cache built from {self.manifest.model_repo!r}, spec declares "
+                f"{self.spec.repo_id!r}"
+            )
+        if not is_hub_revision(self.spec.revision):
+            problems.append(
+                f"spec revision {self.spec.revision or 'empty'} is not an immutable hub commit"
+            )
+        if not is_hub_revision(self.manifest.revision):
+            problems.append(
+                f"cache revision {self.manifest.revision or 'empty'} is not an immutable "
+                "hub commit"
+            )
+        elif self.manifest.revision != self.spec.revision:
+            # Same repo, different snapshot: the vectors are from other weights than the
+            # ones this run deploys, and nothing downstream would notice.
+            problems.append(
+                f"cache built at revision {self.manifest.revision or 'empty'}, this run "
+                f"deploys {self.spec.revision}"
             )
         if problems:
             raise CacheMismatch(

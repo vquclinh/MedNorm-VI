@@ -82,6 +82,37 @@ def resolve_specs(config: dict[str, Any]) -> list[RetrieverSpec]:
     return out
 
 
+def pin_specs(specs: list[RetrieverSpec], model_root: Path) -> list[RetrieverSpec]:
+    """Attach the revision recorded by `download-models` to every enabled retriever.
+
+    Every later stage runs against the exact snapshot acquisition pinned, and refuses to
+    run at all if that record is missing - guessing here would mean embedding the KB with
+    weights nobody can name.
+    """
+    from mednorm_vi.graphcent.acquisition import read_pinned_revisions
+    from mednorm_vi.graphcent.models import RevisionNotPinned, is_hub_revision
+
+    recorded = read_pinned_revisions(model_root)
+    out: list[RetrieverSpec] = []
+    missing: list[str] = []
+    for spec in specs:
+        if not spec.enabled:
+            out.append(spec)
+            continue
+        revision = spec.revision if is_hub_revision(spec.revision) else recorded.get(
+            spec.key, ""
+        )
+        if not is_hub_revision(revision):
+            missing.append(spec.key)
+        out.append(dataclasses.replace(spec, revision=revision))
+    if missing:
+        raise RevisionNotPinned(
+            f"no pinned revision recorded for {missing} in {model_root / 'model-manifest.json'}. "
+            "Run download-models first; it resolves and records the exact commit SHA."
+        )
+    return out
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -149,7 +180,11 @@ def _runtime_config(config: dict[str, Any], args: argparse.Namespace) -> Any:
             "model_root", "/content/graphcent_models")),
         cache_root=Path(getattr(args, "cache_root", "") or config.get(
             "cache_root", "/content/graphcent_cache")),
-        qwen_model_root=Path(config.get("qwen_model_root", "/content/qwen3-8b-local")),
+        qwen_model_root=Path(
+            getattr(args, "qwen_root", "") or config.get(
+                "qwen_model_root", "/content/qwen3-8b-local"
+            )
+        ),
         device=getattr(args, "device", "cuda"),
         top_k_per_retriever=int(config.get("top_k_per_retriever", 5)),
         max_candidate_context=int(config.get("max_candidate_context", 10)),
@@ -201,8 +236,7 @@ def cmd_download_models(args: argparse.Namespace) -> int:
     """Fetch enabled retrievers at pinned revisions and certify the parameter budget."""
     require_host("download-models", allow_download=args.allow_download,
                  needs=MIN_VRAM_FOR_RETRIEVER_GIB)
-    from huggingface_hub import snapshot_download
-
+    from mednorm_vi.graphcent.acquisition import acquire
     from mednorm_vi.graphcent.runtime import QwenDisambiguator, certify_budget
 
     config = load_config(args.config)
@@ -210,25 +244,9 @@ def cmd_download_models(args: argparse.Namespace) -> int:
     runtime = _runtime_config(config, args)
     runtime.model_root.mkdir(parents=True, exist_ok=True)
 
-    resolved_revisions: dict[str, str] = {}
-    for spec in specs:
-        if not spec.enabled:
-            log(f"{spec.key}: disabled in the profile - not downloaded")
-            continue
-        target = runtime.model_root / spec.key
-        path = snapshot_download(
-            repo_id=spec.repo_id,
-            revision=spec.revision or None,
-            local_dir=str(target),
-        )
-        revision = ""
-        for marker in (Path(path) / ".git" / "HEAD", Path(path) / "refs" / "main"):
-            if marker.is_file():
-                revision = marker.read_text(encoding="utf-8").strip()
-                break
-        resolved_revisions[spec.key] = revision
-        log(f"{spec.key}: downloaded to {target} (revision {revision or 'recorded at load'})")
-
+    # Resolve the exact commit SHA first, then download AT that SHA. Pinning after the
+    # fact would only describe what was fetched; pinning first decides it.
+    specs = acquire(specs, runtime.model_root)
     qwen = QwenDisambiguator(runtime.qwen_model_root, device=runtime.device)
     manifest = certify_budget(
         specs, runtime,
@@ -237,8 +255,10 @@ def cmd_download_models(args: argparse.Namespace) -> int:
         licence_overrides=config.get("licence_overrides_accepted") or (),
     )
     qwen.unload()
+    resolved_revisions = {s.key: s.revision for s in manifest.retrievers if s.enabled}
+    manifest.resolved_revisions = resolved_revisions
+    manifest.assert_revisions_pinned()  # nothing is written that cannot be reproduced
     payload = manifest.as_dict()
-    payload["resolved_revisions"] = resolved_revisions
     (runtime.model_root / "model-manifest.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -260,7 +280,7 @@ def cmd_build_index(args: argparse.Namespace) -> int:
         print("BLOCKED: no governed KB documents; restore the indices first", file=sys.stderr)
         return 2
     log(f"governed documents {len(documents):,}")
-    for spec in resolve_specs(config):
+    for spec in pin_specs(resolve_specs(config), runtime.model_root):
         if not spec.enabled:
             continue
         build_index_for(spec, documents, runtime)
@@ -279,7 +299,7 @@ def _execute(args: argparse.Namespace, *, smoke: bool) -> int:
     require_host(stage, allow_download=args.allow_download, needs=MIN_VRAM_FOR_QWEN_GIB)
     config = load_config(args.config)
     runtime = _runtime_config(config, args)
-    specs = resolve_specs(config)
+    specs = pin_specs(resolve_specs(config), runtime.model_root)
 
     seed_dir = Path(args.seed_entities or config.get("seed_entities", ""))
     if not seed_dir.is_dir():

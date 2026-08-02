@@ -79,6 +79,7 @@ indices/**
 outputs/**
 !outputs/.gitkeep
 !outputs/README.md
+outputs/
 output/
 *.zip
 
