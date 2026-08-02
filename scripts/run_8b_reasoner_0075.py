@@ -105,6 +105,27 @@ class Reasoner:
         return parse_json(reply)
 
 
+def load_seed(path: Path) -> list[dict[str, Any]]:
+    """Read a prior run's organizer JSON as reasoner proposals.
+
+    Organizer output stores `assertions` as a LIST of set flags; proposals carry a dict of
+    booleans. Converting here lets variant D reuse the historical E3 entity/assertion output
+    verbatim - the whole point of D is that those stay untouched.
+    """
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    out: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        flags = row.get("assertions")
+        if isinstance(flags, list):
+            flags = {key: key in flags for key in ASSERTION_KEYS}
+        out.append({
+            "text": row.get("text", ""),
+            "type": row.get("type", ""),
+            "assertions": flags or {},
+        })
+    return out
+
+
 def load_note(path: Path) -> str:
     if path.suffix == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -154,6 +175,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--expected-documents", type=int, default=100)
     args = parser.parse_args(argv)
+
+    if args.config == "cand_8b" and not args.seed_entities:
+        print("BLOCKED: --config cand_8b needs --seed-entities pointing at a prior run's "
+              "organizer JSON (variant D keeps the historical E3 entities/assertions).",
+              file=sys.stderr)
+        return 2
 
     total_parameters = budget.assert_within_cap(with_semantic_s1=False)
     log(f"deployed parameters {total_parameters:,} (cap {budget.PARAMETER_CAP:,})")
@@ -205,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.seed_entities:
             seed_path = args.seed_entities / f"{path.stem}.json"
             if seed_path.is_file():
-                seed = json.loads(seed_path.read_text(encoding="utf-8"))
+                seed = load_seed(seed_path)
 
         if args.config == "cand_8b":
             proposals = [dict(e) for e in seed]

@@ -1,27 +1,23 @@
-# CORRECTED-DENSE PUBLIC VARIANT (Audit 0075 sprint) - *** PUBLIC_REJECTED ***
+# PUBLIC-BEST PROFILE - explicit historical reproduction of the scored Audit-0073 run.
 #
-# SCORED 2026-08-02: 12.3922  (J_candidates 4.0483)
-# PUBLIC BEST      : 12.4757  (J_candidates 4.2570)  <- historical 0073
-# DELTA            : -0.0835 total, -0.2087 candidates. WER and J_assertion identical.
+# SCORED 2026-08-01: 12.4757 | WER 82.7090 | J_assertion 18.6187 | J_candidates 4.2570
+# Submission SHA-256 0995c7c7a070460a28d76f1dfdd24b3cc0e7d986e90173a583eadf214f551a5c
 #
-# The row-order fix is CORRECT as engineering and WORSE on the leaderboard. Retained as an
-# experiment artifact; do NOT use it for a submission. The public-best candidate stack is
-# configs/pipeline/public_best_0073_legacy.yaml.
+# THIS PROFILE DELIBERATELY SELECTS A KNOWN DEFECT.
 #
-# The scored 0073 architecture with ONE change: the dense row-order defect is fixed.
+# `row_order: legacy_0073_misaligned_file_positions` reads the frozen sorted(concept_id)
+# dense cache with documents-file positions, so ICD mentions are scored against RxNorm
+# vectors. That is a bug. It is also, measured on the public leaderboard, the better
+# candidate stack: correcting it scored 12.3922 (-0.0835). See Audit 0074 §13 and the
+# 0075 sprint result.
 #
-# 0073 scored 12.4757 while reading the frozen sorted(concept_id) cache with documents-file
-# positions, so ICD mentions were scored against RxNorm vectors. This profile uses the
-# corrected `sorted_concept_id` order. Everything else is byte-identical to 0073:
-# specialist mode, E3, L4, assertions, spans, types, ICD behaviour, RxNorm linker, dotted
-# serialization, NULL shadow.
+# It is NOT called "corrected" anywhere, is never inferred, and the runtime prints a warning
+# to stderr when this order is selected. Provenance over tidiness: we submit what measured
+# best and we say exactly why it is odd.
 #
-# NOT included: 0074 structured document text, 0074 structured RxNorm compatibility.
-# Audit 0074's complete-system A/B REJECTED those (R@1 0.2432 vs 0.2724, 126 regressions
-# against 83 fixes).
-#
-# Deployed: E3 135,002,117 + Qwen3-Embedding-4B 4,021,774,336 + Qwen3-Reranker-4B
-# 4,021,784,576 = 8,178,561,029 (< 9B).
+# Everything else is byte-identical to 0073: specialist mode, E3, L4, assertions, spans,
+# types, RxNorm linker, dotted serialization, NULL shadow, Embedding-4B + Reranker-4B.
+# Deployed: 8,178,561,029 (< 9B).
 #
 # ROLLBACK: configs/pipeline/full_v1.yaml (lexical_v3).
 linker_backend: semantic_s1_0072
@@ -49,7 +45,7 @@ semantic_linker:
   candidate_limit: 20
   null_mode: shadow
   # Explicit, not defaulted: this is the whole point of the variant.
-  row_order: sorted_concept_id
+  row_order: legacy_0073_misaligned_file_positions
 
 # ---- inherited from full_v1.yaml, unchanged ----
 version: 1
