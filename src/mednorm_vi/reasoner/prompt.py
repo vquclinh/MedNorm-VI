@@ -172,8 +172,51 @@ def verify_prompt(note: str, proposals: list[dict[str, Any]]) -> str:
     )
 
 
+LATTICE_POLICY = (
+    "You are correcting entity BOUNDARIES only.\n"
+    "* The type of every entity is FIXED and shown to you. You cannot change it.\n"
+    "* Prefer KEEP_ORIGINALS. Choose a replacement only when the original proposals are "
+    "clearly fragments of one contiguous clinical phrase.\n"
+    "* If you are uncertain, choose KEEP_ORIGINALS.\n"
+    "* Never merge what are actually two different findings.\n"
+    "* You may only return candidate ids that are listed. You cannot write text or offsets."
+)
+
+
+def lattice_prompt(note: str, clusters: list[Any]) -> str:
+    """One prompt per document. The model returns cluster -> candidate ids, or nothing.
+
+    Only clusters with something to decide are shown. Every option is a literal slice of the
+    note produced in code, so the model's entire action space is a set of ids.
+    """
+    blocks: list[str] = []
+    for cluster in clusters:
+        proposals = ", ".join(f'"{p["text"]}"' for p in cluster.proposals)
+        options = "\n".join(f'    {c.candidate_id}: "{c.text}"' for c in cluster.candidates)
+        blocks.append(
+            f"cluster {cluster.cluster_id} [type {cluster.entity_type}, FIXED]\n"
+            f"  current: {proposals}\n  options:\n{options}"
+        )
+    listed = "\n".join(blocks)
+    return (
+        "Some entities below may be fragments of one longer phrase in the note.\n\n"
+        f"{LATTICE_POLICY}\n\n"
+        "OUTPUT RULES:\n"
+        "1. Return an entry ONLY for a cluster you want to change.\n"
+        "2. Any cluster you do not mention KEEPS its current entities.\n"
+        "3. `select` must contain candidate ids from that cluster only.\n"
+        "4. Returning an empty list is correct and common.\n\n"
+        "Return JSON, nothing else. Examples:\n"
+        '  no changes:  {"clusters":[]}\n'
+        '  merge:       {"clusters":[{"cluster_id":0,"select":["c0_4"]}]}\n\n'
+        f"NOTE:\n{note}\n\nCLUSTERS:\n{listed}\n"
+    )
+
+
 __all__ = [
+    "LATTICE_POLICY",
     "NULL_FIRST_POLICY",
+    "lattice_prompt",
     "VERIFY_POLICY",
     "verify_prompt",
     "SYSTEM",
