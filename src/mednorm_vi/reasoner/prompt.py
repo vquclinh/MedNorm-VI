@@ -213,8 +213,46 @@ def lattice_prompt(note: str, clusters: list[Any]) -> str:
     )
 
 
+MERGE_ONLY_POLICY = (
+    "You are deciding ONE thing per cluster: are these entries fragments of a single "
+    "clinical phrase?\n"
+    "* Answer KEEP_ORIGINALS unless they clearly are.\n"
+    "* If uncertain, answer KEEP_ORIGINALS.\n"
+    "* Never merge two genuinely different findings.\n"
+    "* You cannot change text, offsets, types or assertions. Your only options are the two "
+    "words below."
+)
+
+
+def merge_only_prompt(note: str, clusters: list[Any]) -> str:
+    """One prompt per document. Each cluster admits exactly two answers."""
+    blocks = []
+    for cluster in clusters:
+        current = ", ".join(f'"{p["text"]}"' for p in cluster.proposals)
+        blocks.append(
+            f"cluster {cluster.cluster_id} [type {cluster.entity_type}, FIXED]\n"
+            f"  fragments: {current}\n"
+            f'  merged would be: "{cluster.union_text}"'
+        )
+    return (
+        "Each cluster below holds two or more entities extracted from the same phrase.\n\n"
+        f"{MERGE_ONLY_POLICY}\n\n"
+        "OUTPUT RULES:\n"
+        "1. Return an entry ONLY for a cluster you want to MERGE.\n"
+        "2. Any cluster you do not mention keeps its original entities.\n"
+        "3. `choice` must be exactly MERGE_TO_UNION.\n"
+        "4. Returning an empty list is correct and common.\n\n"
+        "Return JSON, nothing else. Examples:\n"
+        '  no merges: {"clusters":[]}\n'
+        '  merge 0:   {"clusters":[{"cluster_id":0,"choice":"MERGE_TO_UNION"}]}\n\n'
+        f"NOTE:\n{note}\n\nCLUSTERS:\n" + "\n".join(blocks) + "\n"
+    )
+
+
 __all__ = [
     "LATTICE_POLICY",
+    "MERGE_ONLY_POLICY",
+    "merge_only_prompt",
     "NULL_FIRST_POLICY",
     "lattice_prompt",
     "VERIFY_POLICY",
