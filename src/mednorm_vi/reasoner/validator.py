@@ -51,12 +51,21 @@ class ValidatedEntity:
     candidates: tuple[str, ...] = field(default_factory=tuple)
 
     def as_organizer_json(self) -> dict[str, Any]:
+        """Exactly the fields the organizer schema allows for this type - no more.
+
+        `assertions` is legal only for TRIỆU_CHỨNG / CHẨN_ĐOÁN / THUỐC and must be ABSENT
+        (not empty) for the two laboratory types; `candidates` only for CHẨN_ĐOÁN / THUỐC.
+        Emitting `assertions: []` on a lab entity is an unsupported field, which is what
+        blocked packaging of the full-8B run on 385 entities. The scored baseline's own
+        output confirms the convention: lab entities carry `position`, `text`, `type` alone.
+        """
         row: dict[str, Any] = {
             "text": self.text,
             "type": self.type,
             "position": [self.position[0], self.position[1]],
-            "assertions": list(self.assertions),
         }
+        if self.type in ASSERTION_TYPES:
+            row["assertions"] = list(self.assertions)
         if self.type in CANDIDATE_TYPES:
             row["candidates"] = list(self.candidates)
         return row
