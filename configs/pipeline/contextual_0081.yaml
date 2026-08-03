@@ -1,0 +1,33 @@
+# 0081 - contextual entity proposal and verification.
+#
+# Fixes the extraction bottleneck upstream of GraphCENT 0080. GraphCENT itself is unchanged:
+# this milestone only decides WHICH mentions it is asked to link.
+#
+# The deployed model is the SAME Qwen3-8B GraphCENT loads, at the revision the canonical
+# 0080 model manifest pinned. No second base model enters the deployment, so the <9B
+# parameter accounting is the 0080 accounting.
+version: 1
+name: contextual_0081
+
+# --- seed ------------------------------------------------------------------------------
+# E3 remains the trusted mention expert and the control variant. 0081 refines a seed; it
+# never replaces it.
+seed_entities: ""                     # E3-only organizer JSON directory (required)
+
+# --- proposal sources --------------------------------------------------------------------
+use_qwen_proposer: true               # Qwen reads the document with stable line ids
+use_alias_proposer: true              # whole-phrase governed KB matches (proposals only)
+use_verifier: true                    # Qwen accept/reject/retype over finite proposals
+
+# Governed resources the alias proposer reads. These produce PROPOSALS ONLY - never an
+# organizer entity by themselves, and never a code. Codes stay with GraphCENT.
+icd_index: indices/candidate/icd10_vi/competition-v4.1/index.json
+rxnorm_index: indices/candidate/rxnorm/competition-v3/index.json
+alias_max_tokens: 8                   # longer governed strings are definitions, not mentions
+
+# --- verifier shape ----------------------------------------------------------------------
+context_radius: 200                   # characters of surrounding text shown per group
+max_options_per_group: 12             # beyond this the group falls back to E3 only
+
+# --- model ------------------------------------------------------------------------------
+qwen_model_root: /content/qwen3-8b-local

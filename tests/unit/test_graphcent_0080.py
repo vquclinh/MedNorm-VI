@@ -412,7 +412,12 @@ def test_prompt_is_null_first_and_forbids_writing_codes() -> None:
     assert "[0] concept_id=J18.9" in prompt
     assert '"selected_indices":[0]' in prompt
     assert "candidate_ids" not in prompt
-    assert "broader, narrower, parent, sibling" in prompt
+    # 0081 replaced the blanket "never choose a related concept" rule: a more specific
+    # child IS allowed when the text supports what makes it specific, and is refused
+    # otherwise. The prohibition is now on unsupported specificity, not on specificity.
+    assert "SEMANTIC EQUIVALENCE" in prompt
+    assert "more specific child concept" in prompt
+    assert "alternative granularities" in prompt
     assert '"decision":"NULL","selected_indices":[]' in prompt
 
 
