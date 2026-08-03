@@ -92,6 +92,7 @@ local-artifacts/
 # --- Audit run artifacts (numbered audit .md files under docs/audits/ ARE tracked) ---
 docs/audits/**/*.log
 docs/audits/**/*.json
+docs/audits/
 
 # --- Secrets ---
 .env
