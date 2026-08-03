@@ -1,6 +1,5 @@
-"""Offline KB index builders and retrieval contracts."""
+"""Governed index loading, normalization and lexical retrieval."""
 
-from .builders import build_icd_index, build_rxnorm_index
-from .retrieval import CandidateHit, LocalIndex, search_index
+from .retrieval import CandidateHit, LocalIndex, load_index, search_index
 
-__all__ = ["CandidateHit", "LocalIndex", "build_icd_index", "build_rxnorm_index", "search_index"]
+__all__ = ["CandidateHit", "LocalIndex", "load_index", "search_index"]

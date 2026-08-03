@@ -1,9 +1,0 @@
-dataset_id: vietmed_ner
-version: 1
-status: REVIEW_REQUIRED
-mappings:
-  - source_label: labels_column_present_vocabulary_unread
-    canonical_intermediate: parquet_labels_sequence
-    target: REVIEW
-    mapping_status: requires_human_review
-    note: Local Parquet footer proves a labels sequence column exists, but label names are unavailable without a row-level Parquet reader.

@@ -1,6 +1,6 @@
-"""Local-only knowledge-base snapshot interfaces (Phase 1C-A).
+"""The governed knowledge base: indices, ontology facts and the semantic cache contract.
 
-``rxnorm`` and ``icd10`` ingest *locally acquired* KB snapshots into typed
-contracts and compare snapshots. No network, no real KB content in the repo, and
-no snapshot is ever treated as the organizer's exact KB.
+Every ICD-10 code and RxCUI the system can emit comes from here. Nothing else is a
+candidate source, which is what makes an invented code structurally impossible rather
+than merely unlikely.
 """

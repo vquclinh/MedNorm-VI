@@ -1,0 +1,85 @@
+# MedNorm-VI production profile. This is the only active configuration.
+#
+# Pretrained only: nothing is trained, fine-tuned or adapted, and no model is added at run
+# time. The deployed stack is fixed and certified at 8,729,759,237 parameters; sparse
+# character retrieval contributes none. All inference is local - no external API is called.
+version: 1
+name: production
+
+# --- governed knowledge base -------------------------------------------------------------
+# Every emitted ICD-10 code and RxCUI comes from these indices. There is no other candidate
+# source, which is what makes an invented code impossible rather than unlikely.
+icd_index: indices/candidate/icd10_vi/competition-v4.1/index.json
+rxnorm_index: indices/candidate/rxnorm/competition-v3/index.json
+rxnorm_structured: artifacts/rxnorm_structured/0074/structured.jsonl
+
+# --- assets ------------------------------------------------------------------------------
+seed_entities: ""                      # E3 proposal directory (organizer JSON)
+model_root: /content/mednorm_models
+cache_root: /content/mednorm_cache
+qwen_model_root: /content/qwen3-8b-local
+
+# --- deployed models ---------------------------------------------------------------------
+# Revisions are resolved from the hub and recorded by `acquire`; they are never assumed here.
+# Pooling is NOT interchangeable and is owned by the registry: SapBERT and ClinLinker are
+# read at CLS, sentence models are mean-pooled.
+retrievers:
+  sapbert_xlmr:
+    enabled: true                      # diagnosis and medication
+  clinlinker_kb_gp:
+    enabled: true
+    roles: [diagnosis]                 # medication evidence is weak; diagnosis only
+  biobert_mnli:
+    enabled: false                     # non-commercial licence; not part of the deployment
+licence_overrides_accepted: []
+
+# --- Qwen generation ---------------------------------------------------------------------
+# Greedy and deterministic. The budget is sized for structured extraction: a document-level
+# entity list does not fit in a short answer's allowance.
+max_new_tokens: 1536
+use_reformulation: true                # two extra retrieval views; never entities, never codes
+
+# --- contextual extraction ---------------------------------------------------------------
+extraction:
+  use_qwen_proposer: true              # three specialized passes: diagnosis/symptom, drug, lab
+  use_verifier: true                   # accept / reject / retype over a finite local list
+  use_alias_proposer: true
+  alias_support_only: true             # an alias is EVIDENCE, never an entity on its own
+  context_radius: 200
+  max_options_per_group: 12
+
+# --- governed alias quality ---------------------------------------------------------------
+# Measured from the knowledge base, not listed. A form naming many concepts identifies none,
+# and a one-word form occurring across a large share of labels is a word of the vocabulary
+# rather than a term.
+alias:
+  max_tokens: 8
+  max_concepts_per_form: 3
+  max_single_token_label_share: 0.01
+
+# --- retrieval ----------------------------------------------------------------------------
+# Small and diverse beats deep and single-source. The raw Vietnamese mention always
+# participates; the English view goes only to the multilingual encoders.
+retrieval:
+  sparse_top_k: 4
+  dense_top_k: 4
+  candidate_cap: 10
+  sparse_views: [raw, canonical_vi]
+  dense_views: [raw, canonical_vi, canonical_en]
+
+sparse:
+  ngram_n: 3
+  strip_accents: true
+  shortlist: 50
+
+# --- candidate emission --------------------------------------------------------------------
+# One governed concept or none. A selection is emitted only when independent deterministic
+# evidence supports it: an exact governed alias, two independent retrievers, or two
+# independent query views.
+confidence:
+  min_retrievers: 2
+  min_views: 2
+  exact_alias_is_sufficient: true
+
+# --- budget ---------------------------------------------------------------------------------
+expected_deployed_parameters: 8729759237

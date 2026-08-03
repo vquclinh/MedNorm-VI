@@ -1,7 +1,0 @@
-# Label-mapping set TEMPLATE — versioned, auditable source->target mapping.
-# target must be a MedNorm entity type (MEDICATION, DIAGNOSIS, SYMPTOM,
-# TEST_NAME, TEST_RESULT) or an action (DROP, REVIEW).
-dataset_id: <dataset_id>
-version: 1
-mappings:
-  - {source_label: <SRC>, canonical_intermediate: <intermediate>, target: REVIEW, note: <why>}
