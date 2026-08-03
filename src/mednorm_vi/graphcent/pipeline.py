@@ -69,7 +69,10 @@ class MentionResult:
             "type": self.entity_type,
             "position": list(self.position),
             "span_provenance": self.span_provenance,
-            "candidates": [c.as_dict() for c in self.candidates],
+            "candidates": [
+                {"candidate_index": index, **candidate.as_dict()}
+                for index, candidate in enumerate(self.candidates)
+            ],
             "decision": self.decision.as_dict(),
             "tiers": dict(sorted(self.tiers.items())),
             "facts": self.facts,

@@ -103,6 +103,25 @@ class RetrieverSpec:
             "enabled": self.enabled,
         }
 
+    @staticmethod
+    def from_dict(row: dict[str, Any]) -> RetrieverSpec:
+        return RetrieverSpec(
+            key=str(row["key"]),
+            repo_id=str(row["repo_id"]),
+            licence=str(row["licence"]),
+            licence_source=str(row["licence_source"]),
+            pooling=str(row["pooling"]),
+            role=tuple(str(role) for role in row.get("role") or ()),
+            intended_domain=str(row["intended_domain"]),
+            expected_disk_gib=float(row["expected_disk_gib"]),
+            revision=str(row.get("revision", "")),
+            parameter_count=(
+                None if row.get("parameter_count") is None else int(row["parameter_count"])
+            ),
+            embedding_dim=None if row.get("embedding_dim") is None else int(row["embedding_dim"]),
+            enabled=bool(row.get("enabled", True)),
+        )
+
 
 #: The 0080 retriever stack. KRISSBERT is intentionally absent - the budget headroom is
 #: needed and a fourth retriever can be added once the first run justifies it.
@@ -163,6 +182,16 @@ class DeployedModel:
             "licence": self.licence,
             "role": self.role,
         }
+
+    @staticmethod
+    def from_dict(row: dict[str, Any]) -> DeployedModel:
+        return DeployedModel(
+            name=str(row["name"]),
+            parameter_count=int(row["parameter_count"]),
+            revision=str(row.get("revision", "")),
+            licence=str(row.get("licence", "")),
+            role=str(row.get("role", "")),
+        )
 
 
 class ParameterBudgetExceeded(RuntimeError):
@@ -282,6 +311,28 @@ class ModelManifest:
             "licence_overrides_accepted": list(self.licence_overrides_accepted),
             "training_performed": False,
         }
+
+    @staticmethod
+    def from_dict(payload: dict[str, Any]) -> ModelManifest:
+        return ModelManifest(
+            deployed=[
+                DeployedModel.from_dict(row)
+                for row in payload.get("deployed") or []
+                if isinstance(row, dict)
+            ],
+            retrievers=[
+                RetrieverSpec.from_dict(row)
+                for row in payload.get("retrievers") or []
+                if isinstance(row, dict)
+            ],
+            resolved_revisions={
+                str(key): str(revision)
+                for key, revision in (payload.get("resolved_revisions") or {}).items()
+            },
+            licence_overrides_accepted=tuple(
+                str(key) for key in payload.get("licence_overrides_accepted") or ()
+            ),
+        )
 
 
 def retrievers_for(specs: tuple[RetrieverSpec, ...], role: str) -> tuple[RetrieverSpec, ...]:

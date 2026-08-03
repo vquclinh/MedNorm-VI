@@ -5,14 +5,14 @@ guess (all-null 14.3749 against 12.4757). So selection is not the last word here
 chooses among governed ids or abstains, and a deterministic tier gate then decides whether the
 selection is backed by enough independent evidence to be worth emitting at all.
 
-The parser is adversarial by construction. Any id outside the supplied set, any unknown
-schema, any prose, any parse failure resolves to NULL - never to a guess.
+The parser is adversarial by construction. The model selects candidate positions, and only
+deterministic code maps those positions to governed ids. Any unknown schema, prose, invalid
+index or parse failure resolves to NULL - never to a guess.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,8 +39,6 @@ TIER_B = "B"
 TIER_C = "C"
 TIER_NONE = "NONE"
 
-_JSON = re.compile(r"\{.*\}", re.S)
-
 RUBRIC = (
     "You are linking a Vietnamese clinical mention to a governed medical code.\n\n"
     "DEFAULT ANSWER IS NULL.\n"
@@ -53,9 +51,10 @@ RUBRIC = (
     "* For medications: if the ingredient differs, answer NULL. If the mention states a "
     "strength, concentration or form and the candidate records a different one, answer "
     "NULL.\n"
-    "* Select several ids only when the mention genuinely requires several governed codes. "
+    "* Select several indices only when the mention genuinely requires several governed codes. "
     "Otherwise prefer one, or NULL.\n"
-    "* You may ONLY return ids from the numbered list. You cannot write a code."
+    "* You may ONLY return zero-based indices from the numbered list. You cannot write a "
+    "medical code or concept id."
 )
 
 
@@ -69,7 +68,8 @@ def build_prompt(
 ) -> str:
     """Curated small context, CENT-style. The model never sees the KB or raw scores."""
     listed = "\n".join(
-        f"{index}. " + "\n   ".join(lines) for index, (_, lines) in enumerate(candidates)
+        f"[{index}] concept_id={concept_id}\n   " + "\n   ".join(lines)
+        for index, (concept_id, lines) in enumerate(candidates)
     )
     ontology = "ICD-10" if entity_type == "CHẨN_ĐOÁN" else "RxNorm"
     heading = f"SECTION: {section}\n" if section else ""
@@ -78,10 +78,10 @@ def build_prompt(
         f"ONTOLOGY: {ontology}\nENTITY TYPE: {entity_type}\n"
         f"MENTION: {mention}\n{heading}CONTEXT: {context}\n\n"
         f"CANDIDATES:\n{listed}\n\n"
-        "Return JSON only. Either:\n"
-        '  {"decision":"NULL"}\n'
+        "Return JSON only. Select by candidate position, never by concept id. Either:\n"
+        '  {"decision":"NULL","selected_indices":[],"reason_codes":[]}\n'
         "or:\n"
-        '  {"decision":"SELECT","candidate_ids":["<id from the list>"]}\n'
+        '  {"decision":"SELECT","selected_indices":[0],"reason_codes":["alias_match"]}\n'
     )
 
 
@@ -89,9 +89,13 @@ def build_prompt(
 class Decision:
     decision: str
     candidate_ids: tuple[str, ...] = field(default_factory=tuple)
+    selected_indices: tuple[int, ...] = field(default_factory=tuple)
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
     parse_failed: bool = False
     invalid_ids: tuple[str, ...] = field(default_factory=tuple)
+    invalid_indices: tuple[str, ...] = field(default_factory=tuple)
+    conflict: bool = False
+    conflict_reason: str = ""
 
     @property
     def selected(self) -> bool:
@@ -101,54 +105,99 @@ class Decision:
         return {
             "decision": self.decision,
             "candidate_ids": list(self.candidate_ids),
+            "selected_indices": list(self.selected_indices),
             "reason_codes": list(self.reason_codes),
             "parse_failed": self.parse_failed,
             "invalid_ids": list(self.invalid_ids),
+            "invalid_indices": list(self.invalid_indices),
+            "conflict": self.conflict,
+            "conflict_reason": self.conflict_reason,
         }
 
 
 NULL_DECISION = Decision(DECISION_NULL)
 
 
+def _reason_codes(payload: dict[str, Any]) -> tuple[str, ...] | None:
+    reasons = payload.get("reason_codes", [])
+    if not isinstance(reasons, list):
+        return None
+    return tuple(str(r) for r in reasons if str(r) in REASON_CODES)
+
+
 def parse_decision(reply: str, offered: list[str]) -> Decision:
-    """Strict parse. Anything unrecognised becomes NULL, never a guess."""
-    match = _JSON.search(reply or "")
-    if not match:
-        return Decision(DECISION_NULL, parse_failed=True)
+    """Strict index parse. Anything unrecognised becomes NULL, never a guess."""
     try:
-        payload = json.loads(match.group(0))
+        payload = json.loads((reply or "").strip())
     except json.JSONDecodeError:
         return Decision(DECISION_NULL, parse_failed=True)
     if not isinstance(payload, dict):
         return Decision(DECISION_NULL, parse_failed=True)
+    if set(payload) - {"decision", "selected_indices", "reason_codes"}:
+        return Decision(
+            DECISION_NULL,
+            parse_failed=True,
+            conflict=True,
+            conflict_reason="unsupported_schema",
+        )
 
     decision = str(payload.get("decision", "")).upper()
+    raw_indices = payload.get("selected_indices")
+    if not isinstance(raw_indices, list):
+        return Decision(DECISION_NULL, parse_failed=True, conflict_reason="missing_indices")
+    reasons = _reason_codes(payload)
+    if reasons is None:
+        return Decision(DECISION_NULL, parse_failed=True, conflict_reason="bad_reason_codes")
+
+    selected: list[int] = []
+    invalid: list[str] = []
+    for value in raw_indices:
+        if isinstance(value, bool) or not isinstance(value, int):
+            invalid.append(str(value))
+            continue
+        if value < 0 or value >= len(offered):
+            invalid.append(str(value))
+            continue
+        if value not in selected:
+            selected.append(value)
+
+    if invalid:
+        return Decision(
+            DECISION_NULL,
+            selected_indices=tuple(selected),
+            reason_codes=reasons,
+            parse_failed=True,
+            invalid_indices=tuple(invalid),
+            conflict=True,
+            conflict_reason="invalid_indices",
+        )
     if decision == DECISION_NULL:
-        return Decision(DECISION_NULL)
+        if selected:
+            return Decision(
+                DECISION_NULL,
+                selected_indices=tuple(selected),
+                reason_codes=reasons,
+                parse_failed=True,
+                conflict=True,
+                conflict_reason="null_with_indices",
+            )
+        return Decision(DECISION_NULL, reason_codes=reasons)
     if decision != DECISION_SELECT:
         return Decision(DECISION_NULL, parse_failed=True)
-
-    allowed = set(offered)
-    raw_ids = payload.get("candidate_ids")
-    if not isinstance(raw_ids, list):
-        return Decision(DECISION_NULL, parse_failed=True)
-    kept: list[str] = []
-    invalid: list[str] = []
-    for value in raw_ids:
-        text = str(value).strip()
-        if text in allowed and text not in kept:
-            kept.append(text)
-        elif text:
-            invalid.append(text)  # an id the model invented; dropped, never emitted
-    if not kept:
-        return Decision(DECISION_NULL, invalid_ids=tuple(invalid))
-    reasons = payload.get("reason_codes")
-    codes = (
-        tuple(str(r) for r in reasons if isinstance(reasons, list) and str(r) in REASON_CODES)
-        if isinstance(reasons, list)
-        else ()
+    if not selected:
+        return Decision(
+            DECISION_NULL,
+            reason_codes=reasons,
+            parse_failed=True,
+            conflict=True,
+            conflict_reason="select_without_indices",
+        )
+    return Decision(
+        DECISION_SELECT,
+        tuple(offered[index] for index in selected),
+        tuple(selected),
+        reasons,
     )
-    return Decision(DECISION_SELECT, tuple(kept), codes, invalid_ids=tuple(invalid))
 
 
 @dataclass(frozen=True, slots=True)

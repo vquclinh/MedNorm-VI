@@ -16,7 +16,6 @@ so Qwen runs once, not four times.
 from __future__ import annotations
 
 import json
-import re
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -40,6 +39,8 @@ from .disambiguation import (
 )
 from .encoders import build_encoder
 from .models import (
+    ROLE_DIAGNOSIS,
+    ROLE_DRUG,
     DeployedModel,
     ModelManifest,
     RetrieverSpec,
@@ -68,7 +69,10 @@ from .retrieval import (
 )
 from .spans import alternatives_for
 
-_JSON = re.compile(r"\{.*\}", re.S)
+RETRIEVER_ROLE_FOR_TYPE: dict[str, str] = {
+    "CHẨN_ĐOÁN": ROLE_DIAGNOSIS,
+    "THUỐC": ROLE_DRUG,
+}
 
 
 def log(message: str) -> None:
@@ -119,7 +123,7 @@ class QwenDisambiguator:
     _tokenizer: Any = None
     system_prompt: str = (
         "You are a precise clinical entity linker. You return STRICT JSON and nothing else. "
-        "You never invent a medical code."
+        "You select candidate indices only; you never write a medical code."
     )
 
     def load(self) -> None:
@@ -296,7 +300,7 @@ class RetrievalEvidence:
 
 
 def precompute_retrieval(
-    spans: Sequence[tuple[str, str]],
+    spans: Sequence[tuple[str, str, str]],
     specs: Sequence[RetrieverSpec],
     documents: list[KbDocument],
     config: RuntimeConfig,
@@ -305,27 +309,31 @@ def precompute_retrieval(
 ) -> RetrievalEvidence:
     """Embed every mention once per retriever, then unload before disambiguation.
 
-    ``spans`` is ``(text, ontology)``. Batching all mentions per model keeps the number of
-    load/unload cycles at one per retriever for the entire run.
+    ``spans`` is ``(text, ontology, retriever_role)``. Batching all mentions per model
+    keeps the number of load/unload cycles at one per retriever for the entire run, while
+    preserving the registry contract that a retriever only contributes to declared roles.
     """
     evidence = RetrievalEvidence()
-    unique = sorted({(text, ontology) for text, ontology in spans})
+    unique = sorted({(text, ontology, role) for text, ontology, role in spans})
     if not unique:
         return evidence
-    texts = [text for text, _ in unique]
 
     for spec in specs:
+        relevant = [(text, ontology, role) for text, ontology, role in unique if role in spec.role]
+        if not relevant:
+            continue
+        texts = [text for text, _, _ in relevant]
         index = load_index(spec, documents, config)
         encoder = encoder_factory(spec, config.model_root, config.device)
         vectors = encoder.encode(texts, batch_size=config.embed_batch_size)
         encoder.unload()
-        for position, (text, ontology) in enumerate(unique):
+        for position, (text, ontology, _role) in enumerate(relevant):
             hits = index.search(
                 vectors[position], ontology=ontology, top_k=config.top_k_per_retriever
             )
             evidence.record(f"{ontology}\x00{text}", spec.key, hits)
         del index
-        log(f"{spec.key}: retrieved for {len(unique):,} unique spans, model unloaded")
+        log(f"{spec.key}: retrieved for {len(relevant):,} unique spans, model unloaded")
     return evidence
 
 
@@ -503,18 +511,19 @@ def run_documents(
     from .pipeline import resolve_tiers
 
     plans: list[tuple[str, dict[str, Any], Any]] = []
-    span_keys: list[tuple[str, str]] = []
+    span_keys: list[tuple[str, str, str]] = []
     for document, seed in seeds.items():
         source = notes[document]
         for entity in seed:
             if not linkable(entity.get("type", "")):
                 continue
             ontology = ONTOLOGY_FOR_TYPE[entity["type"]]
+            role = RETRIEVER_ROLE_FOR_TYPE[entity["type"]]
             for option in alternatives_for(
                 source, entity, joint_safe_span=config.joint_safe_span
             ):
                 plans.append((document, entity, option))
-                span_keys.append((option.text, ontology))
+                span_keys.append((option.text, ontology, role))
 
     log(f"linkable mentions {len(plans):,} across {len(seeds)} documents")
     evidence = precompute_retrieval(
@@ -528,6 +537,7 @@ def run_documents(
     outcome = RunOutcome()
     counters: dict[str, int] = {
         "null": 0, "select": 0, "parse_fallbacks": 0, "invalid_ids": 0,
+        "invalid_indices": 0, "selection_conflicts": 0,
         "multi_code": 0, "conflicts": 0, "spans_expanded": 0,
     }
     for document, entity, option in plans:
@@ -568,6 +578,8 @@ def run_documents(
             decision = parse_decision(reply, [c for c, _ in prompt_candidates])
         counters["parse_fallbacks"] += int(decision.parse_failed)
         counters["invalid_ids"] += len(decision.invalid_ids)
+        counters["invalid_indices"] += len(decision.invalid_indices)
+        counters["selection_conflicts"] += int(decision.conflict)
         counters["select" if decision.selected else "null"] += 1
         counters["multi_code"] += int(len(decision.candidate_ids) > 1)
         if option.provenance != "e3_original":

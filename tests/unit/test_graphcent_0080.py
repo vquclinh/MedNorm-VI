@@ -297,14 +297,6 @@ def test_only_diagnosis_and_drug_are_linked(entity_type: str, expected: bool) ->
 # ---------------------------------------------------------------- LLM output parsing
 
 
-def test_invented_id_is_rejected_and_valid_one_survives() -> None:
-    decision = parse_decision(
-        '{"decision":"SELECT","candidate_ids":["J18.9","INVENTED"]}', ["J18.9"]
-    )
-    assert decision.candidate_ids == ("J18.9",)
-    assert decision.invalid_ids == ("INVENTED",)
-
-
 @pytest.mark.parametrize(
     "reply", ["", "no json", "{bad", '{"decision":"MAYBE"}', '{"decision":"SELECT"}']
 )
@@ -313,14 +305,101 @@ def test_parse_failure_yields_null(reply: str) -> None:
     assert decision.decision == "NULL" and not decision.selected
 
 
-def test_only_invented_ids_collapse_to_null() -> None:
-    decision = parse_decision('{"decision":"SELECT","candidate_ids":["X"]}', ["J18.9"])
-    assert not decision.selected and decision.invalid_ids == ("X",)
+def test_select_index_zero_maps_to_the_first_governed_candidate() -> None:
+    decision = parse_decision(
+        '{"decision":"SELECT","selected_indices":[0],"reason_codes":["alias_match"]}',
+        ["J18.9", "J18.0"],
+    )
+    assert decision.selected
+    assert decision.selected_indices == (0,)
+    assert decision.candidate_ids == ("J18.9",)
+    assert decision.reason_codes == ("alias_match",)
+
+
+def test_multiple_valid_indices_map_deterministically() -> None:
+    decision = parse_decision(
+        '{"decision":"SELECT","selected_indices":[1,0,1],"reason_codes":[]}',
+        ["1191", "1049502"],
+    )
+    assert decision.candidate_ids == ("1049502", "1191")
+    assert decision.selected_indices == (1, 0)
+
+
+@pytest.mark.parametrize(
+    "reply,bad",
+    [
+        ('{"decision":"SELECT","selected_indices":[2]}', ("2",)),
+        ('{"decision":"SELECT","selected_indices":[-1]}', ("-1",)),
+        ('{"decision":"SELECT","selected_indices":["0"]}', ("0",)),
+        ('{"decision":"SELECT","selected_indices":[0.0]}', ("0.0",)),
+        ('{"decision":"SELECT","selected_indices":[true]}', ("True",)),
+    ],
+)
+def test_invalid_indices_fail_closed(reply: str, bad: tuple[str, ...]) -> None:
+    decision = parse_decision(reply, ["J18.9"])
+    assert not decision.selected
+    assert decision.parse_failed
+    assert decision.conflict
+    assert decision.invalid_indices == bad
+
+
+def test_null_with_empty_indices_is_a_valid_null() -> None:
+    decision = parse_decision(
+        '{"decision":"NULL","selected_indices":[],"reason_codes":["context_supports"]}',
+        ["J18.9"],
+    )
+    assert decision.decision == "NULL"
+    assert not decision.selected
+    assert not decision.parse_failed
+    assert not decision.conflict
+    assert decision.reason_codes == ("context_supports",)
+
+
+def test_null_with_selected_indices_is_a_conflict_and_fails_closed() -> None:
+    decision = parse_decision('{"decision":"NULL","selected_indices":[0]}', ["J18.9"])
+    assert not decision.selected
+    assert decision.parse_failed
+    assert decision.conflict
+    assert decision.conflict_reason == "null_with_indices"
+    assert decision.candidate_ids == ()
+
+
+def test_select_with_empty_indices_is_a_conflict_and_fails_closed() -> None:
+    decision = parse_decision('{"decision":"SELECT","selected_indices":[]}', ["J18.9"])
+    assert not decision.selected
+    assert decision.parse_failed
+    assert decision.conflict
+    assert decision.conflict_reason == "select_without_indices"
+
+
+def test_model_cannot_supply_an_arbitrary_governed_id_field() -> None:
+    decision = parse_decision(
+        '{"decision":"SELECT","candidate_ids":["J18.9"],"selected_indices":[0]}',
+        ["J18.9"],
+    )
+    assert not decision.selected
+    assert decision.parse_failed
+    assert decision.conflict_reason == "unsupported_schema"
+
+
+def test_numeric_rxnorm_ids_are_not_interpreted_as_indices() -> None:
+    decision = parse_decision(
+        '{"decision":"SELECT","selected_indices":[317300]}',
+        ["317300", "866429"],
+    )
+    assert not decision.selected
+    assert decision.invalid_indices == ("317300",)
+
+    accepted = parse_decision(
+        '{"decision":"SELECT","selected_indices":[0]}',
+        ["317300", "866429"],
+    )
+    assert accepted.candidate_ids == ("317300",)
 
 
 def test_reason_codes_come_from_a_closed_enum() -> None:
     decision = parse_decision(
-        '{"decision":"SELECT","candidate_ids":["J18.9"],"reason_codes":["alias_match","made_up"]}',
+        '{"decision":"SELECT","selected_indices":[0],"reason_codes":["alias_match","made_up"]}',
         ["J18.9"],
     )
     assert decision.reason_codes == ("alias_match",)
@@ -329,9 +408,12 @@ def test_reason_codes_come_from_a_closed_enum() -> None:
 def test_prompt_is_null_first_and_forbids_writing_codes() -> None:
     prompt = build_prompt("viêm phổi", "CHẨN_ĐOÁN", "ctx", [("J18.9", ["code J18.9: x"])])
     assert "DEFAULT ANSWER IS NULL" in prompt
-    assert "You cannot write a code" in prompt
+    assert "You cannot write a medical code or concept id" in prompt
+    assert "[0] concept_id=J18.9" in prompt
+    assert '"selected_indices":[0]' in prompt
+    assert "candidate_ids" not in prompt
     assert "broader, narrower, parent, sibling" in prompt
-    assert '{"decision":"NULL"}' in prompt
+    assert '"decision":"NULL","selected_indices":[]' in prompt
 
 
 # --------------------------------------------------------------------- tier gates
@@ -620,6 +702,72 @@ def enabled_specs() -> list[gm.RetrieverSpec]:
     return pinned([s for s in gm.DEFAULT_RETRIEVERS if s.enabled])
 
 
+E3_SMOKE_REVISION = (
+    "sha256:524ece1e7d190838cb8b1ce3b0a0f337bc5b8b7cc7cef70c4c3e0b0310adde3a"
+)
+DEFAULT_DEPLOYED_TOTAL = 8_729_759_237
+REAL_RETRIEVER_COUNTS = {
+    "sapbert_xlmr": 278_043_648,
+    "clinlinker_kb_gp": 125_978_112,
+}
+
+
+def pinned_default_specs() -> list[gm.RetrieverSpec]:
+    return [
+        dataclasses.replace(spec, revision=fake_sha(spec.key)) if spec.enabled else spec
+        for spec in cli.resolve_specs(cli.load_config(DEFAULT_PROFILE))
+    ]
+
+
+def canonical_manifest_payload(specs: Sequence[gm.RetrieverSpec]) -> dict[str, Any]:
+    from mednorm_vi.reasoner.budget import QWEN3_8B_PARAMETERS, QWEN3_8B_REVISION
+
+    retrievers: list[gm.RetrieverSpec] = []
+    deployed: list[gm.DeployedModel] = []
+    for spec in specs:
+        count = REAL_RETRIEVER_COUNTS.get(spec.key) if spec.enabled else None
+        retrievers.append(
+            dataclasses.replace(
+                spec, parameter_count=count, embedding_dim=2 if spec.enabled else None
+            )
+        )
+        if spec.enabled:
+            deployed.append(
+                gm.DeployedModel(spec.repo_id, int(count or 0), spec.revision, spec.licence,
+                                 "retriever")
+            )
+    deployed.extend([
+        gm.DeployedModel(
+            "ViHealthBERT E3",
+            135_002_117,
+            E3_SMOKE_REVISION,
+            role="mention expert",
+        ),
+        gm.DeployedModel(
+            "Qwen/Qwen3-8B",
+            QWEN3_8B_PARAMETERS,
+            QWEN3_8B_REVISION,
+            role="disambiguator",
+        ),
+    ])
+    manifest = gm.ModelManifest(
+        deployed=deployed,
+        retrievers=retrievers,
+        resolved_revisions={spec.key: spec.revision for spec in specs if spec.enabled},
+    )
+    payload = manifest.as_dict()
+    assert payload["total_deployed_parameters"] == DEFAULT_DEPLOYED_TOTAL
+    return payload
+
+
+def write_canonical_manifest(model_root: Path, specs: Sequence[gm.RetrieverSpec]) -> None:
+    model_root.mkdir(parents=True, exist_ok=True)
+    (model_root / ga.MANIFEST_NAME).write_text(
+        json.dumps(canonical_manifest_payload(specs), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
 class FakeQwen:
     def __init__(self, reply: str = '{"decision":"NULL"}') -> None:
         self.reply, self.prompts, self.unloads = reply, [], 0
@@ -744,12 +892,38 @@ def test_retrieval_precompute_loads_each_model_once_then_unloads(tmp_path: Path)
         gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
     FakeRetrieverEncoder.events = []
     evidence = gr.precompute_retrieval(
-        [("viêm phổi", go.ONTOLOGY_ICD)], specs, documents, config,
+        [("viêm phổi", go.ONTOLOGY_ICD, gm.ROLE_DIAGNOSIS)], specs, documents, config,
         encoder_factory=FakeRetrieverEncoder,
     )
     for spec in specs:
         assert FakeRetrieverEncoder.events.count(f"unload:{spec.key}") >= 1
     assert evidence.for_span(f"{go.ONTOLOGY_ICD}\x00viêm phổi")
+
+
+def test_retriever_roles_are_enforced_per_mention_type(tmp_path: Path) -> None:
+    FakeRetrieverEncoder.events = []
+    _, _, documents = _tiny_kb()
+    config = _config(tmp_path)
+    specs = enabled_specs()
+    for spec in specs:
+        gr.build_index_for(spec, documents, config, encoder_factory=FakeRetrieverEncoder)
+
+    evidence = gr.precompute_retrieval(
+        [
+            ("viêm phổi", go.ONTOLOGY_ICD, gm.ROLE_DIAGNOSIS),
+            ("aspirin", go.ONTOLOGY_RXNORM, gm.ROLE_DRUG),
+        ],
+        specs,
+        documents,
+        config,
+        encoder_factory=FakeRetrieverEncoder,
+    )
+
+    diagnosis = evidence.for_span(f"{go.ONTOLOGY_ICD}\x00viêm phổi")
+    drug = evidence.for_span(f"{go.ONTOLOGY_RXNORM}\x00aspirin")
+    assert set(diagnosis) == {"sapbert_xlmr", "clinlinker_kb_gp"}
+    assert set(drug) == {"sapbert_xlmr"}
+    assert "clinlinker_kb_gp" not in drug
 
 
 def test_one_pass_derives_all_four_variants_without_rerunning_qwen(tmp_path: Path) -> None:
@@ -766,7 +940,7 @@ def test_one_pass_derives_all_four_variants_without_rerunning_qwen(tmp_path: Pat
          "position": [note.index("aspirin"), note.index("aspirin") + 7], "assertions": []},
         {"text": "Bệnh nhân", "type": "TRIỆU_CHỨNG", "position": [0, 9], "assertions": []},
     ]}
-    qwen = FakeQwen('{"decision":"SELECT","candidate_ids":["J189"]}')
+    qwen = FakeQwen('{"decision":"SELECT","selected_indices":[0]}')
     outcome = gr.run_documents(
         {"1": note}, seeds, enabled_specs(),
         documents, config, icd_index=icd, rxnorm_index=rx, structured={},
@@ -1041,6 +1215,74 @@ def test_profile_may_not_override_provenance() -> None:
 def test_profile_roles_override_is_still_honoured() -> None:
     specs = {s.key: s for s in cli.resolve_specs(cli.load_config(DEFAULT_PROFILE))}
     assert specs["clinlinker_kb_gp"].role == ("diagnosis",)
+
+
+def test_stage_manifest_reuses_the_download_models_certification(tmp_path: Path) -> None:
+    specs = pinned_default_specs()
+    model_root = tmp_path / "models"
+    write_canonical_manifest(model_root, specs)
+
+    manifest = cli.certified_manifest_for_stage(specs, model_root)
+    payload = manifest.as_dict()
+    deployed = {row["name"]: row for row in payload["deployed"]}
+    assert deployed["ViHealthBERT E3"]["revision"] == E3_SMOKE_REVISION
+    assert payload["total_deployed_parameters"] == DEFAULT_DEPLOYED_TOTAL
+    assert payload["resolved_revisions"] == {
+        spec.key: spec.revision for spec in specs if spec.enabled
+    }
+
+
+def test_stage_manifest_fails_closed_when_e3_is_missing(tmp_path: Path) -> None:
+    specs = pinned_default_specs()
+    model_root = tmp_path / "models"
+    payload = canonical_manifest_payload(specs)
+    payload["deployed"] = [
+        row for row in payload["deployed"] if row["name"] != "ViHealthBERT E3"
+    ]
+    model_root.mkdir()
+    (model_root / ga.MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(gm.RevisionNotPinned, match="ViHealthBERT E3 is missing"):
+        cli.certified_manifest_for_stage(specs, model_root)
+
+
+@pytest.mark.parametrize("command", ["smoke", "run"])
+def test_smoke_and_run_diagnostics_include_the_canonical_e3_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str
+) -> None:
+    specs = pinned_default_specs()
+    model_root = tmp_path / "models"
+    write_canonical_manifest(model_root, specs)
+    input_dir = tmp_path / "input"
+    seed_dir = tmp_path / "seeds"
+    run_dir = tmp_path / "run"
+    input_dir.mkdir()
+    seed_dir.mkdir()
+    (input_dir / "1.txt").write_text("Bệnh nhân ổn định.", encoding="utf-8")
+    (seed_dir / "1.json").write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(cli, "require_host", lambda *a, **k: 24.0)
+    monkeypatch.setattr(cli, "_load_kb", lambda config: (*_tiny_kb()[:2], {}, _tiny_kb()[2]))
+    monkeypatch.setattr(gr, "QwenDisambiguator", lambda *a, **k: FakeQwen())
+
+    def fake_run_documents(*args: Any, **kwargs: Any) -> gr.RunOutcome:
+        return gr.RunOutcome(diagnostics={"documents": 1}, records=[])
+
+    monkeypatch.setattr(gr, "run_documents", fake_run_documents)
+
+    argv = [
+        "--config", str(DEFAULT_PROFILE), command, "--allow-download",
+        "--input-dir", str(input_dir), "--run-dir", str(run_dir),
+        "--seed-entities", str(seed_dir), "--model-root", str(model_root),
+        "--documents", "1", "--expected-documents", "1",
+    ]
+    assert cli.main(argv) == 0
+
+    summary = json.loads((run_dir / "diagnostic-summary.json").read_text(encoding="utf-8"))
+    model_manifest = summary["model_manifest"]
+    deployed = {row["name"]: row for row in model_manifest["deployed"]}
+    assert deployed["ViHealthBERT E3"]["revision"] == E3_SMOKE_REVISION
+    assert model_manifest["total_deployed_parameters"] == DEFAULT_DEPLOYED_TOTAL
 
 
 # ==================== CPU-safe preflight of the real download-models command ==================

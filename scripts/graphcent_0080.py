@@ -113,6 +113,100 @@ def pin_specs(specs: list[RetrieverSpec], model_root: Path) -> list[RetrieverSpe
     return out
 
 
+def certified_manifest_for_stage(
+    specs: list[RetrieverSpec],
+    model_root: Path,
+    *,
+    e3_checkpoint: Path | None = None,
+) -> Any:
+    """Canonical model manifest produced by `download-models`, validated for this stage."""
+    from mednorm_vi.graphcent.acquisition import MANIFEST_NAME, file_digest
+    from mednorm_vi.graphcent.models import (
+        ModelManifest,
+        RevisionNotPinned,
+        is_local_checkpoint_revision,
+    )
+    from mednorm_vi.reasoner.budget import QWEN3_8B_REVISION
+
+    path = model_root / MANIFEST_NAME
+    if not path.is_file():
+        raise RevisionNotPinned(
+            f"no certified model manifest at {path}. Run download-models first."
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        manifest = ModelManifest.from_dict(payload)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RevisionNotPinned(f"{path}: malformed certified model manifest: {error}") from error
+
+    manifest.assert_licences_cleared()
+    manifest.assert_revisions_pinned()
+    total = manifest.assert_within_cap()
+
+    problems: list[str] = []
+    try:
+        recorded_total = int(payload.get("total_deployed_parameters", -1))
+    except (TypeError, ValueError):
+        recorded_total = -1
+    if recorded_total != total:
+        problems.append(
+            "total_deployed_parameters does not match the deployed rows "
+            f"({payload.get('total_deployed_parameters')} != {total})"
+        )
+    if payload.get("training_performed") is not False:
+        problems.append("training_performed is not false")
+
+    expected_enabled = {spec.key for spec in specs if spec.enabled}
+    actual_enabled = {spec.key for spec in manifest.retrievers if spec.enabled}
+    if actual_enabled != expected_enabled:
+        problems.append(
+            f"enabled retrievers differ from the current profile "
+            f"({sorted(actual_enabled)} != {sorted(expected_enabled)})"
+        )
+
+    by_key = {spec.key: spec for spec in manifest.retrievers}
+    expected_revisions = {spec.key: spec.revision for spec in specs if spec.enabled}
+    if manifest.resolved_revisions != expected_revisions:
+        problems.append(
+            f"resolved_revisions differ from current pins "
+            f"({manifest.resolved_revisions} != {expected_revisions})"
+        )
+    for spec in specs:
+        if not spec.enabled:
+            continue
+        recorded = by_key.get(spec.key)
+        if recorded is None:
+            problems.append(f"{spec.key}: missing retriever row")
+            continue
+        if recorded.repo_id != spec.repo_id:
+            problems.append(f"{spec.key}: repo differs from registry")
+        if recorded.pooling != spec.pooling:
+            problems.append(f"{spec.key}: pooling differs from registry")
+        if recorded.role != spec.role:
+            problems.append(f"{spec.key}: roles differ from current profile")
+        if recorded.revision != spec.revision:
+            problems.append(f"{spec.key}: revision differs from current pin")
+        if recorded.parameter_count is None or recorded.parameter_count <= 0:
+            problems.append(f"{spec.key}: parameter count was not certified")
+
+    deployed = {row.name: row for row in manifest.deployed}
+    qwen = deployed.get("Qwen/Qwen3-8B")
+    if qwen is None or qwen.revision != QWEN3_8B_REVISION:
+        problems.append("Qwen/Qwen3-8B is missing or not at the repository-pinned revision")
+    e3 = deployed.get("ViHealthBERT E3")
+    if e3 is None or not is_local_checkpoint_revision(e3.revision):
+        problems.append("ViHealthBERT E3 is missing or not recorded as a sha256 local checkpoint")
+    elif e3_checkpoint is not None and e3.revision != file_digest(e3_checkpoint):
+        problems.append("ViHealthBERT E3 digest differs from --e3-checkpoint")
+
+    if problems:
+        raise RevisionNotPinned(
+            f"{path}: certified model manifest is inconsistent:\n  - "
+            + "\n  - ".join(problems)
+        )
+    return manifest
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -280,7 +374,9 @@ def cmd_build_index(args: argparse.Namespace) -> int:
         print("BLOCKED: no governed KB documents; restore the indices first", file=sys.stderr)
         return 2
     log(f"governed documents {len(documents):,}")
-    for spec in pin_specs(resolve_specs(config), runtime.model_root):
+    specs = pin_specs(resolve_specs(config), runtime.model_root)
+    certified_manifest_for_stage(specs, runtime.model_root)
+    for spec in specs:
         if not spec.enabled:
             continue
         build_index_for(spec, documents, runtime)
@@ -290,7 +386,6 @@ def cmd_build_index(args: argparse.Namespace) -> int:
 def _execute(args: argparse.Namespace, *, smoke: bool) -> int:
     from mednorm_vi.graphcent.runtime import (
         QwenDisambiguator,
-        certify_budget,
         run_documents,
         write_variants,
     )
@@ -331,16 +426,15 @@ def _execute(args: argparse.Namespace, *, smoke: bool) -> int:
         )
 
     icd, rxnorm, structured, documents = _load_kb(config)
+    manifest = certified_manifest_for_stage(
+        specs,
+        runtime.model_root,
+        e3_checkpoint=Path(args.e3_checkpoint) if args.e3_checkpoint else None,
+    )
     qwen = QwenDisambiguator(
         runtime.qwen_model_root, device=runtime.device,
         max_new_tokens=runtime.max_new_tokens,
     )
-    manifest = certify_budget(
-        specs, runtime,
-        e3_checkpoint=Path(args.e3_checkpoint) if args.e3_checkpoint else None,
-        qwen=qwen, licence_overrides=config.get("licence_overrides_accepted") or (),
-    )
-    qwen.unload()  # released again; retrieval runs first
 
     started = time.time()
     outcome = run_documents(
