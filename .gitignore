@@ -76,12 +76,20 @@ indices/**
 !indices/README.md
 
 # --- Prediction outputs & submission packages ---
-outputs/**
+# `outputs/*` and NOT `outputs/` or `outputs/**`: git will not descend into an excluded
+# directory, so a negation for a file inside one can never take effect. Excluding the
+# directory's contents instead leaves the door open for the exceptions below.
+outputs/*
 !outputs/.gitkeep
 !outputs/README.md
-outputs/
 output/
 *.zip
+
+# The submitted archives ARE tracked: they are the artifact a score refers to, and a hash in
+# a summary file proves nothing once the archive it names is gone. Listed after `*.zip`
+# because the last matching rule wins.
+!outputs/output.zip
+!outputs/output_rev*.zip
 
 # Operator-placed LOCAL copies of Colab training artifacts. Audit 0036 already
 # ignores artifacts/, weights/ and caches/; this covers the local-artifacts/
