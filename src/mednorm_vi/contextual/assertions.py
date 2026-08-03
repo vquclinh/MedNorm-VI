@@ -10,9 +10,13 @@ as a missing one is:
 **Negation** scopes to the entity's own clause. A negation cue earlier in the sentence stops
 at the first clause break, so "no fever, has cough" does not negate the cough.
 
-**Family** requires a family reference in the same clause, and the subject is whoever is
-named first: a patient narrating their own history is never family history, however the
-sentence is phrased, while "the patient's mother" is.
+**Family** requires a family reference that is the *subject* of the entity's own clause: it
+must precede the entity, it must not be the entity itself, and it loses to a first-person or
+patient reference that comes first. A patient narrating their own history is never family
+history however the sentence is phrased, while "the patient's mother" is. The first real
+smoke marked the word "not" and the phrase "the symptoms" as family history because a
+kinship word existed anywhere in a long clause; a cue that follows the entity, or that *is*
+the entity, says nothing about whose history it is.
 
 **Historical** comes from the section the entity sits in, or from an explicit past-time
 marker. Chronicity is not history: a condition described as chronic is a *current* chronic
@@ -50,10 +54,20 @@ _NEGATION_CUES: tuple[str, ...] = (
 #: A cue that only negates when it precedes the entity closely (it is also an ordinary word).
 _NEGATION_STRICT: frozenset[str] = frozenset({"hết", "ko", "k có"})
 
+#: Kinship words that can ONLY mean a relative. These carry family history on their own.
 _FAMILY_CUES: tuple[str, ...] = (
-    "gia đình", "bố", "cha", "mẹ", "ba", "má", "anh trai", "chị gái", "em trai",
-    "em gái", "ông", "bà", "con trai", "con gái", "họ hàng", "người thân", "cậu", "dì",
-    "chú", "bác", "cô",
+    "gia đình", "bố", "cha", "mẹ", "má", "anh trai", "chị gái", "em trai", "em gái",
+    "con trai", "con gái", "họ hàng", "người thân", "ông nội", "ông ngoại", "bà nội",
+    "bà ngoại", "bố mẹ", "cha mẹ",
+)
+
+#: Words that are kinship terms AND ordinary Vietnamese address pronouns for the patient
+#: themselves. "Bà kể..." is usually an elderly patient speaking, not her grandmother's
+#: history, so these count only inside a family-history section or next to a possessive
+#: patient reference. Treating them as kinship on sight is how the first smoke marked
+#: ordinary narration as family history.
+_FAMILY_AMBIGUOUS_CUES: tuple[str, ...] = (
+    "ông", "bà", "cô", "chú", "bác", "cậu", "dì", "anh", "chị", "em", "ba",
 )
 #: The patient as the subject of the clause - either narrating in the first person or
 #: referred to as the patient. Both mean "this is about the patient", not about a relative.
@@ -186,10 +200,24 @@ def assert_entity(
     # the sentence is phrased.
     _, self_at = _first_cue(clause, _SELF_CUES)
     family_cue, family_at = _first_cue(clause, _FAMILY_CUES)
+    if not family_cue and section is not None and section.is_family:
+        # Inside a declared family-history section the ambiguous address pronouns do mean
+        # relatives, because the heading has already said whose history this is.
+        family_cue, family_at = _first_cue(clause, _FAMILY_AMBIGUOUS_CUES)
     subject_is_patient = self_at >= 0 and (family_at < 0 or self_at < family_at)
-    if family_cue and not subject_is_patient:
+
+    # The cue must be about somebody OTHER than this entity, and must precede it: the first
+    # smoke marked the word "not" and the phrase "the symptoms" as family history, because a
+    # kinship word merely existed somewhere in a long clause. A relative is a subject, so it
+    # appears before what is said about them, and an entity is never its own family cue.
+    family_before = family_at >= 0 and left + family_at < entity.start
+    cue_is_the_entity = bool(family_cue) and family_cue in fold(entity.text)
+    if family_cue and family_before and not cue_is_the_entity and not subject_is_patient:
         out.append(FAMILY)
-    elif section is not None and section.is_family and not subject_is_patient:
+    elif (
+        section is not None and section.is_family
+        and not subject_is_patient and not cue_is_the_entity
+    ):
         out.append(FAMILY)
 
     if section is not None and section.is_history:

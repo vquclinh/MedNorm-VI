@@ -176,37 +176,54 @@ def test_lexicon_is_built_from_whatever_governed_index_is_supplied() -> None:
 # ------------------------------------------------------------------ proposer contract
 
 
-def test_proposer_prompt_teaches_every_required_distinction() -> None:
-    document = view("L1 text")
-    prompt = cp.build_proposal_prompt(document)
+def test_each_specialized_pass_teaches_its_own_distinctions() -> None:
+    rendered = view("L1 text").render()
+    diagnosis = cp.build_pass_prompt(cp.PASS_DIAGNOSIS, rendered)
     for taught in (
-        "complete clinical concept", "A symptom is what the patient feels",
-        "The name of the measurement and the value", "medication as written",
-        "inside a larger ordinary word", "arbitrary nearby number",
-        "Repeated mentions are not duplicates", "Never return a character position",
+        "COMPLETE clinical concept", "A symptom is what the patient feels",
+        "Do NOT split one concept", "Repeated mentions are not duplicates",
+        "Never return a character position",
     ):
-        assert taught in prompt, taught
-    assert '"line_id"' in prompt and '"occurrence"' in prompt
+        assert taught in diagnosis, taught
+    assert "THUỐC" not in diagnosis      # a pass asks for its own types only
+
+    medication = cp.build_pass_prompt(cp.PASS_MEDICATION, rendered)
+    for taught in (
+        "NEVER return a substring of a longer medication name",
+        "brand name, a generic name", "Stop at the end of that item",
+    ):
+        assert taught in medication, taught
+
+    lab = cp.build_pass_prompt(cp.PASS_LAB, rendered)
+    for taught in (
+        "A RESULT BELONGS TO A TEST", "with no named measurement is NOT a result",
+        "two separate entities",
+    ):
+        assert taught in lab, taught
 
 
-def test_proposer_prompt_names_no_disease_drug_or_test() -> None:
-    """The rubric teaches shape, never content. Nothing test-set specific may leak in."""
-    prompt = cp.build_proposal_prompt(view("x")).casefold()
-    for leaked in ("paracetamol", "amlodipine", "viêm phổi", "g6pd", "metformin"):
-        assert leaked not in prompt
+def test_no_proposer_prompt_names_a_disease_drug_or_test() -> None:
+    """The rubrics teach shape, never content. Nothing test-set specific may leak in."""
+    for pass_name in cp.PASSES:
+        prompt = cp.build_pass_prompt(pass_name, "L001| x").casefold()
+        for leaked in ("paracetamol", "amlodipine", "viêm phổi", "g6pd", "metformin"):
+            assert leaked not in prompt, f"{pass_name}: {leaked}"
 
 
 def test_proposer_parse_is_strict_and_counts_bad_rows() -> None:
-    good, counters = cp.parse_proposals(
+    result = cp.parse_pass(
+        cp.PASS_DIAGNOSIS,
         '{"entities": [{"line_id": "L001", "text": "sốt", "type": "TRIỆU_CHỨNG", '
         '"occurrence": 0}, {"line_id": "L001", "text": "", "type": "TRIỆU_CHỨNG"}, '
         '{"line_id": "L001", "text": "x", "type": "NOT_A_TYPE"}]}'
     )
-    assert [p.text for p in good] == ["sốt"]
-    assert counters[cp.PARSE_BAD_ROW] == 2
+    assert [p.text for p in result.proposals] == ["sốt"]
+    assert result.counters[cp.PARSE_BAD_ROW] == 2
+    assert result.report.json_extracted
 
-    none, failed = cp.parse_proposals("I think there is a fever.")
-    assert none == [] and failed[cp.PARSE_FAILED] == 1
+    failed = cp.parse_pass(cp.PASS_DIAGNOSIS, "I think there is a fever.")
+    assert failed.proposals == []
+    assert failed.report.category == cp.PARSE_NO_JSON
 
 
 def test_hallucinated_proposal_text_never_becomes_a_proposal() -> None:
@@ -703,3 +720,493 @@ def test_every_variant_serializes_valid_organizer_rows(variant: str) -> None:
         }
         assert NOTE[row["position"][0] : row["position"][1]] == row["text"]
         assert "candidates" not in row      # candidates remain GraphCENT's decision
+
+
+# ================== repairs for the first real Colab smoke (documents 1, 10, 100) ==========
+#
+# Observed: proposer_parse_failed=3 (every document), verifier_invalid_index=675 against 357
+# offered options, 75 alias-only junk entities, contextual_high identical to e3_control, and
+# 'Thiếu men G6PD' fragmented into 'Thiếu men' + 'G6PD'.
+
+
+class RecordingQwen:
+    """Answers each specialized pass separately and records the generation budget it saw."""
+
+    def __init__(self, replies: dict[str, str] | None = None, verdict: str = "",
+                 max_new_tokens: int = 1536) -> None:
+        self.replies = replies or {}
+        self.verdict = verdict
+        self.max_new_tokens = max_new_tokens
+        self.prompts: list[str] = []
+
+    def _pass_of(self, prompt: str) -> str:
+        for pass_name, rubric in cp.RUBRICS.items():
+            if rubric.split("\n", 1)[0] in prompt:
+                return pass_name
+        return ""
+
+    def ask(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if "CANDIDATES:" in prompt:
+            return self.verdict or json.dumps({"verdicts": [{"index": 0, "action": "accept"}]})
+        return self.replies.get(self._pass_of(prompt), '{"entities": []}')
+
+    def ask_detailed(self, prompt: str) -> tuple[str, dict[str, Any]]:
+        reply = self.ask(prompt)
+        tokens = max(len(reply) // 4, 1)
+        return reply, {
+            "generated_tokens": tokens,
+            "hit_token_limit": tokens >= self.max_new_tokens,
+            "max_new_tokens": self.max_new_tokens,
+        }
+
+
+def entities_payload(rows: list[tuple[str, str, str]]) -> str:
+    return json.dumps({
+        "entities": [
+            {"line_id": line, "text": text, "type": kind, "occurrence": 0}
+            for line, text, kind in rows
+        ]
+    })
+
+
+# ---------------------------------------------------- root cause 1: truncation and parsing
+
+
+def test_a_truncated_reply_is_reported_as_truncation_not_as_silence() -> None:
+    """The exact first-smoke failure: generation ran out of budget mid-JSON."""
+    cut_off = '{"entities": [{"line_id": "L001", "text": "sốt", "type": "TRIỆU_CHỨNG"'
+    result = cp.parse_pass(
+        cp.PASS_DIAGNOSIS, cut_off, generated_tokens=1536, hit_token_limit=True
+    )
+    assert result.proposals == []
+    assert result.report.category == cp.PARSE_TRUNCATED
+    assert result.report.hit_token_limit is True
+    assert result.report.json_extracted is False
+    assert result.report.characters == len(cut_off)
+
+
+def test_generation_diagnostics_record_shape_and_never_reasoning() -> None:
+    reply = (
+        "<think>the patient seems to have a fever, I should consider...</think>\n"
+        '```json\n{"entities": [{"line_id": "L001", "text": "sốt", '
+        '"type": "TRIỆU_CHỨNG", "occurrence": 0}]}\n```'
+    )
+    result = cp.parse_pass(cp.PASS_DIAGNOSIS, reply, generated_tokens=90)
+    assert [p.text for p in result.proposals] == ["sốt"]
+
+    report = result.report.as_dict()
+    for value in (report["excerpt_head"], report["excerpt_tail"]):
+        assert "<think>" not in value and "I should consider" not in value
+    assert len(report["excerpt_head"]) <= cp.DEBUG_EXCERPT
+    assert report["json_extracted"] is True
+    assert report["generated_tokens"] == 90
+    assert report["rows_kept"] == 1
+
+
+def test_qwen3_thinking_blocks_and_markdown_fences_are_handled() -> None:
+    for reply in (
+        '```json\n{"entities": []}\n```',
+        '<think>reasoning</think>{"entities": []}',
+        'Here is the result:\n{"entities": []}\nLet me know if you need more.',
+        '<think>unterminated reasoning {"entities": [] }',
+    ):
+        result = cp.parse_pass(cp.PASS_LAB, reply)
+        # an unterminated thinking block leaves nothing to parse, which is reported as
+        # empty rather than guessed at
+        assert result.report.category in {cp.PARSE_OK, cp.PARSE_NO_JSON, cp.PARSE_EMPTY}
+
+
+def test_json_extraction_is_brace_matched_not_greedy() -> None:
+    body, reason = cp.extract_json_object('{"entities": []} trailing {"other": 1}')
+    assert reason == cp.PARSE_OK
+    assert body == '{"entities": []}'          # not spanning to the last brace
+
+    body, reason = cp.extract_json_object('{"entities": [{"text": "a"')
+    assert body == "" and reason == cp.PARSE_TRUNCATED
+
+    body, reason = cp.extract_json_object("no object at all")
+    assert body == "" and reason == cp.PARSE_NO_JSON
+
+    # a brace inside a string must not close the object
+    body, reason = cp.extract_json_object('{"text": "a } b", "n": 1}')
+    assert reason == cp.PARSE_OK and body.endswith("}")
+
+
+def test_the_structured_extraction_budget_is_not_the_disambiguation_default() -> None:
+    """256 tokens is a one-word answer's budget; it is what truncated every document."""
+    import yaml
+
+    profile = yaml.safe_load(
+        (ROOT / "configs/pipeline/contextual_0081.yaml").read_text(encoding="utf-8")
+    )
+    assert profile["max_new_tokens"] >= 1024
+    source = CLI_PATH.read_text(encoding="utf-8")
+    assert "max_new_tokens=int(" in source.replace(" ", "")
+
+
+# ---------------------------------------------------- root cause 2: three separate passes
+
+
+def test_each_pass_only_accepts_the_types_it_asked_for() -> None:
+    leaked = cp.parse_pass(
+        cp.PASS_MEDICATION,
+        entities_payload([("L001", "sốt", TYPE_SYMPTOM), ("L001", "aspirin", TYPE_DRUG)]),
+    )
+    assert [p.text for p in leaked.proposals] == ["aspirin"]
+    assert leaked.counters[cp.PARSE_WRONG_TYPE_FOR_PASS] == 1
+
+
+def test_one_failing_pass_does_not_discard_the_other_two() -> None:
+    note = "Khám: sốt cao\nThuốc: aspirin 325mg\nXét nghiệm: glucose 7.2 mmol/L"
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: "the model rambled instead of answering",   # this pass fails
+        cp.PASS_MEDICATION: entities_payload([("L002", "aspirin 325mg", TYPE_DRUG)]),
+        cp.PASS_LAB: entities_payload([("L003", "glucose", TYPE_TEST)]),
+    })
+    outcome = crt.process_document("1", note, [], qwen=qwen)
+    texts = {e.text for e in outcome.entities}
+    assert "aspirin 325mg" in texts and "glucose" in texts
+    assert outcome.counters["proposer_passes_failed"] == 1
+    assert outcome.counters["proposer_passes_parsed"] == 2
+
+
+def test_all_three_passes_are_asked_exactly_once_per_document() -> None:
+    qwen = RecordingQwen()
+    crt.process_document("1", "Khám: sốt cao", [], qwen=qwen)
+    asked = [qwen._pass_of(p) for p in qwen.prompts if "CANDIDATES:" not in p]
+    assert sorted(asked) == sorted(cp.PASSES)
+
+
+# ---------------------------------------------------- root cause 3: verifier index space
+
+
+def test_the_schema_example_never_shows_an_index_that_was_not_offered() -> None:
+    """This is the 675-invalid-index bug: a fixed 0/1/2 example against one-option groups."""
+    single = cv.schema_for(1)
+    assert '"index": 1' not in single and '"index": 2' not in single
+    assert "ONLY valid index values are 0" in single
+
+    three = cv.schema_for(3)
+    assert '"index": 3' not in three
+    assert "0 to 2" in three
+
+
+def test_a_one_option_group_teaches_only_index_zero() -> None:
+    document = view("bệnh nhân viêm phổi")
+    group = cl.LatticeGroup(
+        start=10, end=19, options=(span(document, "viêm phổi", TYPE_DIAGNOSIS),)
+    )
+    prompt = cv.build_verification_prompt(document, group)
+    assert "[0]" in prompt and "[1]" not in prompt
+    assert "1 candidate(s)" in prompt
+
+    # the model copying the old fixed example is still refused, but nothing invites it now
+    verdicts, counters = cv.parse_verdicts(
+        '{"verdicts": [{"index": 0, "action": "accept"}, {"index": 1, "action": "reject"}, '
+        '{"index": 2, "action": "reject"}]}', 1
+    )
+    assert [v.index for v in verdicts] == [0]
+    assert counters[cv.INVALID_INDEX] == 2
+
+
+def test_indices_are_local_to_one_invocation_and_never_global_ids() -> None:
+    document = view("sốt cao và ho khan nhiều")
+    first = cl.LatticeGroup(start=0, end=7, options=(span(document, "sốt cao", TYPE_SYMPTOM),))
+    second = cl.LatticeGroup(
+        start=11, end=18, options=(span(document, "ho khan", TYPE_SYMPTOM),)
+    )
+    for group in (first, second):
+        prompt = cv.build_verification_prompt(document, group)
+        assert "[0]" in prompt                      # both start at zero: one index space
+        verdicts, counters = cv.parse_verdicts(
+            '{"verdicts": [{"index": 0, "action": "accept"}]}', len(group.options)
+        )
+        assert [v.index for v in verdicts] == [0] and not counters
+
+
+@pytest.mark.parametrize("bad", ["-1", "7", '"0"', "null", "1.5"])
+def test_a_foreign_or_malformed_index_fails_closed(bad: str) -> None:
+    verdicts, counters = cv.parse_verdicts(
+        '{"verdicts": [{"index": ' + bad + ', "action": "accept"}]}', 2
+    )
+    assert verdicts == []
+    assert sum(counters.values()) >= 1
+
+
+def test_verifier_parsing_survives_fences_and_thinking() -> None:
+    verdicts, counters = cv.parse_verdicts(
+        '<think>which one</think>```json\n{"verdicts": [{"index": 0, "action": "accept"}]}\n```',
+        1,
+    )
+    assert [v.index for v in verdicts] == [0] and not counters
+
+
+# ---------------------------------------------------- root cause 4: alias flooding
+
+
+def test_a_form_naming_many_governed_concepts_is_refused() -> None:
+    class Ambiguous:
+        records = {
+            f"C{i}": {"canonical_name": "khác", "aliases": []} for i in range(9)
+        } | {"D1": {"canonical_name": "viêm phổi thùy dưới", "aliases": []}}
+
+    lexicon = ca.build_lexicon([(Ambiguous(), TYPE_DIAGNOSIS)])
+    assert lexicon.skipped[ca.REJECT_AMBIGUOUS_FORM] >= 1
+    assert ca.find_alias_hits("bệnh khác", lexicon) == []
+    assert ca.find_alias_hits("viêm phổi thùy dưới", lexicon)
+
+
+def test_a_token_common_across_labels_is_not_an_identifying_alias() -> None:
+    class Common:
+        # "bệnh" appears in most labels, so it is a word of the vocabulary, not a term
+        records = {
+            f"C{i}": {"canonical_name": f"bệnh loại {i}", "aliases": []} for i in range(10)
+        } | {"C99": {"canonical_name": "bệnh", "aliases": []}}
+
+    lexicon = ca.build_lexicon([(Common(), TYPE_DIAGNOSIS)])
+    assert lexicon.skipped.get(ca.REJECT_COMMON_TOKEN, 0) >= 1
+    assert [h.text for h in ca.find_alias_hits("bệnh nhân có bệnh", lexicon)] == []
+
+
+def test_a_governed_label_marked_suspect_is_not_used_as_an_alias() -> None:
+    class Flagged:
+        records = {
+            "A1": {"canonical_name": "viêm phổi thùy dưới",
+                   "metadata": {"name_quality": "clean", "quality_flags": ""}},
+            "A2": {"canonical_name": "rối loạn tâm thần và",
+                   "metadata": {"name_quality": "suspect",
+                                "quality_flags": "suspect_trailing_function_word"}},
+        }
+
+    lexicon = ca.build_lexicon([(Flagged(), TYPE_DIAGNOSIS)])
+    assert lexicon.skipped[ca.REJECT_SUSPECT_LABEL] == 1
+    assert ca.find_alias_hits("rối loạn tâm thần và mệt", lexicon) == []
+
+
+def test_ambiguity_is_keyed_on_tokens_so_punctuation_cannot_disguise_a_form() -> None:
+    assert ca.form_key("Bệnh:") == ca.form_key("bệnh") == "bệnh"
+    assert ca.form_key("khác.") == "khác"
+
+
+def test_an_alias_only_span_never_becomes_a_final_entity() -> None:
+    """The 75 alias-only junk entities: an alias is evidence, not an entity."""
+    note = "Bệnh nhân không có bệnh khác, thể trạng ổn."
+    lexicon = ca.AliasLexicon()
+    for word in ("bệnh", "khác", "thể"):
+        lexicon.add(word, TYPE_DIAGNOSIS)
+
+    outcome = crt.process_document("1", note, [], qwen=None, lexicon=lexicon)
+    assert outcome.entities == []
+    assert outcome.counters["alias_hits"] >= 3
+    assert outcome.counters.get("alias_only_group_skipped", 0) >= 1
+
+
+def test_an_alias_still_strengthens_a_span_another_source_found() -> None:
+    note = "Chẩn đoán: viêm phổi thùy dưới"
+    lexicon = ca.AliasLexicon()
+    lexicon.add("viêm phổi thùy dưới", TYPE_DIAGNOSIS)
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload(
+            [("L001", "viêm phổi thùy dưới", TYPE_DIAGNOSIS)]
+        ),
+    })
+    outcome = crt.process_document("1", note, [], qwen=qwen, lexicon=lexicon)
+    entity = next(e for e in outcome.entities if e.text == "viêm phổi thùy dưới")
+    assert entity.sources == {SOURCE_QWEN, SOURCE_ALIAS}
+    assert crt.high_confidence(entity) == (True, "qwen_with_governed_alias_support")
+
+
+# ---------------------------------------------------- root cause 5: contextual_high
+
+
+def test_contextual_high_can_contain_a_qwen_addition_e3_never_found() -> None:
+    """`contextual_high == e3_control` meant 0081 could never repair E3 recall.
+
+    High confidence now asks what INDEPENDENT evidence a mention has, not whether E3 found
+    it - otherwise a mention E3 missed could never qualify, and E3 recall is the thing 0081
+    exists to fix.
+    """
+    note = "Khám: sốt cao. Chẩn đoán: viêm phổi thùy dưới"
+    seed = [{"text": "sốt cao", "type": TYPE_SYMPTOM,
+             "position": [note.index("sốt cao"), note.index("sốt cao") + 7],
+             "assertions": []}]
+    lexicon = ca.AliasLexicon()
+    lexicon.add("viêm phổi thùy dưới", TYPE_DIAGNOSIS)
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload([
+            ("L001", "viêm phổi thùy dưới", TYPE_DIAGNOSIS),
+        ]),
+    })
+    outcome = crt.process_document("1", note, seed, qwen=qwen, lexicon=lexicon)
+
+    control = {e.text for e in crt.variant_entities(outcome, crt.VARIANT_CONTROL)}
+    high = {e.text for e in crt.variant_entities(outcome, crt.VARIANT_HIGH)}
+    assert control == {"sốt cao"}
+    assert "viêm phổi thùy dưới" not in control
+    assert high > control, "contextual_high must be able to add contextual mentions"
+    assert "viêm phổi thùy dưới" in high
+
+
+def test_a_qwen_span_completing_an_e3_fragment_is_high_confidence() -> None:
+    note = "Chẩn đoán: Thiếu men G6PD bẩm sinh"
+    fragment = note.index("G6PD")
+    seed = [{"text": "G6PD", "type": TYPE_DIAGNOSIS,
+             "position": [fragment, fragment + 4], "assertions": []}]
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload([("L001", "Thiếu men G6PD", TYPE_DIAGNOSIS)]),
+    })
+    outcome = crt.process_document("1", note, seed, qwen=qwen)
+    complete = next(e for e in outcome.entities if e.text == "Thiếu men G6PD")
+    assert complete.subsumes_seed
+    assert crt.high_confidence(complete) == (True, "qwen_completed_an_e3_fragment")
+    assert complete.text in {
+        e.text for e in crt.variant_entities(outcome, crt.VARIANT_HIGH)
+    }
+
+
+def test_an_unsupported_qwen_span_reaches_broad_but_not_high() -> None:
+    note = "Khám: bệnh nhân ho khan"
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload([("L001", "ho khan", TYPE_SYMPTOM)]),
+    })
+    outcome = crt.process_document("1", note, [], qwen=qwen)
+    high = {e.text for e in crt.variant_entities(outcome, crt.VARIANT_HIGH)}
+    broad = {e.text for e in crt.variant_entities(outcome, crt.VARIANT_BROAD)}
+    assert "ho khan" in broad and "ho khan" not in high
+
+
+# ---------------------------------------------------- root cause 6: complete concepts
+
+
+def test_the_complete_clinical_phrase_beats_its_own_fragments() -> None:
+    """`Thiếu men` + `G6PD` must be resolvable to `Thiếu men G6PD`.
+
+    The phrase is a regression example only; nothing about it appears in production logic.
+    """
+    note = "Chẩn đoán: Thiếu men G6PD bẩm sinh"
+    complete = span(note_view(note), "Thiếu men G6PD", TYPE_DIAGNOSIS,
+                    sources={SOURCE_QWEN})
+    left = span(note_view(note), "Thiếu men", TYPE_DIAGNOSIS, sources={SOURCE_E3})
+    right = span(note_view(note), "G6PD", TYPE_DIAGNOSIS, sources={SOURCE_E3})
+
+    resolution = cr.resolve(note_view(note), [left, right, complete])
+    assert [e.text for e in resolution.entities] == ["Thiếu men G6PD"]
+
+
+def note_view(source: str) -> cd.DocumentView:
+    return view(source)
+
+
+def test_a_medication_keeps_its_whole_name_and_regimen() -> None:
+    note = "Thuốc: metoprolol 25mg po bid, aspirin 325mg"
+    qwen = RecordingQwen({
+        cp.PASS_MEDICATION: entities_payload([
+            ("L001", "metoprolol 25mg po bid", TYPE_DRUG),
+            ("L001", "aspirin 325mg", TYPE_DRUG),
+        ]),
+    })
+    outcome = crt.process_document("1", note, [], qwen=qwen)
+    texts = {e.text for e in outcome.entities}
+    assert "metoprolol 25mg po bid" in texts and "aspirin 325mg" in texts
+    assert "metoprolol" not in texts        # no fragment of a longer name survives
+
+
+def test_repeated_occurrences_at_distinct_offsets_both_survive() -> None:
+    note = "Khám: ho khan\nTheo dõi: ho khan"
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: json.dumps({"entities": [
+            {"line_id": "L001", "text": "ho khan", "type": TYPE_SYMPTOM, "occurrence": 0},
+            {"line_id": "L002", "text": "ho khan", "type": TYPE_SYMPTOM, "occurrence": 0},
+        ]}),
+    })
+    outcome = crt.process_document("1", note, [], qwen=qwen)
+    starts = sorted(e.start for e in outcome.entities if e.text == "ho khan")
+    assert len(starts) == 2 and starts[0] != starts[1]
+
+
+def test_no_final_entity_is_a_mid_token_substring() -> None:
+    note = "Bệnh nhân bị hen suyễn ASTma nặng"
+    lexicon = ca.AliasLexicon()
+    lexicon.add("AST", TYPE_TEST)
+    outcome = crt.process_document("1", note, [], qwen=None, lexicon=lexicon)
+    assert outcome.entities == []
+
+
+# ---------------------------------------------------- root cause 7: assertions
+
+
+def test_the_observed_bad_family_assertions_no_longer_fire() -> None:
+    for text, mention in (
+        ("Không có tiền sử gì của bố mẹ", "Không"),
+        ("Bà kể các triệu chứng kéo dài", "các triệu chứng"),
+    ):
+        document = view(text)
+        entity = span(document, mention, TYPE_SYMPTOM)
+        assert cs.FAMILY not in cs.assert_entity(
+            document, entity, cs.detect_sections(document)
+        )
+
+
+def test_a_kinship_word_after_the_entity_does_not_make_it_family() -> None:
+    document = view("Đau đầu, sau đó mẹ cũng bị")
+    entity = span(document, "Đau đầu", TYPE_SYMPTOM)
+    assert cs.FAMILY not in cs.assert_entity(document, entity, cs.detect_sections(document))
+
+
+def test_an_address_pronoun_counts_as_family_only_inside_a_family_section() -> None:
+    plain = view("Bà bị tăng huyết áp")
+    entity = span(plain, "tăng huyết áp", TYPE_DIAGNOSIS)
+    assert cs.FAMILY not in cs.assert_entity(plain, entity, cs.detect_sections(plain))
+
+    declared = view("Tiền sử gia đình: bà bị tăng huyết áp")
+    entity = span(declared, "tăng huyết áp", TYPE_DIAGNOSIS)
+    assert cs.FAMILY in cs.assert_entity(declared, entity, cs.detect_sections(declared))
+
+
+# ---------------------------------------------------- root cause 8: the control
+
+
+def test_e3_control_reproduces_the_seed_whatever_qwen_and_the_aliases_do() -> None:
+    note = "Khám: sốt cao, ho khan. Thuốc: aspirin 325mg"
+    seed = [
+        {"text": "sốt cao", "type": TYPE_SYMPTOM,
+         "position": [note.index("sốt cao"), note.index("sốt cao") + 7], "assertions": []},
+        {"text": "aspirin 325mg", "type": TYPE_DRUG,
+         "position": [note.index("aspirin 325mg"), note.index("aspirin 325mg") + 13],
+         "assertions": []},
+    ]
+    lexicon = ca.AliasLexicon()
+    for word in ("bệnh", "khác"):
+        lexicon.add(word, TYPE_DIAGNOSIS)
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload([("L001", "ho khan", TYPE_SYMPTOM)]),
+        cp.PASS_MEDICATION: entities_payload([("L001", "aspirin 325mg", TYPE_DRUG)]),
+    })
+    outcome = crt.process_document("1", note, seed, qwen=qwen, lexicon=lexicon)
+
+    control = crt.variant_entities(outcome, crt.VARIANT_CONTROL)
+    assert {(e.start, e.end, e.type) for e in control} == {
+        (s["position"][0], s["position"][1], s["type"]) for s in seed
+    }
+    rows = crt.serialize(outcome, crt.VARIANT_CONTROL)
+    assert [r["text"] for r in rows] == ["sốt cao", "aspirin 325mg"]
+    for row in rows:
+        assert set(row) <= {"position", "text", "type", "assertions"}
+
+
+def test_variants_never_disagree_about_a_shared_entity() -> None:
+    note = "Khám: sốt cao, ho khan"
+    seed = [{"text": "sốt cao", "type": TYPE_SYMPTOM,
+             "position": [note.index("sốt cao"), note.index("sốt cao") + 7],
+             "assertions": []}]
+    qwen = RecordingQwen({
+        cp.PASS_DIAGNOSIS: entities_payload([("L001", "ho khan", TYPE_SYMPTOM)]),
+    })
+    outcome = crt.process_document("1", note, seed, qwen=qwen)
+    by_variant = {v: crt.serialize(outcome, v) for v in crt.VARIANTS}
+    shared = {r["text"]: r for r in by_variant[crt.VARIANT_CONTROL]}
+    for variant, rows in by_variant.items():
+        for row in rows:
+            if row["text"] in shared:
+                assert row == shared[row["text"]], variant

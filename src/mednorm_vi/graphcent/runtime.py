@@ -160,7 +160,21 @@ class QwenDisambiguator:
         self.load()
         return sum(p.numel() for p in self._model.parameters())
 
+    def ask_detailed(self, prompt: str) -> tuple[str, dict[str, Any]]:
+        """`ask`, plus the shape of what was generated. Added, never substituted.
+
+        0080 calls `ask` and is unaffected. 0081 needs to know whether generation stopped
+        because it ran out of budget: a structured extraction that silently hits its token
+        limit produces an unclosed JSON object, which is indistinguishable from a bad model
+        unless the caller is told. That is what hid the first proposer failure.
+        """
+        reply, stats = self._generate(prompt)
+        return reply, stats
+
     def ask(self, prompt: str) -> str:
+        return self._generate(prompt)[0]
+
+    def _generate(self, prompt: str) -> tuple[str, dict[str, Any]]:
         import torch
 
         self.load()
@@ -177,10 +191,13 @@ class QwenDisambiguator:
                 **encoded, max_new_tokens=self.max_new_tokens, do_sample=False,
                 pad_token_id=self._tokenizer.eos_token_id,
             )
-        reply = self._tokenizer.decode(
-            generated[0][encoded["input_ids"].shape[1] :], skip_special_tokens=True
-        )
-        return str(reply)
+        produced = generated[0][encoded["input_ids"].shape[1] :]
+        reply = self._tokenizer.decode(produced, skip_special_tokens=True)
+        return str(reply), {
+            "generated_tokens": int(produced.shape[0]),
+            "hit_token_limit": int(produced.shape[0]) >= int(self.max_new_tokens),
+            "max_new_tokens": int(self.max_new_tokens),
+        }
 
     def unload(self) -> None:
         self._model = None

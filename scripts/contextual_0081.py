@@ -80,18 +80,36 @@ def build_lexicon(config: dict[str, Any]) -> Any:
             log(f"{key}: {path} absent - no alias proposals from this ontology")
     if not sources:
         return None
-    lexicon = build(sources, max_tokens=int(config.get("alias_max_tokens", 8)))
+    lexicon = build(
+        sources,
+        max_tokens=int(config.get("alias_max_tokens", 8)),
+        max_concepts_per_form=int(config.get("alias_max_concepts_per_form", 3)),
+        max_single_token_label_share=float(
+            config.get("alias_max_single_token_label_share", 0.01)
+        ),
+    )
     log(f"governed alias lexicon: {json.dumps(lexicon.as_dict(), ensure_ascii=False)}")
     return lexicon
 
 
 def qwen_from_manifest(config: dict[str, Any], args: argparse.Namespace) -> Any:
-    """The canonical Qwen3-8B, at the revision the 0080 manifest already pinned."""
+    """The canonical Qwen3-8B, at the revision the 0080 manifest already pinned.
+
+    The token budget is the reason the first smoke failed: extraction was inheriting the
+    256-token default meant for a one-word disambiguation answer, so every document-level
+    reply was cut off mid-JSON. Structured extraction gets its own budget here.
+    """
     from mednorm_vi.graphcent.runtime import QwenDisambiguator
 
     root = Path(getattr(args, "qwen_root", "") or config.get(
         "qwen_model_root", "/content/qwen3-8b-local"))
-    return QwenDisambiguator(root, device=getattr(args, "device", "cuda"))
+    return QwenDisambiguator(
+        root,
+        device=getattr(args, "device", "cuda"),
+        max_new_tokens=int(
+            getattr(args, "max_new_tokens", 0) or config.get("max_new_tokens", 1536)
+        ),
+    )
 
 
 def _host_guard(stage: str, args: argparse.Namespace) -> None:
@@ -115,6 +133,7 @@ def _config_from(config: dict[str, Any]) -> ContextualConfig:
         use_verifier=bool(config.get("use_verifier", True)),
         context_radius=int(config.get("context_radius", 200)),
         max_options_per_group=int(config.get("max_options_per_group", 12)),
+        alias_support_only=bool(config.get("alias_support_only", True)),
     )
 
 
@@ -207,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
         runner.add_argument("--seed-entities", default="")
         runner.add_argument("--documents", default="")
         runner.add_argument("--qwen-root", default="")
+        runner.add_argument("--max-new-tokens", type=int, default=0,
+                            help="structured-extraction budget; 0 uses the profile value")
         runner.add_argument("--device", default="cuda")
         runner.add_argument("--allow-download", action="store_true")
         runner.set_defaults(func=handler)

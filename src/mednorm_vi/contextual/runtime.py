@@ -43,7 +43,7 @@ from .proposals import (
     propose,
     propose_from_offsets,
 )
-from .proposer import build_proposal_prompt, parse_proposals
+from .proposer import PASSES, build_pass_prompt, parse_pass
 from .resolver import organizer_entity, resolve
 from .verifier import apply_verdicts, build_verification_prompt, parse_verdicts
 
@@ -63,6 +63,20 @@ class Responder(Protocol):
     def ask(self, prompt: str) -> str: ...
 
 
+def _ask(qwen: Any, prompt: str) -> tuple[str, dict[str, Any]]:
+    """Ask, preferring the detailed form when the model can report generation shape.
+
+    `ask_detailed` tells us whether generation stopped because it ran out of budget, which
+    is what made the first failure invisible. A model that only offers `ask` still works;
+    the report simply records zero tokens.
+    """
+    detailed = getattr(qwen, "ask_detailed", None)
+    if callable(detailed):
+        reply, stats = detailed(prompt)
+        return str(reply), dict(stats)
+    return str(qwen.ask(prompt)), {}
+
+
 @dataclass(frozen=True, slots=True)
 class ContextualConfig:
     """Everything the pass needs. No model paths here - the model is injected."""
@@ -72,6 +86,14 @@ class ContextualConfig:
     use_verifier: bool = True
     context_radius: int = 200
     max_options_per_group: int = 12
+    #: Governed alias hits are EVIDENCE, not entities. With this on - the default - an
+    #: alias-only span may enter the lattice and may strengthen another source's proposal,
+    #: but can never become a final entity by itself. The first smoke emitted 75 alias-only
+    #: entities, almost all of them ordinary words, which is what this closes.
+    alias_support_only: bool = True
+    #: Diagnostic escape hatch: emit the alias-only variant as well. Never a production
+    #: default, and never one of the three shipped variants.
+    emit_alias_only_variant: bool = False
 
 
 @dataclass
@@ -79,6 +101,7 @@ class DocumentOutcome:
     """One document's final entities plus everything needed to explain them."""
 
     document: str
+    reports: list[Any] = field(default_factory=list)
     entities: list[Proposal] = field(default_factory=list)
     assertions: dict[tuple[int, int], tuple[str, ...]] = field(default_factory=dict)
     pool: ProposalPool = field(default_factory=ProposalPool)
@@ -117,14 +140,28 @@ def collect_proposals(
         )
 
     if config.use_qwen_proposer and qwen is not None:
-        raw, counters = parse_proposals(qwen.ask(build_proposal_prompt(document)))
-        outcome.merge(counters)
-        outcome.count("qwen_raw_proposals", len(raw))
-        for row in raw:
-            propose(
-                pool, document, source=SOURCE_QWEN, line_id=row.line_id,
-                text=row.text, entity_type=row.type, occurrence=row.occurrence,
+        rendered = document.render()
+        for pass_name in PASSES:
+            # Each pass is asked and parsed on its own, so one failure cannot discard the
+            # entities the other two found.
+            reply, stats = _ask(qwen, build_pass_prompt(pass_name, rendered))
+            result = parse_pass(
+                pass_name, reply,
+                generated_tokens=int(stats.get("generated_tokens", 0)),
+                hit_token_limit=bool(stats.get("hit_token_limit", False)),
             )
+            outcome.merge(result.counters)
+            outcome.reports.append(result.report)
+            outcome.count(f"proposer_{pass_name}_rows", result.report.rows_returned)
+            outcome.count(f"proposer_{pass_name}_kept", result.report.rows_kept)
+            outcome.count("proposer_passes_parsed", int(result.report.json_extracted))
+            outcome.count("proposer_passes_failed", int(not result.report.json_extracted))
+            outcome.count("proposer_truncated", int(result.report.hit_token_limit))
+            for row in result.proposals:
+                propose(
+                    pool, document, source=SOURCE_QWEN, line_id=row.line_id,
+                    text=row.text, entity_type=row.type, occurrence=row.occurrence,
+                )
 
     if config.use_alias_proposer and lexicon is not None:
         hits = find_alias_hits(document.source, lexicon)
@@ -154,6 +191,15 @@ def verify_pool(
 
     accepted: list[Proposal] = []
     for group in lattice.groups:
+        if (
+            config.alias_support_only
+            and all(o.sources == {SOURCE_ALIAS} for o in group.options)
+        ):
+            # Nothing in this group can become an entity, so asking about it would spend a
+            # Qwen call to reach a foregone conclusion. This is what turned 347 groups of
+            # mostly alias noise into a handful of real decisions.
+            outcome.count("alias_only_group_skipped")
+            continue
         if not config.use_verifier or qwen is None:
             accepted.extend(group.options if group.single else _e3_only(group.options))
             continue
@@ -202,6 +248,7 @@ def process_document(
         document, seed_entities, qwen=qwen, lexicon=lexicon,
         config=settings, outcome=outcome,
     )
+    outcome.count("seed_fragment_completions", pool.mark_seed_completions())
     for source_name in (SOURCE_E3, SOURCE_QWEN, SOURCE_ALIAS):
         outcome.count(f"proposals_{source_name}", len(pool.by_source(source_name)))
     outcome.count("proposals_agreed", sum(1 for p in pool.proposals if p.agreed))
@@ -210,6 +257,10 @@ def process_document(
     accepted = verify_pool(
         document, pool, qwen=qwen, config=settings, outcome=outcome
     )
+    if settings.alias_support_only:
+        before = len(accepted)
+        accepted = [p for p in accepted if p.sources != {SOURCE_ALIAS}]
+        outcome.count("alias_only_withheld", before - len(accepted))
     resolution = resolve(document, accepted)
     outcome.merge(resolution.counters)
     outcome.entities = resolution.entities
@@ -222,10 +273,44 @@ def process_document(
         outcome.count(
             f"final_{entity_type}", sum(1 for e in outcome.entities if e.type == entity_type)
         )
+    for entity in outcome.entities:
+        strong, reason = high_confidence(entity)
+        outcome.count(f"high_{reason}" if strong else f"broad_only_{reason}")
     return outcome
 
 
 # ------------------------------------------------------------------ variants
+
+
+def high_confidence(entity: Proposal) -> tuple[bool, str]:
+    """Whether one verified entity is strong enough for `contextual_high`, and why.
+
+    The first smoke made `contextual_high` identical to `e3_control` - twenty entities each -
+    which means it carried no contextual information at all. The cause was requiring E3 or
+    multi-source agreement, and E3 is exactly the recall problem 0081 exists to fix: a
+    mention E3 missed can never be agreed with E3.
+
+    So the policy asks what independent evidence a mention has, not whether E3 found it:
+
+    * E3 and Qwen agree on the same span and type - the strongest signal there is;
+    * a Qwen span that a governed alias also matched - two unrelated methods, one span;
+    * a Qwen span that subsumes an E3 fragment of the same type - the completion case, which
+      is precisely the `G6PD` fragmentation the smoke showed;
+    * E3 alone, which is the previous baseline and stays in.
+
+    A Qwen-only span with no other support is real but unsupported: it belongs in `broad`.
+    An alias-only span is not here at all - it never became an entity.
+    """
+    sources = set(entity.sources)
+    if SOURCE_E3 in sources and SOURCE_QWEN in sources:
+        return True, "e3_and_qwen_agree"
+    if SOURCE_QWEN in sources and SOURCE_ALIAS in sources:
+        return True, "qwen_with_governed_alias_support"
+    if entity.subsumes_seed and SOURCE_QWEN in sources:
+        return True, "qwen_completed_an_e3_fragment"
+    if SOURCE_E3 in sources:
+        return True, "e3_baseline"
+    return False, "single_unsupported_source"
 
 
 def variant_entities(outcome: DocumentOutcome, variant: str) -> list[Proposal]:
@@ -233,10 +318,7 @@ def variant_entities(outcome: DocumentOutcome, variant: str) -> list[Proposal]:
     if variant == VARIANT_CONTROL:
         return [e for e in outcome.entities if SOURCE_E3 in e.sources]
     if variant == VARIANT_HIGH:
-        return [
-            e for e in outcome.entities
-            if SOURCE_E3 in e.sources or e.agreed
-        ]
+        return [e for e in outcome.entities if high_confidence(e)[0]]
     return list(outcome.entities)
 
 
@@ -316,8 +398,10 @@ def diagnostics(outcomes: list[DocumentOutcome], counts: dict[str, int]) -> dict
                 by_source["qwen_only"] += 1
             elif sources == {SOURCE_ALIAS}:
                 by_source["alias_only"] += 1
+    reports = [r.as_dict() for o in outcomes for r in o.reports]
     return {
         "documents": len(outcomes),
+        "proposer_generation_reports": reports,
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "final_entities_by_proposal_source": by_source,
         "variant_entity_counts": counts,
@@ -327,6 +411,7 @@ def diagnostics(outcomes: list[DocumentOutcome], counts: dict[str, int]) -> dict
 
 __all__ = [
     "VARIANTS",
+    "high_confidence",
     "VARIANT_BROAD",
     "VARIANT_CONTROL",
     "VARIANT_HIGH",

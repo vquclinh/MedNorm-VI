@@ -39,15 +39,40 @@ python scripts/contextual_0081.py budget --model-root /content/graphcent_models
 %%bash
 export USE_TF=0 TRANSFORMERS_NO_TF=1 USE_FLAX=0 PYTHONPATH=src
 cd /content/MedNorm-VI
+rm -rf runs/contextual_0081/_smoke
 python scripts/contextual_0081.py smoke --allow-download \
   --input-dir data/organizer_test/input \
   --seed-entities runs/e3_verified_8b_allnull_0076/output \
-  --qwen-root /content/qwen3-8b-local \
+  --qwen-root /content/qwen3-8b-local --max-new-tokens 1536 \
   --run-dir runs/contextual_0081/_smoke --documents 1,10,100
 python -c "
 import json;d=json.load(open('runs/contextual_0081/_smoke/diagnostic-summary.json'))
-print(json.dumps(d,indent=2,ensure_ascii=False))"
+print(json.dumps({k:v for k,v in d.items() if k!='proposer_generation_reports'},
+                 indent=2,ensure_ascii=False))
+print('--- generation reports ---')
+for r in d['proposer_generation_reports']:
+    print(f\"  {r['pass']:18s} tokens={r['generated_tokens']:5d} limit={r['hit_token_limit']} \"
+          f\"json={r['json_extracted']} {r['category']} rows={r['rows_returned']}->{r['rows_kept']}\")
+    if not r['json_extracted']:
+        print('     head:', r['excerpt_head'][:100])
+"
 ```
+
+### Healthy invariants for this smoke
+
+| diagnostic | expected |
+|---|---|
+| `proposer_passes_parsed` | **9** (3 documents x 3 passes) |
+| `proposer_passes_failed` | **0** |
+| `proposer_truncated` | **0** — if not, raise `--max-new-tokens` |
+| `verifier_invalid_index` | **0** |
+| final entities from `alias_only` | **0** — aliases are support, not entities |
+| `contextual_high` | strictly **greater than** `e3_control` |
+| `e3_control` | exactly the seed count (20 on this smoke) |
+| `isFamily` | only inside real family context |
+
+The three specialized passes are `diagnosis_symptom`, `medication` and `laboratory`, and each
+parses independently — one failing pass no longer costs the other two.
 
 Read before going further: `final_entities_by_proposal_source` (how much is E3-only,
 Qwen-only, alias-only, agreement), `verifier_accepted` / `verifier_rejected`,

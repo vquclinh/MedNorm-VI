@@ -14,8 +14,14 @@ name: contextual_0081
 # never replaces it.
 seed_entities: ""                     # E3-only organizer JSON directory (required)
 
+# --- generation ---------------------------------------------------------------------------
+# ROOT CAUSE of the first smoke's total proposer failure: structured extraction inherited the
+# 256-token default meant for a one-word disambiguation answer, so every document-level reply
+# was cut off mid-JSON and nothing parsed. Extraction gets its own budget.
+max_new_tokens: 1536
+
 # --- proposal sources --------------------------------------------------------------------
-use_qwen_proposer: true               # Qwen reads the document with stable line ids
+use_qwen_proposer: true               # three specialized passes: diagnosis/symptom, drug, lab
 use_alias_proposer: true              # whole-phrase governed KB matches (proposals only)
 use_verifier: true                    # Qwen accept/reject/retype over finite proposals
 
@@ -24,6 +30,18 @@ use_verifier: true                    # Qwen accept/reject/retype over finite pr
 icd_index: indices/candidate/icd10_vi/competition-v4.1/index.json
 rxnorm_index: indices/candidate/rxnorm/competition-v3/index.json
 alias_max_tokens: 8                   # longer governed strings are definitions, not mentions
+
+# Alias quality, measured from the governed KB rather than listed. In the ICD index the word
+# "other" is the recorded canonical name of 25 different concepts and "disease" occurs in
+# 16.3% of all labels - neither can identify which concept a mention means.
+alias_max_concepts_per_form: 3            # a form naming more concepts identifies nothing
+alias_max_single_token_label_share: 0.01  # a token in >1% of labels is a common word
+
+# ARCHITECTURAL: a governed alias is EVIDENCE, not an entity. An alias-only span may enter
+# the lattice and may strengthen another source's proposal, but never becomes an organizer
+# entity on its own. The first smoke emitted 75 alias-only entities, nearly all of them
+# ordinary Vietnamese words.
+alias_support_only: true
 
 # --- verifier shape ----------------------------------------------------------------------
 context_radius: 200                   # characters of surrounding text shown per group

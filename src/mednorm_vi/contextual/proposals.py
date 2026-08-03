@@ -36,6 +36,10 @@ class Proposal:
     sources: frozenset[str] = field(default_factory=frozenset)
     line_id: str = ""
     how: str = ""
+    #: True when this span strictly contains a same-type proposal the seed expert produced.
+    #: That is the fragment-completion case: the seed found part of a concept and another
+    #: source found the whole of it.
+    subsumes_seed: bool = False
 
     @property
     def span(self) -> tuple[int, int]:
@@ -56,6 +60,7 @@ class Proposal:
         return {
             "start": self.start, "end": self.end, "text": self.text, "type": self.type,
             "sources": sorted(self.sources), "line_id": self.line_id, "how": self.how,
+            "subsumes_seed": self.subsumes_seed,
         }
 
 
@@ -78,6 +83,20 @@ class ProposalPool:
                 )
                 return
         self.proposals.append(proposal)
+
+    def mark_seed_completions(self) -> int:
+        """Flag every proposal that strictly contains a same-type seed proposal."""
+        seeds = [p for p in self.proposals if SOURCE_E3 in p.sources]
+        marked = 0
+        for index, proposal in enumerate(self.proposals):
+            if SOURCE_E3 in proposal.sources:
+                continue
+            if any(
+                proposal.contains(seed) and proposal.type == seed.type for seed in seeds
+            ):
+                self.proposals[index] = replace(proposal, subsumes_seed=True)
+                marked += 1
+        return marked
 
     def sorted(self) -> list[Proposal]:
         """Document order, longest first at the same start - stable for the lattice."""

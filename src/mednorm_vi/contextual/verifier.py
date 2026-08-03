@@ -1,5 +1,12 @@
 """Qwen pass 2: finite entity verifier (0081).
 
+**One index space, always local to one invocation.** Every call shows a fresh list numbered
+from zero, and an index means a position in *that* list and nothing else - there is no global
+proposal id anywhere in this protocol, so there is nothing to confuse it with. The worked
+example in the output contract is generated from the offered indices for the same reason: a
+fixed example showing `[0] [1] [2]` to a caller offering one candidate is an instruction to
+produce two invalid indices, which is exactly what the first smoke did.
+
 The model is shown an indexed list of spans that already exist in the document and may do
 exactly three things to each: accept it, reject it, or change its type. It cannot write text,
 so it cannot introduce a span; the only thing it returns is an index and a verdict. Anything
@@ -14,7 +21,6 @@ behaviour and therefore never worse than the control.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,8 +28,7 @@ from ..reasoner.validator import ORGANIZER_TYPES
 from .document import DocumentView
 from .lattice import LatticeGroup
 from .proposals import SOURCE_E3, Proposal
-
-_JSON_OBJECT = re.compile(r"\{.*\}", re.S)
+from .proposer import extract_json_object, strip_reasoning
 
 ACCEPT = "accept"
 REJECT = "reject"
@@ -69,13 +74,31 @@ VERIFIER_RUBRIC = (
     "that is not the result of a test named nearby."
 )
 
-VERIFIER_SCHEMA = (
-    'Return JSON only:\n'
-    '{"verdicts": [{"index": 0, "action": "accept"}, '
-    '{"index": 1, "action": "retype", "type": "CHẨN_ĐOÁN"}, '
-    '{"index": 2, "action": "reject"}]}\n'
-    'Every index you return must be one of the indices shown. Do not return any other field.'
-)
+def schema_for(option_count: int) -> str:
+    """The output contract, with an example built from THIS invocation's indices.
+
+    The first smoke returned 675 invalid indices against 357 offered options. The cause was
+    here: the schema carried a fixed worked example using indices 0, 1 and 2, and most
+    groups offer a single option `[0]`. The model copied the example, so every one-option
+    group produced two out-of-range indices - 347 groups, ~676 invalid indices, which is
+    what was observed. An example must never show an index the caller did not offer.
+    """
+    last = max(option_count - 1, 0)
+    if option_count <= 1:
+        example = '{"verdicts": [{"index": 0, "action": "accept"}]}'
+    else:
+        example = (
+            '{"verdicts": [{"index": 0, "action": "accept"}, '
+            f'{{"index": {last}, "action": "reject"}}]}}'
+        )
+    allowed = "0" if option_count <= 1 else f"0 to {last}"
+    return (
+        "Return JSON only, for example:\n"
+        f"{example}\n"
+        f"This list has {option_count} candidate(s), so the ONLY valid index values are "
+        f"{allowed}. Return a verdict for each candidate you have an opinion about, and "
+        "never an index outside that range. Do not return any other field."
+    )
 
 
 def build_verification_prompt(
@@ -96,7 +119,7 @@ def build_verification_prompt(
         f"{VERIFIER_RUBRIC}\n\n"
         f"CONTEXT: {context}\n\n"
         f"CANDIDATES:\n{listed}\n\n"
-        f"{VERIFIER_SCHEMA}\n"
+        f"{schema_for(len(group.options))}\n"
     )
 
 
@@ -128,12 +151,12 @@ def parse_verdicts(reply: str, option_count: int) -> tuple[list[Verdict], dict[s
     def count(reason: str) -> None:
         counters[reason] = counters.get(reason, 0) + 1
 
-    match = _JSON_OBJECT.search(reply or "")
-    if not match:
+    payload_text, _ = extract_json_object(strip_reasoning(reply))
+    if not payload_text:
         count(PARSE_FAILED)
         return [], counters
     try:
-        payload = json.loads(match.group(0))
+        payload = json.loads(payload_text)
     except json.JSONDecodeError:
         count(PARSE_FAILED)
         return [], counters
@@ -147,11 +170,14 @@ def parse_verdicts(reply: str, option_count: int) -> tuple[list[Verdict], dict[s
         if not isinstance(row, dict):
             count(PARSE_FAILED)
             continue
-        try:
-            index = int(row.get("index", -1))
-        except (TypeError, ValueError):
+        raw_index = row.get("index")
+        # A genuine integer only. `int("0")` and `int(1.5)` both succeed in Python and would
+        # silently turn a string or a float into a position, which is the sort of quiet
+        # reinterpretation this protocol exists to prevent.
+        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
             count(INVALID_INDEX)
             continue
+        index = raw_index
         if not 0 <= index < option_count or index in seen:
             count(INVALID_INDEX)
             continue
@@ -212,10 +238,10 @@ __all__ = [
     "REJECT",
     "RETYPE",
     "VERIFIER_RUBRIC",
-    "VERIFIER_SCHEMA",
     "VerificationResult",
     "Verdict",
     "apply_verdicts",
     "build_verification_prompt",
     "parse_verdicts",
+    "schema_for",
 ]
